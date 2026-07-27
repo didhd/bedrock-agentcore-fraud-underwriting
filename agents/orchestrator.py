@@ -30,9 +30,16 @@ from agents.prompts import MASTER_PROMPT, SYNTHESIZER_PROMPT
 from agents.models import (
     SYNTHESIZER_MODEL, SPECIALIST_MODELS, model_for, tier_label, nominal_latency,
 )
-from agents.specialists import SPECIALIST_TOOLS, _run_specialist
+from agents.specialists import SPECIALIST_TOOLS, _run_specialist, run_specialist_metered
+from agents.pricing import specialist_cost, synthesizer_cost, nominal_tokens
 from tools.application_data import fetch_application_record
 from tools.cortex_analyst_mcp import retrieve_signals
+
+try:
+    from observability.metrics import emit_adjudication
+except Exception:  # observability optional (needs boto3/AWS); never breaks the demo
+    def emit_adjudication(*args, **kwargs):  # type: ignore
+        return False
 
 MOCK_MODE = os.environ.get("MOCK_MODE", "0") == "1"
 
@@ -49,42 +56,38 @@ def adjudicate(application_id: str) -> dict:
     Run the underwriting pipeline for one application.
 
     The eight specialists run concurrently (one thread each, each on its
-    configured model). the orchestrator then synthesizes their analyses into the
-    strict-JSON adjudication. Returns a result dict with the adjudication and
-    timing detail.
+    configured model). The orchestrator then synthesizes their analyses into the
+    strict-JSON adjudication. Returns a result dict with the adjudication,
+    timing, and per-agent cost.
     """
     app_id = application_id.strip().upper()
     record = fetch_application_record(app_id)
     if record is None:
         return {"application_id": app_id,
                 "adjudication_json": json.dumps({"application_id": app_id, "error": "not found"}),
-                "verdicts": {}, "timing": {}}
+                "verdicts": {}, "timing": {}, "per_agent": {}, "cost": {}}
 
-    # ---- parallel fan-out ------------------------------------------------
+    # ---- parallel fan-out (metered) --------------------------------------
     verdicts: dict[str, str] = {}
     per_agent: dict[str, dict] = {}
     wall_start = time.perf_counter()
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(DOMAINS)) as pool:
-        futures = {pool.submit(_timed_specialist, d, app_id): d for d in DOMAINS}
+        futures = {pool.submit(_metered_specialist, d, app_id): d for d in DOMAINS}
         for fut in concurrent.futures.as_completed(futures):
             d = futures[fut]
-            text, elapsed = fut.result()
-            verdicts[d] = text
-            per_agent[d] = {
-                "model": model_for(d),
-                "tier": tier_label(model_for(d)),
-                "elapsed_s": round(elapsed, 3),
-                "nominal_s": nominal_latency(model_for(d)),
-            }
+            per_agent[d] = fut.result()
+            verdicts[d] = per_agent[d]["_text"]
     fanout_wall = time.perf_counter() - wall_start
 
-    # ---- the orchestrator synthesis ----------------------------------------------
+    # ---- orchestrator synthesis ------------------------------------------
     synth_start = time.perf_counter()
     adjudication_json = (
         _synthesize_mock(app_id, verdicts) if MOCK_MODE
         else _synthesize_live(app_id, verdicts)
     )
     synth_wall = time.perf_counter() - synth_start
+    synth_in, synth_out = nominal_tokens("synthesizer")
+    synth_cost = synthesizer_cost(synth_in, synth_out)
 
     # ---- timing (measured + nominal real-world extrapolation) -----------
     nominal_fanout = max(per_agent[d]["nominal_s"] for d in DOMAINS)      # parallel = slowest agent
@@ -98,8 +101,143 @@ def adjudicate(application_id: str) -> dict:
         "nominal_sequential_per_app_s": round(nominal_serial + nominal_synth, 1),
         "synthesizer_model": SYNTHESIZER_MODEL,
     }
-    return {"application_id": app_id, "verdicts": verdicts,
-            "per_agent": per_agent, "adjudication_json": adjudication_json, "timing": timing}
+
+    # ---- cost ------------------------------------------------------------
+    agents_cost = sum(per_agent[d]["cost_usd"] for d in DOMAINS)
+    cost = {
+        "per_agent_usd": {d: per_agent[d]["cost_usd"] for d in DOMAINS},
+        "synthesizer_usd": round(synth_cost, 6),
+        "total_usd": round(agents_cost + synth_cost, 6),
+    }
+    per_agent["synthesizer"] = {
+        "model": SYNTHESIZER_MODEL, "tier": tier_label(SYNTHESIZER_MODEL),
+        "input_tokens": synth_in, "output_tokens": synth_out,
+        "cost_usd": round(synth_cost, 6), "nominal_s": nominal_synth,
+    }
+
+    # strip internal text before returning per_agent detail
+    for d in DOMAINS:
+        per_agent[d].pop("_text", None)
+
+    # ---- emit per-agent telemetry (best-effort; no-op offline) -----------
+    try:
+        adj = json.loads(adjudication_json)
+        emit_adjudication(app_id, per_agent, cost, timing,
+                          adj.get("overall_risk_decision", ""))
+    except Exception:
+        pass
+
+    return {"application_id": app_id, "verdicts": verdicts, "per_agent": per_agent,
+            "adjudication_json": adjudication_json, "timing": timing, "cost": cost}
+
+
+def _metered_specialist(domain: str, app_id: str) -> dict:
+    """Run one specialist, returning its verdict, timing, tokens, and cost."""
+    t0 = time.perf_counter()
+    text, in_tok, out_tok = run_specialist_metered(domain, app_id)
+    elapsed = time.perf_counter() - t0
+    model_id = model_for(domain)
+    return {
+        "_text": text,
+        "risk": _parse_risk(text),
+        "findings": text.split("FINDINGS:", 1)[-1].strip(),
+        "model": model_id,
+        "tier": tier_label(model_id),
+        "elapsed_s": round(elapsed, 3),
+        "nominal_s": nominal_latency(model_id),
+        "input_tokens": in_tok,
+        "output_tokens": out_tok,
+        "cost_usd": round(specialist_cost(domain, in_tok, out_tok), 6),
+    }
+
+
+def adjudicate_stream(application_id: str):
+    """
+    Generator form of the underwriting pipeline for a live UI.
+
+    Yields event dicts as agents complete, so a front end can light up each
+    specialist the moment it finishes (showing the parallel fan-out visually):
+      {"event":"start", ...}
+      {"event":"agent_done", "domain":..., "risk":..., "cost_usd":..., ...}   (x8)
+      {"event":"synthesis", ...}
+      {"event":"done", "adjudication":{...}, "timing":{...}, "cost":{...}}
+    """
+    app_id = application_id.strip().upper()
+    record = fetch_application_record(app_id)
+    if record is None:
+        yield {"event": "error", "message": f"Application {app_id} not found."}
+        return
+
+    yield {
+        "event": "start",
+        "application_id": app_id,
+        "agents": [{"domain": d, "tier": tier_label(model_for(d)),
+                    "model": model_for(d), "nominal_s": nominal_latency(model_for(d))}
+                   for d in DOMAINS],
+        "core_fields": {k: record.get(k) for k in
+                        ("borrower_name", "loan_amount", "vehicle", "fraud_score",
+                         "stated_annual_income", "ltv_pct", "dealer_name")},
+    }
+
+    per_agent: dict[str, dict] = {}
+    verdicts: dict[str, str] = {}
+    wall_start = time.perf_counter()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(DOMAINS)) as pool:
+        futures = {pool.submit(_metered_specialist, d, app_id): d for d in DOMAINS}
+        for fut in concurrent.futures.as_completed(futures):
+            d = futures[fut]
+            info = fut.result()
+            per_agent[d] = info
+            verdicts[d] = info["_text"]
+            yield {"event": "agent_done", "domain": d, "risk": info["risk"],
+                   "findings": info["findings"], "tier": info["tier"],
+                   "model": info["model"], "elapsed_s": info["elapsed_s"],
+                   "cost_usd": info["cost_usd"]}
+    fanout_wall = time.perf_counter() - wall_start
+
+    yield {"event": "synthesis", "message": "Orchestrator synthesizing eight analyses..."}
+    synth_start = time.perf_counter()
+    adjudication_json = (
+        _synthesize_mock(app_id, verdicts) if MOCK_MODE
+        else _synthesize_live(app_id, verdicts)
+    )
+    synth_wall = time.perf_counter() - synth_start
+
+    nominal_fanout = max(per_agent[d]["nominal_s"] for d in DOMAINS)
+    nominal_serial = sum(per_agent[d]["nominal_s"] for d in DOMAINS)
+    nominal_synth = nominal_latency(SYNTHESIZER_MODEL)
+    synth_in, synth_out = nominal_tokens("synthesizer")
+    synth_cost = synthesizer_cost(synth_in, synth_out)
+    agents_cost = sum(per_agent[d]["cost_usd"] for d in DOMAINS)
+
+    timing = {
+        "measured_total_s": round(fanout_wall + synth_wall, 3),
+        "nominal_parallel_per_app_s": round(nominal_fanout + nominal_synth, 1),
+        "nominal_sequential_per_app_s": round(nominal_serial + nominal_synth, 1),
+    }
+    cost = {
+        "per_agent_usd": {d: per_agent[d]["cost_usd"] for d in DOMAINS},
+        "synthesizer_usd": round(synth_cost, 6),
+        "total_usd": round(agents_cost + synth_cost, 6),
+    }
+    try:
+        adj = json.loads(adjudication_json)
+    except Exception:
+        adj = {"raw": adjudication_json}
+
+    # best-effort telemetry
+    pa_for_metrics = dict(per_agent)
+    pa_for_metrics["synthesizer"] = {"model": SYNTHESIZER_MODEL, "tier": tier_label(SYNTHESIZER_MODEL),
+                                     "input_tokens": synth_in, "output_tokens": synth_out,
+                                     "cost_usd": round(synth_cost, 6), "nominal_s": nominal_synth}
+    for d in list(pa_for_metrics):
+        pa_for_metrics[d].pop("_text", None)
+    try:
+        emit_adjudication(app_id, pa_for_metrics, cost, timing, adj.get("overall_risk_decision", ""))
+    except Exception:
+        pass
+
+    yield {"event": "done", "adjudication": adj, "timing": timing, "cost": cost}
 
 
 def _timed_specialist(domain: str, app_id: str) -> tuple[str, float]:
@@ -120,11 +258,13 @@ def underwriting_pipeline(application_id: str) -> str:
              "8 specialists run IN PARALLEL, each on its configured model;",
              "the orchestrator synthesizes the results (synthesizer role here).",
              "=" * 70,
-             f"{'agent':<12}{'tier':<14}{'~latency':<10}{'risk'}"]
+             f"{'agent':<12}{'tier':<14}{'~latency':<10}{'~cost':<11}{'risk'}"]
     for d in DOMAINS:
         pa = res["per_agent"][d]
         risk = _parse_risk(res["verdicts"][d])
-        lines.append(f"{d:<12}{pa['tier']:<14}{pa['nominal_s']:<10.1f}{risk}")
+        lines.append(f"{d:<12}{pa['tier']:<14}{pa['nominal_s']:<10.1f}"
+                     f"${pa.get('cost_usd', 0):<10.5f}{risk}")
+    c = res.get("cost", {})
     lines += [
         "",
         "Latency (illustrative nominal figures, per application):",
@@ -135,7 +275,10 @@ def underwriting_pipeline(application_id: str) -> str:
         f"  measured wall-clock this run (scaled offline):           "
         f"{t['measured_total_s']:.3f}s",
         "",
-        "ADJUDICATION (the orchestrator synthesis):",
+        f"Cost (illustrative, per application): agents ${sum(c.get('per_agent_usd', {}).values()):.5f} "
+        f"+ synthesis ${c.get('synthesizer_usd', 0):.5f} = ${c.get('total_usd', 0):.5f}/app",
+        "",
+        "ADJUDICATION (orchestrator synthesis):",
         res["adjudication_json"],
     ]
     return "\n".join(lines)

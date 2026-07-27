@@ -12,8 +12,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("MOCK_MODE", "1")
 
-from agents.orchestrator import analyze, adjudicate, DOMAINS
+from agents.orchestrator import analyze, adjudicate, adjudicate_stream, DOMAINS
 from agents.models import SPECIALIST_MODELS, LIGHT_MODEL, HEAVY_MODEL, model_for
+from agents.pricing import cost_usd, MID_MODEL
 from tools.application_data import available_application_ids, fetch_application_record
 
 
@@ -71,6 +72,29 @@ def test_parallel_pipeline_timing():
     assert res["per_agent"]["synthetic"]["tier"].startswith("heavy")
 
 
+def test_cost_tracking():
+    res = adjudicate("APP-1004")
+    cost = res["cost"]
+    assert set(cost["per_agent_usd"].keys()) == set(DOMAINS)
+    assert cost["total_usd"] > 0
+    # heavy-tier agents cost more than light-tier for the same nominal tokens
+    assert cost["per_agent_usd"]["synthetic"] > cost["per_agent_usd"]["straw"]
+    # rate math sanity: 1M in + 1M out on the mid tier = $3 + $15
+    assert abs(cost_usd(MID_MODEL, 1_000_000, 1_000_000) - 18.0) < 1e-6
+
+
+def test_stream_events():
+    events = list(adjudicate_stream("APP-1004"))
+    kinds = [e["event"] for e in events]
+    assert kinds[0] == "start"
+    assert kinds.count("agent_done") == len(DOMAINS)
+    assert "synthesis" in kinds
+    assert kinds[-1] == "done"
+    done = events[-1]
+    assert done["adjudication"]["recommendation_decision"] == "DECLINE"
+    assert done["cost"]["total_usd"] > 0
+
+
 if __name__ == "__main__":
     test_dataset_loads()
     test_clean_app_approves()
@@ -79,4 +103,6 @@ if __name__ == "__main__":
     test_targeted_routing()
     test_per_agent_model_config()
     test_parallel_pipeline_timing()
+    test_cost_tracking()
+    test_stream_events()
     print("All offline smoke tests passed.")
