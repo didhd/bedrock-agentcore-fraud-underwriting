@@ -1,0 +1,13 @@
+# Multi-Agent Fraud Detection on Amazon Bedrock AgentCore
+# Python 3.10+ required
+
+# Agent framework (open source, AWS-maintained)
+strands-agents>=0.1.0
+strands-agents-tools>=0.1.0
+
+# AgentCore Runtime SDK + deployment toolkit
+bedrock-agentcore>=0.1.0
+bedrock-agentcore-starter-toolkit>=0.1.0
+
+# AWS SDK (Bedrock model invocation)
+boto3>=1.35.0
