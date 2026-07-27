@@ -131,6 +131,10 @@ question and keeps the Snowflake orchestration intact.
 ├── docs/
 │   └── semantic-layer-mcp.md# guardrail migration + MCP signal-layer design
 ├── tests/test_local.py      # offline smoke tests
+├── architecture/
+│   ├── build_diagram.py     # composes architecture.svg from official AWS icons
+│   └── icons/               # official AWS Architecture Icons (SVG)
+├── architecture.svg         # generated diagram (official AWS icons)
 ├── architecture.md
 └── requirements.txt
 ```
