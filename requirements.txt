@@ -11,3 +11,7 @@ bedrock-agentcore-starter-toolkit>=0.1.0
 
 # AWS SDK (Bedrock model invocation)
 boto3>=1.35.0
+
+# Live demo UI (optional; only needed for `python app.py --serve`)
+fastapi>=0.110.0
+uvicorn>=0.29.0

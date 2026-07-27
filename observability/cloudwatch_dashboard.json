@@ -1,0 +1,97 @@
+{
+  "widgets": [
+    {
+      "type": "text",
+      "x": 0, "y": 0, "width": 24, "height": 2,
+      "properties": {
+        "markdown": "# Fraud Underwriting on Amazon Bedrock AgentCore — Spend & Performance\nPer-agent cost, tokens, and latency for the parallel multi-agent underwriting pipeline. Namespace: **AgentCoreFraudDemo**."
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 2, "width": 12, "height": 8,
+      "properties": {
+        "title": "Spend per agent (USD, sum)",
+        "view": "barChart",
+        "region": "us-east-1",
+        "stacked": false,
+        "period": 300,
+        "stat": "Sum",
+        "metrics": [
+          [ { "expression": "SEARCH('{AgentCoreFraudDemo,Agent,Tier} MetricName=\"CostUSD\"', 'Sum', 300)", "label": "", "id": "cost_by_agent" } ]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12, "y": 2, "width": 12, "height": 8,
+      "properties": {
+        "title": "Latency per agent (seconds, avg)",
+        "view": "barChart",
+        "region": "us-east-1",
+        "period": 300,
+        "stat": "Average",
+        "metrics": [
+          [ { "expression": "SEARCH('{AgentCoreFraudDemo,Agent,Tier} MetricName=\"LatencySeconds\"', 'Average', 300)", "label": "", "id": "lat_by_agent" } ]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 10, "width": 12, "height": 8,
+      "properties": {
+        "title": "Tokens per agent (input + output, sum)",
+        "view": "barChart",
+        "region": "us-east-1",
+        "period": 300,
+        "stat": "Sum",
+        "metrics": [
+          [ { "expression": "SEARCH('{AgentCoreFraudDemo,Agent,Tier} MetricName=\"InputTokens\"', 'Sum', 300)", "label": "input", "id": "in_tok" } ],
+          [ { "expression": "SEARCH('{AgentCoreFraudDemo,Agent,Tier} MetricName=\"OutputTokens\"', 'Sum', 300)", "label": "output", "id": "out_tok" } ]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12, "y": 10, "width": 6, "height": 8,
+      "properties": {
+        "title": "Cost per application (USD)",
+        "view": "singleValue",
+        "region": "us-east-1",
+        "period": 3600,
+        "stat": "Average",
+        "metrics": [
+          [ "AgentCoreFraudDemo", "PerAppCostUSD", { "label": "avg $/app" } ]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 18, "y": 10, "width": 6, "height": 8,
+      "properties": {
+        "title": "Applications adjudicated",
+        "view": "singleValue",
+        "region": "us-east-1",
+        "period": 3600,
+        "stat": "Sum",
+        "metrics": [
+          [ "AgentCoreFraudDemo", "Applications", { "label": "count" } ]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 18, "width": 24, "height": 6,
+      "properties": {
+        "title": "Total spend over time (USD, sum)",
+        "view": "timeSeries",
+        "region": "us-east-1",
+        "period": 300,
+        "stat": "Sum",
+        "metrics": [
+          [ { "expression": "SUM(SEARCH('{AgentCoreFraudDemo,Agent,Tier} MetricName=\"CostUSD\"', 'Sum', 300))", "label": "total spend", "id": "total_cost" } ]
+        ]
+      }
+    }
+  ]
+}

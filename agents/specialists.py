@@ -28,6 +28,7 @@ except ImportError:  # MOCK_MODE / offline / CI without the SDK installed
 
 from agents.prompts import SPECIALIST_PROMPTS
 from agents.models import model_for, nominal_latency
+from agents.pricing import nominal_tokens
 from tools.application_data import fetch_application_record, render_application_for_agent
 
 MOCK_MODE = os.environ.get("MOCK_MODE", "0") == "1"
@@ -39,6 +40,42 @@ def _sim_latency_scale() -> float:
         return float(os.environ.get("SIM_LATENCY_SCALE", "0"))
     except ValueError:
         return 0.0
+
+
+def _usage_from_result(result) -> tuple[int, int]:
+    """Best-effort extraction of (input_tokens, output_tokens) from a Strands result."""
+    try:
+        usage = result.metrics.accumulated_usage  # type: ignore[attr-defined]
+        return int(usage.get("inputTokens", 0)), int(usage.get("outputTokens", 0))
+    except Exception:
+        return nominal_tokens("specialist")
+
+
+def run_specialist_metered(domain: str, application_id: str) -> tuple[str, int, int]:
+    """
+    Run a specialist and return (analysis_text, input_tokens, output_tokens).
+
+    Offline (MOCK_MODE) returns the deterministic verdict plus illustrative
+    nominal token counts so cost/telemetry can be shown without Bedrock.
+    """
+    record = fetch_application_record(application_id)
+    if record is None:
+        return (f"RISK: LOW RISK\nFINDINGS: Application {application_id} not found.", 0, 0)
+
+    model_id = model_for(domain)
+    if MOCK_MODE:
+        scale = _sim_latency_scale()
+        if scale > 0:
+            import time
+            time.sleep(nominal_latency(model_id) * scale)
+        in_tok, out_tok = nominal_tokens("specialist")
+        return _mock_specialist(domain, record), in_tok, out_tok
+
+    specialist = Agent(model=model_id, system_prompt=SPECIALIST_PROMPTS[domain])
+    payload = render_application_for_agent(record, domain=domain)
+    result = specialist(f"Analyze this application for {domain} fraud risk.\n\n{payload}")
+    in_tok, out_tok = _usage_from_result(result)
+    return str(result), in_tok, out_tok
 
 
 def _run_specialist(domain: str, application_id: str) -> str:

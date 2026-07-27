@@ -110,8 +110,16 @@ question and keeps the Snowflake orchestration intact.
 ├── agents/
 │   ├── prompts.py           # specialist prompts + router + synthesizer prompts
 │   ├── models.py            # per-agent model tier configuration (Haiku/Sonnet/Opus)
+│   ├── pricing.py           # per-model rates + per-agent cost estimation
 │   ├── specialists.py       # 8 specialists as Strands @tool functions
-│   └── orchestrator.py      # the orchestrator: parallel synthesizer + interactive router
+│   └── orchestrator.py      # parallel synthesizer + streaming + interactive router
+├── ui/
+│   ├── server.py            # FastAPI + SSE server for the live UI
+│   └── index.html           # live agent grid, verdict, spend, AgentCore-vs-Snowflake
+├── observability/
+│   ├── metrics.py           # per-agent CloudWatch metrics emitter
+│   ├── cloudwatch_dashboard.json  # per-agent spend/latency/tokens dashboard
+│   └── create_dashboard.py  # PutDashboard helper
 ├── tools/
 │   ├── application_data.py  # data-access tool (application record retrieval)
 │   └── cortex_analyst_mcp.py# signal layer: Cortex Analyst semantic view via MCP
@@ -154,6 +162,42 @@ python app.py --review APP-1004
 ```
 
 Then deploy to AgentCore Runtime. See `deploy/deploy.md`.
+
+## Live UI (see the agents fire in parallel)
+
+```bash
+pip install -r requirements.txt
+MOCK_MODE=1 python app.py --serve      # offline, or drop MOCK_MODE for live Bedrock
+# open http://127.0.0.1:8080
+```
+
+Pick a scenario and hit **Run underwriting**. Eight agent cards light up as each
+specialist finishes (staggered so the parallel fan-out is visible), each showing
+its model tier, latency, and cost. Then the orchestrator's verdict appears
+alongside an **AgentCore-vs-Snowflake** latency bar and a **live spend** meter
+with a monthly projection at 100,000 applications/day.
+
+## Cost per agent
+
+```bash
+MOCK_MODE=1 python app.py --costs 100000
+```
+
+Prints the per-agent cost of one adjudication and a monthly projection. Costs
+come from `agents/pricing.py` (illustrative token footprints offline; real
+Bedrock usage live). The savings vs. a single-LLM setup come from right-sizing
+each agent's model, not from cheaper tokens (rates are identical).
+
+## Spend dashboard on CloudWatch
+
+```bash
+python observability/create_dashboard.py --region us-east-1
+export EMIT_CLOUDWATCH_METRICS=1 AWS_REGION=us-east-1
+python app.py --batch 20               # populate per-agent metrics
+```
+
+Creates a dashboard that breaks down **spend, tokens, and latency by agent**.
+See `observability/README.md`.
 
 ## Demo applications
 
