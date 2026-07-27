@@ -2,6 +2,14 @@
 
 ## Underwriting pipeline: parallel fan-out + synthesis
 
+![Architecture: multi-agent fraud underwriting on Amazon Bedrock AgentCore](architecture.svg)
+
+*Built with the official AWS Architecture Icons. Regenerate with
+`python architecture/build_diagram.py` (icons live in `architecture/icons/`).*
+
+<details>
+<summary>Text version of the diagram</summary>
+
 ```
                           ┌────────────────────────────────────────────────┐
                           │         Amazon Bedrock AgentCore Runtime         │
@@ -38,8 +46,10 @@
            Guardrails (PII/SSN redaction), Identity (per-user auth), Memory.
 ```
 
+</details>
+
 Interactive (non-underwriting) questions take a different path: the orchestrator acts as
-an **orchestrator/router** and calls one or two specialists as tools instead of
+a **router** and calls one or two specialists as tools instead of
 fanning out to all eight. See `analyze()` vs `adjudicate()` in the orchestrator.
 
 ## Request flow (underwriting)
