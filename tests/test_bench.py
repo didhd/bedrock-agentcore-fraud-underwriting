@@ -1638,6 +1638,15 @@ def test_report_selection_skips_only_recognised_non_bench_schemas():
         "pointpredictive.agentcore.tier-quality/1",
         "pointpredictive.agentcore.tier-quality-analyses/1",
         "pointpredictive.agentcore.tier-quality-verdicts/1",
+        # The Claude-set vs GPT-5.6-set study and its two sidecars. Same shape as the
+        # tier-quality study and not pipeline-bench runs for the same reasons: one
+        # specialist at a time with the model varied, so no end-to-end latency, no
+        # 21-key adjudication and no fan-out. It differs from tier-quality only in
+        # crossing model FAMILIES (Claude Converse vs GPT-5.6 on bedrock-mantle) and in
+        # scoring with two judges biased in opposite directions rather than one.
+        "pointpredictive.agentcore.set-comparison/1",
+        "pointpredictive.agentcore.set-comparison-analyses/1",
+        "pointpredictive.agentcore.set-comparison-verdicts/1",
     }
     collected = set(_committed_reports())
     for path in sorted(RESULTS_DIR.glob("*.json")):
