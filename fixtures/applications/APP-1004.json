@@ -1,0 +1,660 @@
+{
+  "application_id": "APP-1004",
+  "record_id": "APP-1004",
+  "scenario": "Synthetic identity, exact-unit ring overlap, shell employer, negative-file hit",
+  "why_this_fixture_exists": "The only HIGH record among the legacy five, and the one that must be HIGH for the right reason: multiple independent corroborated patterns (MSTR-029), not alert volume. Carries the dealer-900 trap - the consortium score is 930, and DLR-009 forbids escalating on that alone, so the dealer band rests on the phone-reuse coordination instead.",
+  "synthetic_data_notice": "SYNTHETIC DEMO RECORD. Fictional borrower, dealer and employer. No real PII. The SSN is carried only as hash_ssn (General Rule 23: never surface a raw SSN).",
+  "semantic_layer_rev": "pp-semantic-layer-2026-06",
+  "computed_at": "2026-06-30T00:00:00Z",
+  "application": {
+    "hash_lender_id": "hash_lndr_d4b8",
+    "lender_name": "MERIDIAN_FINANCE",
+    "borrower_name": "Devon Cross",
+    "hash_ssn": "hash_ssn_ff02aa",
+    "borrower_age": 57,
+    "credit_score": 771,
+    "fraud_score": 999,
+    "income_misrep_score": 71,
+    "loan_amount": 58900,
+    "stated_annual_income": 88000,
+    "verified_annual_income": 61100,
+    "vehicle": "2024 BMW X5",
+    "ltv_pct": 112,
+    "dealer_name": "Prestige Import Center",
+    "ppi_dealer_id": "PPI-DLR-0451",
+    "consortium_number_of_apps_last_1_year": 1180,
+    "employer_name": "Apex Global Solutions",
+    "employer_street_addr": "900 Commerce Way Ste 210",
+    "employer_city": "Phoenix",
+    "employer_state": "AZ",
+    "employer_zip": "85004",
+    "employer_phone": "602-555-0177",
+    "occupation": "OPERATIONS MANAGER",
+    "application_date": "2026-06-25",
+    "submitted_to_prod_at": "2026-06-25T09:54:00Z",
+    "product": "AUTO"
+  },
+  "signals": {
+    "ssn_distinct_identity_combinations": 3,
+    "phone_reuse_distinct_ssn_count": 5,
+    "email_reuse_distinct_ssn_count": 4,
+    "address_reuse_distinct_ssn_count": 6,
+    "is_multi_unit_address": true,
+    "ssn_days_in_system": 47,
+    "inquiries_in_2weeks": 6,
+    "dealer_consortium_score": 930,
+    "dealer_risk_score": 905,
+    "dealer_lender_default_rate": 0.14,
+    "dealer_consortium_epd_rate_last_24mo": 0.12,
+    "phone_reuse_count_this_dealer": 4,
+    "employer_concentration_pct": 23.0,
+    "ssn_previous_apps_all_time": 4,
+    "ssn_previous_apps_90d": 4,
+    "previous_epd_count": 1,
+    "previous_999_count": 2,
+    "borr_ssn_in_negative_file": 1,
+    "borr_ssn_linked_to_synthetic_fraud": 1,
+    "dealer_app_volume_24mo": 2300,
+    "dealer_apps_last_7d": 31,
+    "has_coborrower": false,
+    "coborrower_appears_as_borrower_count": 0,
+    "borrower_appears_as_coborrower_count": 0,
+    "coborr_distinct_primary_borrowers_count": 0,
+    "credit_score_gap": 0,
+    "coborr_income_70_percent_plus": 0,
+    "coborr_3_plus_apps_same_dealer_flag": 0,
+    "high_value_vehicle_weak_profile_straw_risk": 1,
+    "employer_distinct_other_ssns_count": 9,
+    "employer_new_ssns_90d": 8,
+    "employer_phone_distinct_ssn_count": 9,
+    "rapid_employer_change_flag": 1,
+    "employer_spike_flag": 1,
+    "ssn_distinct_employers_all_time": 4,
+    "ssn_distinct_employers_30d": 2,
+    "ssn_distinct_employers_60d": 3,
+    "ssn_distinct_income_amounts_all_time": 4,
+    "ssn_income_increase_20_percent_or_more": 1,
+    "ssn_multiple_apps_7d_different_incomes": 1,
+    "ssn_stated_income_exceeds_verified_by_25_percent": 1,
+    "ssn_income_overstatement_percentage": 44,
+    "loan_to_annual_income_ratio": 0.67,
+    "ssn_income_high_variance_inconsistent_reporting": 0,
+    "ssn_address_location_variations": 4,
+    "has_significant_identity_inconsistency": 1,
+    "address_ssn_count_same_building": 7,
+    "address_ssn_count_same_unit": 5,
+    "phone_ssn_count": 5,
+    "high_authorized_user_ratio": 1,
+    "is_thin_file": 1,
+    "very_new_file_high_score": 1,
+    "older_borrower_new_credit_high_score": 1,
+    "rapid_app_velocity": 1,
+    "ssn_apps_last_7d": 4,
+    "ssn_apps_last_30d": 7,
+    "ssn_income_increased_20_percent_last_30d_rapid_growth": 0,
+    "ssn_loan_exceeds_annual_income_unsustainable_debt": 0,
+    "ssn_loan_80_percent_or_more_annual_income_high_ratio": 0,
+    "employer_other_ssns_count": 9
+  },
+  "context": {
+    "ssn_distinct_identity_combinations_context": {
+      "signal": "ssn_distinct_identity_combinations",
+      "value": 3,
+      "customer_interpretation": "ssn_distinct_identity_combinations = 1 is NORMAL. >1 with different DOBs or names is concerning.",
+      "interpretation_source": "prompts/verbatim/identity_agent_prompt.txt",
+      "example_rows": "3 combinations on this hash_ssn: DEVON CROSS / 1969-02-xx, D CROSS / 1978-11-xx, and DEVIN CROSSE / 1969-02-xx. The DOBs differ by 9 years, which normalization cannot explain."
+    },
+    "phone_reuse_distinct_ssn_count_context": {
+      "signal": "phone_reuse_distinct_ssn_count",
+      "value": 5,
+      "customer_interpretation": "phone_reuse_distinct_ssn_count: 1-2 is normal (shared household). 3+ with new SSNs in 90d warrants investigation.",
+      "interpretation_source": "prompts/verbatim/identity_agent_prompt.txt",
+      "example_rows": "Normalized phone matches 5 hash_ssn values with 5 different surnames, 4 of them first seen in the last 90 days. None share an address with the others except the unit below."
+    },
+    "email_reuse_distinct_ssn_count_context": {
+      "signal": "email_reuse_distinct_ssn_count",
+      "value": 4,
+      "customer_interpretation": "email_reuse_distinct_ssn_count: 1 is normal. 2+ requires context validation (family vs. fraud).",
+      "interpretation_source": "prompts/verbatim/identity_agent_prompt.txt",
+      "example_rows": "Normalized email matches 4 hash_ssn values with 4 different surnames, all 4 registered within a 6-week window."
+    },
+    "address_reuse_distinct_ssn_count_context": {
+      "signal": "address_reuse_distinct_ssn_count",
+      "value": 6,
+      "customer_interpretation": "address_reuse_distinct_ssn_count: varies by property type. Multi-unit or dense areas can have high counts normally. Check is_multi_unit_address.",
+      "interpretation_source": "prompts/verbatim/identity_agent_prompt.txt",
+      "example_rows": "Address key resolves to 6 hash_ssn values. 5 of the 6 are at the SAME unit number, not spread across the building, and none share a surname."
+    },
+    "is_multi_unit_address_context": {
+      "signal": "is_multi_unit_address",
+      "value": true,
+      "customer_interpretation": "address_reuse_distinct_ssn_count: varies by property type. Multi-unit or dense areas can have high counts normally. Check is_multi_unit_address.",
+      "interpretation_source": "prompts/verbatim/identity_agent_prompt.txt",
+      "example_rows": "Street address parses a unit token (STE 4B) in a 12-unit building - but the overlap below is within one unit, not across the building."
+    },
+    "ssn_days_in_system_context": {
+      "signal": "ssn_days_in_system",
+      "value": 47,
+      "customer_interpretation": "ssn_days_in_system = 0 (new to system): common for first-time buyers. Only concerning with other velocity signals.",
+      "interpretation_source": "prompts/verbatim/identity_agent_prompt.txt",
+      "example_rows": "First consortium sighting 47 days ago, yet 4 applications have been filed since, at 4 different dealers."
+    },
+    "inquiries_in_2weeks_context": {
+      "signal": "inquiries_in_2weeks",
+      "value": 6,
+      "customer_interpretation": "It's also useful to look at cases where the borrower's credit score is quite high (i.e. greater than or equal to 650) and has more than 4 credit inquiries (based on the inquiries_in_2weeks field), this is also often at risk of identity fraud.",
+      "interpretation_source": "prompts/verbatim/identity_orchestration_062026.txt",
+      "example_rows": "6 inquiries in the trailing 14 days with a 771 credit score. Score at or above 650 with more than 4 recent inquiries is the pattern the identity instructions call out."
+    },
+    "dealer_consortium_score_context": {
+      "signal": "dealer_consortium_score",
+      "value": 930,
+      "customer_interpretation": "dealer_consortium_score: 0-500 low, 500-700 moderate, 700-900 elevated, 900+ high. Reflects overall portfolio performance, NOT fraud participation.",
+      "interpretation_source": "prompts/verbatim/dealer_agent_prompt.txt",
+      "example_rows": "Dealer scored 930 this month; 880-935 across the trailing 12 months, trending up. This is a portfolio-performance measure across all consortium lenders."
+    },
+    "dealer_risk_score_context": {
+      "signal": "dealer_risk_score",
+      "value": 905,
+      "customer_interpretation": "21. There are two scores that measure dealer risk. The scores are dealer_risk_score and dealer_consortium_score. The dealer_risk_score is the numerical representation of the dealer risk within a particular lender's portfolio. Meanwhile, the dealer_consortium_score is the aggregated risk of that dealer amongst all lenders in the Point Predictive Consortium.",
+      "interpretation_source": "prompts/verbatim/dealer_orchestration_instructions_062026.txt",
+      "example_rows": "Lender-portfolio score 905 across 210 funded loans with this lender."
+    },
+    "dealer_lender_default_rate_context": {
+      "signal": "dealer_lender_default_rate",
+      "value": 0.14,
+      "customer_interpretation": "dealer_lender_default_rate: High rates indicate poor credit quality at this dealer. Only fraud-relevant if combined with coordinated patterns.",
+      "interpretation_source": "prompts/verbatim/dealer_agent_prompt.txt",
+      "example_rows": "29 defaults across 210 funded loans for this dealer with this lender."
+    },
+    "dealer_consortium_epd_rate_last_24mo_context": {
+      "signal": "dealer_consortium_epd_rate_last_24mo",
+      "value": 0.12,
+      "customer_interpretation": "dealer_consortium_epd_rate_last_24mo: Early payment default rate. Credit indicator, not fraud indicator unless unusually concentrated.",
+      "interpretation_source": "prompts/verbatim/dealer_agent_prompt.txt",
+      "example_rows": "276 early payment defaults across 2,300 consortium applications in 24 months."
+    },
+    "phone_reuse_count_this_dealer_context": {
+      "signal": "phone_reuse_count_this_dealer",
+      "value": 4,
+      "customer_interpretation": "phone_reuse_count_this_dealer: Borrowers sharing phones at same dealer. 0-1 is normal. 2+ with high fraud scores is concerning for coordination.",
+      "interpretation_source": "prompts/verbatim/dealer_agent_prompt.txt",
+      "example_rows": "4 other borrowers at THIS dealer share this normalized phone number. None share a surname or address with each other; 3 of the 4 carried fraud scores above 900."
+    },
+    "employer_concentration_pct_context": {
+      "signal": "employer_concentration_pct",
+      "value": 23.0,
+      "customer_interpretation": "employer_concentration_pct: High concentration of same employer at a dealer. Normal for dealers near large employers/bases. >20% at small dealers with few apps is more concerning.",
+      "interpretation_source": "prompts/verbatim/dealer_agent_prompt.txt",
+      "example_rows": "Apex Global Solutions accounts for 529 of 2,300 applications at this dealer (23%). The employer has no verifiable presence and only 9 SSNs consortium-wide, so the concentration is not a large-employer or military-base effect."
+    },
+    "ssn_previous_apps_all_time_context": {
+      "signal": "ssn_previous_apps_all_time",
+      "value": 4,
+      "customer_interpretation": "ssn_previous_apps_all_time / ssn_previous_apps_90d: Borrower repeat activity. Normal for rate-shopping. Concerning only if combined with EPD/default history.",
+      "interpretation_source": "prompts/verbatim/dealer_agent_prompt.txt",
+      "example_rows": "4 prior applications on this hash_ssn, all inside the last 47 days, at 4 different dealers."
+    },
+    "ssn_previous_apps_90d_context": {
+      "signal": "ssn_previous_apps_90d",
+      "value": 4,
+      "customer_interpretation": "ssn_previous_apps_all_time / ssn_previous_apps_90d: Borrower repeat activity. Normal for rate-shopping. Concerning only if combined with EPD/default history.",
+      "interpretation_source": "prompts/verbatim/dealer_agent_prompt.txt",
+      "example_rows": "4 prior applications in the trailing 90 days, at 4 different dealers, with 4 different stated incomes."
+    },
+    "previous_epd_count_context": {
+      "signal": "previous_epd_count",
+      "value": 1,
+      "customer_interpretation": "previous_epd_count / previous_999_count: Prior bad outcomes. Relevant to individual borrower risk, not dealer fraud unless a dealer pattern.",
+      "interpretation_source": "prompts/verbatim/dealer_agent_prompt.txt",
+      "example_rows": "1 prior application for this hash_ssn went to early payment default within 4 months of funding."
+    },
+    "previous_999_count_context": {
+      "signal": "previous_999_count",
+      "value": 2,
+      "customer_interpretation": "previous_epd_count / previous_999_count: Prior bad outcomes. Relevant to individual borrower risk, not dealer fraud unless a dealer pattern.",
+      "interpretation_source": "prompts/verbatim/dealer_agent_prompt.txt",
+      "example_rows": "2 prior applications for this hash_ssn carried a fraud score of 999, meaning a fraud accelerator fired on each."
+    },
+    "borr_ssn_in_negative_file_context": {
+      "signal": "borr_ssn_in_negative_file",
+      "value": 1,
+      "customer_interpretation": "borr_ssn_in_negative_file / borr_ssn_linked_to_synthetic_fraud: Individual borrower flags. Dealer fraud only if multiple such borrowers cluster at one dealer.",
+      "interpretation_source": "prompts/verbatim/dealer_agent_prompt.txt",
+      "example_rows": "hash_ssn is present in the negative file, added 3 months ago by a consortium lender after a confirmed loss."
+    },
+    "borr_ssn_linked_to_synthetic_fraud_context": {
+      "signal": "borr_ssn_linked_to_synthetic_fraud",
+      "value": 1,
+      "customer_interpretation": "borr_ssn_in_negative_file / borr_ssn_linked_to_synthetic_fraud: Individual borrower flags. Dealer fraud only if multiple such borrowers cluster at one dealer.",
+      "interpretation_source": "prompts/verbatim/dealer_agent_prompt.txt",
+      "example_rows": "1 confirmed synthetic-fraud record is linked to this hash_ssn: a loan funded 14 months ago and closed as a confirmed fabricated identity."
+    },
+    "dealer_app_volume_24mo_context": {
+      "signal": "dealer_app_volume_24mo",
+      "value": 2300,
+      "customer_interpretation": "High-volume dealers (1000+ apps/24mo) naturally have higher absolute counts of everything \u2014 normalize mentally by volume.",
+      "interpretation_source": "prompts/verbatim/dealer_agent_prompt.txt",
+      "example_rows": "2,300 consortium applications in 24 months; consortium_number_of_apps_last_1_year is 1,180, so the dealer is active and high-volume."
+    },
+    "dealer_apps_last_7d_context": {
+      "signal": "dealer_apps_last_7d",
+      "value": 31,
+      "customer_interpretation": "",
+      "interpretation_source": "",
+      "example_rows": "31 applications at this dealer in the last 7 days: 31 distinct hash_ssn values but only 24 distinct phones, and 7 of them cite Apex Global Solutions."
+    },
+    "has_coborrower_context": {
+      "signal": "has_coborrower",
+      "value": false,
+      "customer_interpretation": "No co-borrower present: Primary straw mechanism absent. Only evaluate if other patterns (role-switching history, dealer clustering) exist.",
+      "interpretation_source": "prompts/verbatim/straw_agent_prompt.txt",
+      "example_rows": "No co-borrower on this application. coborrower source tables return no row for this (application_id, hash_lender_id)."
+    },
+    "coborrower_appears_as_borrower_count_context": {
+      "signal": "coborrower_appears_as_borrower_count",
+      "value": 0,
+      "customer_interpretation": "coborrower_appears_as_borrower_count or borrower_appears_as_coborrower_count > 0: Role switching. Concerning with non-family relationships or high frequency.",
+      "interpretation_source": "prompts/verbatim/straw_agent_prompt.txt",
+      "example_rows": "No co-borrower on this application, so there are 0 co-borrower role records to compare - an absence of a party, not a party with 0 switches."
+    },
+    "borrower_appears_as_coborrower_count_context": {
+      "signal": "borrower_appears_as_coborrower_count",
+      "value": 0,
+      "customer_interpretation": "coborrower_appears_as_borrower_count or borrower_appears_as_coborrower_count > 0: Role switching. Concerning with non-family relationships or high frequency.",
+      "interpretation_source": "prompts/verbatim/straw_agent_prompt.txt",
+      "example_rows": "0 consortium applications carry this hash_ssn as a co-borrower."
+    },
+    "coborr_distinct_primary_borrowers_count_context": {
+      "signal": "coborr_distinct_primary_borrowers_count",
+      "value": 0,
+      "customer_interpretation": "coborr_distinct_primary_borrowers_count: 1-2 is normal (family). 3+ with different dealers is concerning.",
+      "interpretation_source": "prompts/verbatim/straw_agent_prompt.txt",
+      "example_rows": "No co-borrower on this application, so 0 primary borrowers are linked through one."
+    },
+    "credit_score_gap_context": {
+      "signal": "credit_score_gap",
+      "value": 0,
+      "customer_interpretation": "credit_score_gap > 100: Possible credit piggybacking. Evaluate with relationship type and income proportion.",
+      "interpretation_source": "prompts/verbatim/straw_agent_prompt.txt",
+      "example_rows": "No co-borrower, so no second credit score to compare against 704."
+    },
+    "coborr_income_70_percent_plus_context": {
+      "signal": "coborr_income_70_percent_plus",
+      "value": 0,
+      "customer_interpretation": "coborr_income_70_percent_plus: Co-borrower carries most income \u2014 possible indicator but common in spousal relationships.",
+      "interpretation_source": "prompts/verbatim/straw_agent_prompt.txt",
+      "example_rows": "No co-borrower income on file, so the co-borrower share of combined income is 0%."
+    },
+    "coborr_3_plus_apps_same_dealer_flag_context": {
+      "signal": "coborr_3_plus_apps_same_dealer_flag",
+      "value": 0,
+      "customer_interpretation": "coborr_3_plus_apps_same_dealer_flag: Concerning for dealer-coordinated straw activity.",
+      "interpretation_source": "prompts/verbatim/straw_agent_prompt.txt",
+      "example_rows": "No co-borrower, so 0 co-borrower applications exist at this or any dealer."
+    },
+    "high_value_vehicle_weak_profile_straw_risk_context": {
+      "signal": "high_value_vehicle_weak_profile_straw_risk",
+      "value": 1,
+      "customer_interpretation": "high_value_vehicle_weak_profile_straw_risk: Only concerning with OTHER corroborating straw patterns.",
+      "interpretation_source": "prompts/verbatim/straw_agent_prompt.txt",
+      "example_rows": "58,900 loan on a 2024 BMW X5 at 112% LTV against a 47-day-old credit file. Vehicle value is disproportionate to the documented profile."
+    },
+    "employer_distinct_other_ssns_count_context": {
+      "signal": "employer_distinct_other_ssns_count",
+      "value": 9,
+      "customer_interpretation": "employer_distinct_other_ssns_count: Varies by employer size. Large employers (100+ SSNs) are normal. Small employer with rapid new SSN growth in 90d is more concerning.",
+      "interpretation_source": "prompts/verbatim/employment_agent_prompt.txt",
+      "example_rows": "9 distinct hash_ssn values cite Apex Global Solutions - 8 of them first seen in the last 90 days. No state business registration, and the suite address is a mail drop shared by 40 registrations."
+    },
+    "employer_new_ssns_90d_context": {
+      "signal": "employer_new_ssns_90d",
+      "value": 8,
+      "customer_interpretation": "employer_new_ssns_90d: High count at a previously quiet employer suggests potential shell/fabricated employer. Contextualize with employer size.",
+      "interpretation_source": "prompts/verbatim/employment_agent_prompt.txt",
+      "example_rows": "8 new hash_ssn values cited this employer in the last 90 days against 9 all-time. The employer was effectively unknown to the consortium 90 days ago."
+    },
+    "employer_phone_distinct_ssn_count_context": {
+      "signal": "employer_phone_distinct_ssn_count",
+      "value": 9,
+      "customer_interpretation": "employer_phone_distinct_ssn_count: Shared employer phone is normal for businesses. Only concerning if the phone is also a personal cell number.",
+      "interpretation_source": "prompts/verbatim/employment_agent_prompt.txt",
+      "example_rows": "9 hash_ssn values share 602-555-0177. The number is a mobile line and also appears as the personal contact number on 3 of those applications."
+    },
+    "rapid_employer_change_flag_context": {
+      "signal": "rapid_employer_change_flag",
+      "value": 1,
+      "customer_interpretation": "rapid_employer_change_flag: Multiple employer changes in short windows. Consider career transitions, contract work, seasonal employment, or staffing agencies as normal explanations.",
+      "interpretation_source": "prompts/verbatim/employment_agent_prompt.txt",
+      "example_rows": "3 employers cited across 47 days: Apex Global Solutions, and 2 others on applications 18 and 31 days ago. No staffing agency or gig platform among them."
+    },
+    "employer_spike_flag_context": {
+      "signal": "employer_spike_flag",
+      "value": 1,
+      "customer_interpretation": "employer_spike_flag: Sudden increase in applications citing this employer. May reflect hiring surge, not fraud.",
+      "interpretation_source": "prompts/verbatim/employment_agent_prompt.txt",
+      "example_rows": "Monthly applications citing this employer: 0, 0, 1, 2, 3, 3 over the last 6 months, from a base of zero."
+    },
+    "ssn_distinct_employers_all_time_context": {
+      "signal": "ssn_distinct_employers_all_time",
+      "value": 4,
+      "customer_interpretation": "ssn_distinct_employers_all_time vs ssn_distinct_employers_30d/60d: High all-time with low recent is normal career history. High recent count is velocity concern.",
+      "interpretation_source": "prompts/verbatim/employment_agent_prompt.txt",
+      "example_rows": "4 employers all-time for this hash_ssn, all first cited within the last 47 days."
+    },
+    "ssn_distinct_employers_30d_context": {
+      "signal": "ssn_distinct_employers_30d",
+      "value": 2,
+      "customer_interpretation": "ssn_distinct_employers_all_time vs ssn_distinct_employers_30d/60d: High all-time with low recent is normal career history. High recent count is velocity concern.",
+      "interpretation_source": "prompts/verbatim/employment_agent_prompt.txt",
+      "example_rows": "2 employers cited in the trailing 30 days."
+    },
+    "ssn_distinct_employers_60d_context": {
+      "signal": "ssn_distinct_employers_60d",
+      "value": 3,
+      "customer_interpretation": "ssn_distinct_employers_all_time vs ssn_distinct_employers_30d/60d: High all-time with low recent is normal career history. High recent count is velocity concern.",
+      "interpretation_source": "prompts/verbatim/employment_agent_prompt.txt",
+      "example_rows": "3 employers cited in the trailing 60 days - the same window in which the hash_ssn first appeared."
+    },
+    "ssn_distinct_income_amounts_all_time_context": {
+      "signal": "ssn_distinct_income_amounts_all_time",
+      "value": 4,
+      "customer_interpretation": "ssn_distinct_income_amounts_all_time: 1-2 is normal (job changes, raises). 3+ with short timeframes is concerning.",
+      "interpretation_source": "prompts/verbatim/income_agent_prompt.txt",
+      "example_rows": "4 stated amounts within 47 days: 61,000, 74,000, 82,000 and 88,000."
+    },
+    "ssn_income_increase_20_percent_or_more_context": {
+      "signal": "ssn_income_increase_20_percent_or_more",
+      "value": 1,
+      "customer_interpretation": "ssn_income_increase_20_percent_or_more: common with promotions, job changes, overtime, commission cycles. Only concerning when rapid (7-30d) with no employment change.",
+      "interpretation_source": "prompts/verbatim/income_agent_prompt.txt",
+      "example_rows": "Stated income rose 61,000 to 88,000 in 47 days (+44%) across 3 employer changes."
+    },
+    "ssn_multiple_apps_7d_different_incomes_context": {
+      "signal": "ssn_multiple_apps_7d_different_incomes",
+      "value": 1,
+      "customer_interpretation": "ssn_multiple_apps_7d_different_incomes: concerning only if income differences are large (>20%) and no context explains them (e.g. coborrower apps, corrections).",
+      "interpretation_source": "prompts/verbatim/income_agent_prompt.txt",
+      "example_rows": "4 applications in the trailing 7 days stating 74,000, 82,000, 88,000 and 88,000 - a 19% spread with no correction note or co-borrower application to explain it."
+    },
+    "ssn_stated_income_exceeds_verified_by_25_percent_context": {
+      "signal": "ssn_stated_income_exceeds_verified_by_25_percent",
+      "value": 1,
+      "customer_interpretation": "ssn_stated_income_exceeds_verified_by_25_percent: significant only when combined with conflicting employment info or repeated across applications.",
+      "interpretation_source": "prompts/verbatim/income_agent_prompt.txt",
+      "example_rows": "Stated 88,000 against verified 61,100 - a 44% gap. No tax transcript or paystub on file."
+    },
+    "ssn_income_overstatement_percentage_context": {
+      "signal": "ssn_income_overstatement_percentage",
+      "value": 44,
+      "customer_interpretation": "ssn_income_overstatement_percentage: <15% is normal reporting variance. 15-25% requires context. >25% is materially suspicious.",
+      "interpretation_source": "prompts/verbatim/income_agent_prompt.txt",
+      "example_rows": "Stated 88,000 vs verified 61,100 = 44% overstatement, well above the 25% materially-suspicious line."
+    },
+    "loan_to_annual_income_ratio_context": {
+      "signal": "loan_to_annual_income_ratio",
+      "value": 0.67,
+      "customer_interpretation": "loan_to_annual_income_ratio: <0.5 normal. 0.5-0.8 elevated but common for vehicle loans. >0.8 or >1.0 warrants scrutiny.",
+      "interpretation_source": "prompts/verbatim/income_agent_prompt.txt",
+      "example_rows": "Loan 58,900 against stated annual income 88,000 = 0.67."
+    },
+    "ssn_income_high_variance_inconsistent_reporting_context": {
+      "signal": "ssn_income_high_variance_inconsistent_reporting",
+      "value": 0,
+      "customer_interpretation": "ssn_income_high_variance_inconsistent_reporting: common for self-employed, commission, seasonal, or gig workers.",
+      "interpretation_source": "prompts/verbatim/income_agent_prompt.txt",
+      "example_rows": "Two stated amounts 26 months apart, coefficient of variation 0.05. W-2 employee, single employer."
+    },
+    "ssn_address_location_variations_context": {
+      "signal": "ssn_address_location_variations",
+      "value": 4,
+      "customer_interpretation": "ssn_address_location_variations: 1-2 normal (relocation). 3+ states in short timeframes is concerning.",
+      "interpretation_source": "prompts/verbatim/synthetic_agent_prompt.txt",
+      "example_rows": "4 address locations in 4 different states within 47 days: AZ, NV, TX and GA. No relocation record and the employer address did not change with them."
+    },
+    "has_significant_identity_inconsistency_context": {
+      "signal": "has_significant_identity_inconsistency",
+      "value": 1,
+      "customer_interpretation": "has_significant_identity_inconsistency: Only concerning when corroborated by other synthetic indicators (thin file + reuse + velocity).",
+      "interpretation_source": "prompts/verbatim/synthetic_agent_prompt.txt",
+      "example_rows": "Normalized DOB differs by 9 years between two of the three identity combinations on this hash_ssn, and the middle initial differs on all three."
+    },
+    "address_ssn_count_same_building_context": {
+      "signal": "address_ssn_count_same_building",
+      "value": 7,
+      "customer_interpretation": "address_ssn_count_same_building vs same_unit: Building-level overlap is normal in apartments. Same-unit overlap with unrelated SSNs is more concerning.",
+      "interpretation_source": "prompts/verbatim/synthetic_agent_prompt.txt",
+      "example_rows": "7 hash_ssn values in this 12-unit building - but 5 of the 7 are in the same unit."
+    },
+    "address_ssn_count_same_unit_context": {
+      "signal": "address_ssn_count_same_unit",
+      "value": 5,
+      "customer_interpretation": "address_ssn_count_same_building vs same_unit: Building-level overlap is normal in apartments. Same-unit overlap with unrelated SSNs is more concerning.",
+      "interpretation_source": "prompts/verbatim/synthetic_agent_prompt.txt",
+      "example_rows": "5 hash_ssn values at unit STE 4B with 5 different surnames, 4 first seen in the last 90 days. Exact-unit reuse, not building-level spread."
+    },
+    "phone_ssn_count_context": {
+      "signal": "phone_ssn_count",
+      "value": 5,
+      "customer_interpretation": "phone_ssn_count: 1-2 normal (household/family). 3+ with unrelated identities warrants investigation.",
+      "interpretation_source": "prompts/verbatim/synthetic_agent_prompt.txt",
+      "example_rows": "5 hash_ssn values on this normalized phone with 5 different surnames and 4 different addresses - not a household."
+    },
+    "high_authorized_user_ratio_context": {
+      "signal": "high_authorized_user_ratio",
+      "value": 1,
+      "customer_interpretation": "high_authorized_user_ratio: Common for young adults, immigrants, credit builders. Only concerning with thin file + new credit + velocity combined.",
+      "interpretation_source": "prompts/verbatim/synthetic_agent_prompt.txt",
+      "example_rows": "5 of 6 open tradelines are authorized-user lines (83%), all added within the last 40 days, all on accounts belonging to unrelated identities."
+    },
+    "is_thin_file_context": {
+      "signal": "is_thin_file",
+      "value": 1,
+      "customer_interpretation": "is_thin_file + very_new_file_high_score: Legitimate for young adults and new immigrants. Concerning only with multiple corroborating patterns.",
+      "interpretation_source": "prompts/verbatim/synthetic_agent_prompt.txt",
+      "example_rows": "6 open tradelines, time in file 2 months. Credit report present and valid, so the 2-month file length is real, not a scrubbed sentinel."
+    },
+    "very_new_file_high_score_context": {
+      "signal": "very_new_file_high_score",
+      "value": 1,
+      "customer_interpretation": "is_thin_file + very_new_file_high_score: Legitimate for young adults and new immigrants. Concerning only with multiple corroborating patterns.",
+      "interpretation_source": "prompts/verbatim/synthetic_agent_prompt.txt",
+      "example_rows": "Time in file 2 months with a 771 score. The score is carried almost entirely by authorized-user tradelines opened in the same window."
+    },
+    "older_borrower_new_credit_high_score_context": {
+      "signal": "older_borrower_new_credit_high_score",
+      "value": 1,
+      "customer_interpretation": "older_borrower_new_credit_high_score: Rare legitimately. More concerning than young borrower equivalent.",
+      "interpretation_source": "prompts/verbatim/synthetic_agent_prompt.txt",
+      "example_rows": "Borrower is 57 with a 2-month credit file and a 771 score. A 57-year-old with no credit history before this quarter is rare legitimately."
+    },
+    "rapid_app_velocity_context": {
+      "signal": "rapid_app_velocity",
+      "value": 1,
+      "customer_interpretation": "rapid_app_velocity: Common during car shopping. Only concerning with other synthetic patterns.",
+      "interpretation_source": "prompts/verbatim/synthetic_agent_prompt.txt",
+      "example_rows": "4 applications in 7 days, 7 in 30, at 5 different dealers in 4 states - not single-market rate shopping."
+    },
+    "ssn_apps_last_7d_context": {
+      "signal": "ssn_apps_last_7d",
+      "value": 4,
+      "customer_interpretation": "",
+      "interpretation_source": "",
+      "example_rows": "4 applications in the trailing 7 days at 4 different dealers in 3 states, for 3 different vehicle classes."
+    },
+    "ssn_apps_last_30d_context": {
+      "signal": "ssn_apps_last_30d",
+      "value": 7,
+      "customer_interpretation": "",
+      "interpretation_source": "",
+      "example_rows": "7 applications in the trailing 30 days at 5 different dealers, total requested exposure 310,000."
+    },
+    "ssn_income_increased_20_percent_last_30d_rapid_growth_context": {
+      "signal": "ssn_income_increased_20_percent_last_30d_rapid_growth",
+      "value": 0,
+      "customer_interpretation": "",
+      "interpretation_source": "",
+      "example_rows": "No stated-income change inside the trailing 30 days; the prior amount is 26 months old."
+    },
+    "ssn_loan_exceeds_annual_income_unsustainable_debt_context": {
+      "signal": "ssn_loan_exceeds_annual_income_unsustainable_debt",
+      "value": 0,
+      "customer_interpretation": "",
+      "interpretation_source": "",
+      "example_rows": "Loan 25,100 against annual income 66,000. Existing monthly obligations 640."
+    },
+    "ssn_loan_80_percent_or_more_annual_income_high_ratio_context": {
+      "signal": "ssn_loan_80_percent_or_more_annual_income_high_ratio",
+      "value": 0,
+      "customer_interpretation": "",
+      "interpretation_source": "",
+      "example_rows": "Loan is 38% of stated annual income, well under the 80% threshold encoded in the signal name."
+    },
+    "employer_other_ssns_count_context": {
+      "signal": "employer_other_ssns_count",
+      "value": 9,
+      "customer_interpretation": "",
+      "interpretation_source": "",
+      "example_rows": "9 other hash_ssn values share this employer; 7 of the 9 applied at THIS dealer and 3 share the borrower's phone number."
+    }
+  },
+  "alerts_fired": [
+    {
+      "alert_id": 4,
+      "category": "Identity",
+      "categories": [
+        "Identity"
+      ],
+      "finding_text": "Borrower SSN is associated with more than one name and date of birth; two of the dates of birth differ by nine years.",
+      "underlying_behavior": "identity combination mismatch"
+    },
+    {
+      "alert_id": 104,
+      "category": "Identity",
+      "categories": [
+        "Identity"
+      ],
+      "finding_text": "Credit file is two months old while the credit score is in the high 700s, with nearly all tradelines added as authorized-user lines in the same window.",
+      "underlying_behavior": "manufactured credit file"
+    },
+    {
+      "alert_id": 66,
+      "category": "Identity",
+      "categories": [
+        "Identity"
+      ],
+      "finding_text": "Borrower address, at unit level, is shared with four other applicant identities carrying different surnames, all first seen in the last 90 days.",
+      "underlying_behavior": "exact-unit address cluster"
+    },
+    {
+      "alert_id": 64,
+      "category": "Identity",
+      "categories": [
+        "Identity"
+      ],
+      "finding_text": "Borrower phone number links to four other applicant identities at this same dealer, none of whom share an address or surname with each other.",
+      "underlying_behavior": "dealer-level phone cluster"
+    },
+    {
+      "alert_id": 140,
+      "category": "Employment",
+      "categories": [
+        "Employment"
+      ],
+      "finding_text": "Employer cited on this application has no verifiable business presence and added eight new applicant SSNs in the last ninety days from a base of one.",
+      "underlying_behavior": "shell employer"
+    },
+    {
+      "alert_id": 27,
+      "category": "Income",
+      "categories": [
+        "Income"
+      ],
+      "finding_text": "Stated income exceeds the verified figure by 44%, with no paystub or tax transcript on file.",
+      "underlying_behavior": "income overstatement"
+    },
+    {
+      "alert_id": 157,
+      "category": "Bust Out Risk",
+      "categories": [
+        "Bust Out Risk"
+      ],
+      "finding_text": "Seven applications in thirty days across five dealers, with total requested exposure of 310,000.",
+      "underlying_behavior": "application velocity"
+    },
+    {
+      "alert_id": 163,
+      "category": "Default",
+      "categories": [
+        "Default"
+      ],
+      "finding_text": "Borrower SSN appears in the negative file and is linked to a prior loss closed as a confirmed fabricated identity.",
+      "underlying_behavior": "negative-file and confirmed synthetic linkage"
+    }
+  ],
+  "expected": {
+    "overall_risk_decision": "HIGH RISK",
+    "recommendation_decision": "DECLINE",
+    "overall_justification": {
+      "requirement_id": "MSTR-029",
+      "customer_rule": "HIGH RISK should generally require either multiple strongly corroborated fraud patterns or one extremely severe and well-supported fraud indicator. This should be reserved for the most extreme and clear cases of fraud."
+    },
+    "recommended_stipulations_populated": false,
+    "top_risk_factors_populated": true,
+    "domains": {
+      "identity": {
+        "band": "HIGH RISK",
+        "flag": 1,
+        "requirement_id": "IDEN-017",
+        "customer_rule": "HIGH RISK: Strong, corroborated identity manipulation with multiple independent inconsistencies. Uncommon."
+      },
+      "dealer": {
+        "band": "POSSIBLE RISK",
+        "flag": 0,
+        "requirement_id": "DLR-021",
+        "customer_rule": "POSSIBLE RISK: Meaningful evidence of dealer-level coordination (phone reuse + employer clustering + identity patterns) that cannot be explained by volume or geography."
+      },
+      "straw": {
+        "band": "LOW RISK",
+        "flag": 0,
+        "requirement_id": "STRW-008",
+        "customer_rule": "No co-borrower present: Primary straw mechanism absent. Only evaluate if other patterns (role-switching history, dealer clustering) exist."
+      },
+      "employment": {
+        "band": "HIGH RISK",
+        "flag": 1,
+        "requirement_id": "EMP-020",
+        "customer_rule": "HIGH RISK: Strong evidence of fabricated/shell employer with coordinated application activity, OR confirmed employment history manipulation with corroborating fraud patterns. Uncommon."
+      },
+      "income": {
+        "band": "POSSIBLE RISK",
+        "flag": 0,
+        "requirement_id": "INC-017",
+        "customer_rule": "POSSIBLE RISK: Materially suspicious patterns from genuinely independent sources (e.g. large overstatement + conflicting employment + rapid inflation across lenders)."
+      },
+      "synthetic": {
+        "band": "HIGH RISK",
+        "flag": 1,
+        "requirement_id": "SYN-019",
+        "customer_rule": "HIGH RISK: Strong, corroborated synthetic construction with multiple independent inconsistencies (fabricated identity + manufactured credit + coordinated reuse). Uncommon."
+      },
+      "bustout": {
+        "band": "POSSIBLE RISK",
+        "flag": 0,
+        "requirement_id": "BST-020",
+        "customer_rule": "POSSIBLE RISK: materially suspicious patterns supported by moderate corroborating evidence requiring verification before LOW RISK confidence can reasonably be established."
+      },
+      "rings": {
+        "band": "HIGH RISK",
+        "flag": 1,
+        "requirement_id": "RNG-014",
+        "customer_rule": "Repeated exact-unit reuse, coordinated multi-identifier overlap, or highly connected borrower clusters supported by corroborating inconsistencies are more significant than isolated overlap patterns alone."
+      }
+    }
+  },
+  "notes": [
+    "dealer_flag stays 0 while the dealer band is POSSIBLE. DLR-009 forbids escalating on the 930 consortium score, and DLR-018 says the negative-file and synthetic-linkage flags are individual borrower flags that mean dealer fraud 'only if multiple such borrowers cluster at one dealer' - the phone cluster is suggestive but not the clear, material, corroborated evidence MSTR-039 requires for a flag of 1.",
+    "straw stays LOW: there is no co-borrower at all, so the primary mechanism is absent (STRW-008) even though high_value_vehicle_weak_profile_straw_risk fires - STRW-014 says that signal is 'only concerning with OTHER corroborating straw patterns'.",
+    "The 8 fired alerts span 8 distinct underlying_behavior values, which is what makes this record legitimately HIGH rather than an alert-volume artefact (MSTR-031)."
+  ]
+}

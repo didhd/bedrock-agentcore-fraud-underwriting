@@ -1,17 +1,67 @@
 # Multi-Agent Fraud Detection on Amazon Bedrock AgentCore
-# Python 3.10+ required
+#
+# Python 3.12 (agentcore/agentcore.json pins runtimeVersion PYTHON_3_12 on both
+# runtimes; the CLI's own default is PYTHON_3_14, so keep the two in sync).
+#
+# Every pin below is EXACT for the three libraries whose API surface this repo
+# reads directly. Loose floors are the failure mode we are guarding against: a
+# `>=` on strands-agents resolves to 1.35.x, which renamed/added constructor
+# kwargs (plugins, concurrent_invocation_mode, service_tier) and -- worse --
+# BedrockModel silently accepts unknown **model_config keys with only a
+# UserWarning, so a kwarg that moved does not raise. It just stops taking effect.
 
-# Agent framework (open source, AWS-maintained)
-strands-agents>=0.1.0
-strands-agents-tools>=0.1.0
+# ---- Agent framework -------------------------------------------------------
+# 1.26.0 is the version every API decision in agents/ and app/ was verified
+# against: BedrockModel's flat **model_config (there is no `params` kwarg), the
+# `structured_output_model=` kwarg on Agent(...) (Agent.structured_output() is
+# deprecated), ModelRetryStrategy, and the threading.Lock in stream_async that
+# raises ConcurrencyException on a concurrently reused Agent instance.
+strands-agents==1.26.0
+# Pinned in lockstep with strands-agents: the tools package imports framework
+# internals, so a floor here can drag in a build made against a different core.
+strands-agents-tools==0.2.20
 
-# AgentCore Runtime SDK + deployment toolkit
-bedrock-agentcore>=0.1.0
-bedrock-agentcore-starter-toolkit>=0.1.0
+# ---- AgentCore Runtime SDK -------------------------------------------------
+# 1.14.0 is what the entrypoint contract was verified against: _takes_context()
+# matching the second parameter literally by the name `context`, and an
+# async-generator entrypoint being auto-converted to text/event-stream.
+bedrock-agentcore==1.14.0
+#
+# DELIBERATELY ABSENT: bedrock-agentcore-starter-toolkit.
+# It is deprecated, and it installs a console script also named `agentcore`
+# which collides with the real CLI (npm @aws/agentcore). That toolkit's binary is
+# what made the old configure/launch deploy story look plausible; neither of
+# those subcommands exists in the real CLI. See deploy/deploy.md, and
+# deploy/ci.sh which fails the build if either name reappears.
 
-# AWS SDK (Bedrock model invocation)
-boto3>=1.35.0
+# ---- AWS SDK ---------------------------------------------------------------
+# Floor, not a pin: boto3 ships new Bedrock model ids and inference-profile
+# support continuously, and pinning would freeze us out of model releases.
+# 1.43.54 is the verified-working floor (bedrock-runtime Converse + cachePoint
+# SystemContentBlock + global.* inference profiles).
+boto3>=1.43.54
 
-# Live demo UI (optional; only needed for `python app.py --serve`)
+# ---- Observability ---------------------------------------------------------
+# Required by the `opentelemetry-instrument` wrapper AgentCore Runtime puts in
+# front of the entrypoint when a runtime declares instrumentation.enableOtel
+# (both runtimes do). Without this installed the wrapper cannot start and the
+# runtime emits ZERO spans -- only service-level metrics. 0.18.0 is the floor
+# that carries the GenAI semantic conventions traces are sliced by.
+aws-opentelemetry-distro>=0.18.0
+
+# ---- Contracts -------------------------------------------------------------
+# Floor: the synthesizer's adjudication model is passed to
+# structured_output_model=, which needs pydantic v2 JSON-schema generation.
+# 2.13 is the verified floor; strands-agents==1.26.0 already requires pydantic>=2.
+pydantic>=2.13
+
+# ---- Test / CI -------------------------------------------------------------
+# deploy/ci.sh gates on pytest. Floor only; test-time dependency.
+pytest>=8
+
+# ---- Local demo UI (optional) ---------------------------------------------
+# Only needed for `python app.py --serve`. NOT part of either deployed runtime:
+# each runtime's dependency closure comes from its own app/<runtime>/pyproject.toml,
+# which `agentcore package` resolves and zips.
 fastapi>=0.110.0
 uvicorn>=0.29.0

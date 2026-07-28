@@ -13,3 +13,53 @@ Dockerfile
 
 # OS
 .DS_Store
+
+# ---------------------------------------------------------------------------
+# AgentCore CLI (npm @aws/agentcore) — appended by T-DEPLOY
+# ---------------------------------------------------------------------------
+
+# Written into the CURRENT WORKING DIRECTORY by bedrock_agentcore.identity's
+# local-dev auth path (_set_up_local_auth): a workload identity name plus a
+# generated user id. Machine-local identity, never shared.
+.agentcore.json
+
+# Vended CDK app build/dependency output. agentcore/cdk/.gitignore already covers
+# these relative to itself; repeated here so a root-level `git clean -X` sees them.
+agentcore/cdk/node_modules/
+agentcore/cdk/cdk.out/
+agentcore/cdk/dist/
+
+# `agentcore package` / `agentcore deploy` staging: a per-runtime dependency tree
+# plus a ~40MB zip, regenerated on every run.
+agentcore/*.zip
+agentcore/underwriter/
+agentcore/francis/
+
+# DO NOT ignore agentcore/.cli/deployed-state.json. `agentcore deploy` creates
+# credential providers out of band BEFORE CloudFormation runs and records their
+# ARNs there; the CDK app reads them back on the next synth. Losing the file
+# orphans those providers and breaks the next deploy. agentcore/.gitignore
+# ignores .cli/* and then negates that one path.
+
+# Derived artifacts: docs/.converted/*.txt are RTF->text conversions of the
+# customer's orchestration docs. The .rtf files in docs/ are the primary source.
+docs/.converted/
+
+# Test caches
+.pytest_cache/
+.ruff_cache/
+
+# Local agent-orchestration state (oh-my-claudecode); never shared
+.omc/
+
+# ---------------------------------------------------------------------------
+# Customer confidential material — never push to a shared remote.
+# ---------------------------------------------------------------------------
+# Every file below is marked "POINT PREDICTIVE © Confidential Material". The
+# byte-identical working copies under prompts/verbatim/ are what the code loads and
+# what tests/test_prompt_fidelity.py hashes; docs/ holds the originals as received.
+# Keep both out of the remote and share them through the customer's own channel.
+docs/*_agent_prompt.txt
+docs/*_orchestration*.rtf
+docs/Agent_Underwriting_Process_Guide*.pdf
+prompts/verbatim/
