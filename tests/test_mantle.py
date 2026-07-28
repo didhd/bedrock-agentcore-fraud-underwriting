@@ -902,3 +902,64 @@ def test_the_probe_prompt_is_the_real_synthesis_prompt(monkeypatch):
     assert len(prompt) > len(__import__("prompts.loader", fromlist=["x"]).MASTER_SYNTHESIS_PROMPT)
     # And a MOCK-built prompt is honestly flagged as not comparable with the recorded run.
     assert mantle.prompt_comparability(len(prompt))[0] is False
+
+# --- the base-URL path, which is the single easiest thing to get wrong ----------
+
+
+def test_the_frontier_path_is_openai_v1_not_v1():
+    """MEASURED 2026-07-28, us-east-1, all four combinations:
+
+        /v1        + openai.gpt-oss-120b  -> 200
+        /v1        + openai.gpt-5.6-luna  -> 400 "does not support the '/v1/responses' API"
+        /openai/v1 + openai.gpt-oss-120b  -> 400
+        /openai/v1 + openai.gpt-5.6-luna  -> 200
+
+    The two paths are mutually exclusive, and Strands' own Mantle documentation shows
+    ``/v1`` (correct for its gpt-oss example, wrong for GPT-5.6). Following it verbatim
+    yields a 400 that reads like the model is unavailable rather than like the path is
+    wrong, so this is pinned.
+    """
+    url = mantle.base_url_for("us-east-1")
+    assert url == "https://bedrock-mantle.us-east-1.api.aws/openai/v1"
+    assert url.endswith("/openai/v1")
+    # The open-weight path is recorded, and must NOT be the one the client uses.
+    open_weight = mantle.MANTLE_OPEN_WEIGHT_BASE_URL_TEMPLATE.format(region="us-east-1")
+    assert open_weight == "https://bedrock-mantle.us-east-1.api.aws/v1"
+    assert url != open_weight
+
+
+def test_the_host_is_api_aws_not_amazonaws_com():
+    """``bedrock-mantle.{region}.amazonaws.com`` does not resolve (NXDOMAIN), which looks
+    exactly like an auth failure and cost real debugging time."""
+    url = mantle.base_url_for("us-west-2")
+    assert ".api.aws/" in url
+    assert "amazonaws.com" not in url
+
+
+def test_base_url_tracks_the_region_argument():
+    for region in ("us-east-1", "us-east-2", "us-west-2"):
+        assert mantle.base_url_for(region) == (
+            f"https://bedrock-mantle.{region}.api.aws/openai/v1"
+        )
+
+
+def test_the_client_uses_base_url_for(monkeypatch):
+    """The one client constructor must go through base_url_for, not a local f-string."""
+    captured = {}
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    import sys
+    import types
+
+    fake_openai = types.ModuleType("openai")
+    fake_openai.OpenAI = _FakeOpenAI
+    fake_tokgen = types.ModuleType("aws_bedrock_token_generator")
+    fake_tokgen.provide_token = lambda region=None: "tok"
+    monkeypatch.setitem(sys.modules, "openai", fake_openai)
+    monkeypatch.setitem(sys.modules, "aws_bedrock_token_generator", fake_tokgen)
+
+    mantle._client("us-east-2")
+    assert captured["base_url"] == mantle.base_url_for("us-east-2")

@@ -311,16 +311,17 @@ def test_cost_prices_the_cache_write_term_that_dominates_a_gpt_call(
 
     with_write = asyncio.run(fan_out("VIEW", domains=["rings"], mock=False))["rings"]
 
+    # The SAME usage with only the cacheWrite term zeroed, so nothing else can explain
+    # the delta. (monkeypatch restores ``mantle.complete`` at teardown.)
     no_write = dict(MANTLE_USAGE, cacheWriteInputTokens=0, totalTokens=1925)
-    gpt_calls.clear()
-    original = mantle.complete
-
-    def without_write(model_id: str, prompt: str, **kwargs: Any) -> dict[str, Any]:
-        return _mantle_response(model_id=model_id, usage=dict(no_write))
-
-    monkeypatch.setattr(mantle, "complete", without_write)
+    monkeypatch.setattr(
+        mantle,
+        "complete",
+        lambda model_id, prompt, **kwargs: _mantle_response(
+            model_id=model_id, usage=dict(no_write)
+        ),
+    )
     stripped = asyncio.run(fan_out("VIEW", domains=["rings"], mock=False))["rings"]
-    monkeypatch.setattr(mantle, "complete", original)
 
     assert with_write.cost_usd > stripped.cost_usd
     rate_in, _, _ = mantle.rates_for(LUNA)
@@ -565,6 +566,15 @@ def test_a_mantle_failure_degrades_to_seven_of_eight_rather_than_raising(monkeyp
     # The transport is still recorded, so a report can attribute the failure.
     assert rings.source == SOURCE_MANTLE
     assert sum(1 for r in results.values() if r.ok) == 7
+
+    # Handled INSIDE _run_specialist, not by ``fan_out``'s return_exceptions=True
+    # backstop. The distinction is observable and it matters: the backstop exists for a
+    # broken coroutine and records ``wall_ms=0.0`` with no cache report, so a failure
+    # arriving there would lose the measured duration of the failed call - and
+    # ``fan_out_streaming`` awaits its futures directly and has no such backstop at all.
+    assert rings.wall_ms > 0
+    assert rings.prompt_cache, "the failed dimension lost its prompt-cache record"
+    assert rings.prompt_cache["transport"] == SOURCE_MANTLE
 
     # And the synthesis path still adjudicates on the remaining seven, by design.
     from agents.synthesize import synthesize_offline

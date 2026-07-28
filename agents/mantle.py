@@ -36,6 +36,23 @@ GOTCHAS THAT COST TIME (all verified live)
 * The hostname is ``bedrock-mantle.{region}.api.aws`` -- **not** ``.amazonaws.com``.
   The amazonaws.com form does not resolve at all (NXDOMAIN), which looks exactly
   like a permissions problem and is not one.
+* **The path is ``/openai/v1``, not ``/v1``, and the two are mutually exclusive.**
+  Measured 2026-07-28 against us-east-1, all four combinations:
+
+      /v1         + openai.gpt-oss-120b   -> 200
+      /v1         + openai.gpt-5.6-luna   -> 400 validation_error
+                     "The model 'openai.gpt-5.6-luna' does not support the
+                      '/v1/responses' API"
+      /openai/v1  + openai.gpt-oss-120b   -> 400 validation_error
+      /openai/v1  + openai.gpt-5.6-luna   -> 200
+
+  So one path serves the open-weight ``gpt-oss`` family and the other serves the
+  frontier ``gpt-5.6`` family; neither serves both. The Strands documentation for
+  its ``OpenAIResponsesModel`` provider shows ``/v1`` with ``openai.gpt-oss-120b``,
+  which is correct for that pair and **wrong for GPT-5.6** -- following it verbatim
+  produces a 400 that reads like the model is unavailable rather than like the path
+  is wrong.
+
 * Auth is a bearer token from ``aws_bedrock_token_generator.provide_token``, not
   SigV4 request signing. Tokens are short-lived, so one is minted per call rather
   than cached across a long-running runtime.
@@ -56,6 +73,26 @@ GOTCHAS THAT COST TIME (all verified live)
   TOTAL prompt size and already includes cached tokens, whereas Bedrock Converse
   reports only the non-cached count. ``_usage`` below normalises to the Converse
   convention so ``agents.pricing`` stays correct for both families.
+
+WHY NOT THE STRANDS PROVIDER
+
+Strands ships ``strands.models.openai_responses.OpenAIResponsesModel``, which
+documents Bedrock Mantle support and would replace most of this module. It is NOT
+usable here yet, for two verified reasons:
+
+* it does not exist in the pinned ``strands-agents==1.26.0`` (``ImportError: No
+  module named 'strands.models.openai_responses'``); it arrives in a later release
+  (1.50.2 is current), and this repo's 1000+ tests are written against 1.26.0's API
+  surface, which changed materially in between (1.35.0 alone adds ``plugins`` and
+  ``concurrent_invocation_mode`` to ``Agent`` and ``service_tier`` to
+  ``BedrockConfig``);
+* it requires ``openai>=2.0.0`` and the installed SDK is 1.107.3.
+
+So migrating is a deliberate dependency bump, not a drop-in, and it should not
+happen days before a customer milestone. When it does happen, this module collapses
+to a thin factory returning ``OpenAIResponsesModel(model_id=..., client_args={
+"api_key": provide_token(region), "base_url": f".../openai/v1"})`` -- note the path
+above -- and the cost/region tables here stay, because Strands prices nothing.
 
 REGION IS A MEASURED CHOICE, NOT A DEPLOYMENT ACCIDENT
 
@@ -124,6 +161,24 @@ MANTLE_REGIONS: Final[dict[str, tuple[str, ...]]] = {
 
 #: Allowed reasoning-effort values on the Responses API.
 MANTLE_EFFORTS: Final[tuple[str, ...]] = ("none", "low", "medium", "high", "xhigh", "max")
+
+#: Base-URL template for the frontier GPT-5.x family. The ``/openai/v1`` path is
+#: load-bearing: ``/v1`` on the same host serves only the open-weight ``gpt-oss``
+#: models and returns 400 validation_error for any ``gpt-5.6`` id (measured
+#: 2026-07-28, all four combinations -- see the module docstring). Strands' own
+#: Mantle documentation shows ``/v1``, which is correct for its ``gpt-oss`` example
+#: and wrong for these models.
+MANTLE_BASE_URL_TEMPLATE: Final[str] = "https://bedrock-mantle.{region}.api.aws/openai/v1"
+
+#: The path that serves the open-weight family instead. Recorded so the distinction
+#: is discoverable rather than folklore; nothing in this module calls it, because
+#: gpt-oss models are also on Bedrock Converse and go through Strands normally.
+MANTLE_OPEN_WEIGHT_BASE_URL_TEMPLATE: Final[str] = "https://bedrock-mantle.{region}.api.aws/v1"
+
+
+def base_url_for(region: str) -> str:
+    """The Responses-API base URL for GPT-5.x in ``region``."""
+    return MANTLE_BASE_URL_TEMPLATE.format(region=region)
 
 DEFAULT_EFFORT: Final[str] = "low"
 
@@ -478,7 +533,7 @@ def _client(region: str) -> Any:
         ) from exc
 
     return OpenAI(
-        base_url=f"https://bedrock-mantle.{region}.api.aws/openai/v1",
+        base_url=base_url_for(region),
         api_key=token,
         max_retries=int(os.environ.get("BEDROCK_MANTLE_MAX_RETRIES", "4")),
     )

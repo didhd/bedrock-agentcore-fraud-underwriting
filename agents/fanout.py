@@ -548,6 +548,14 @@ def _cache_report(model_id: str, domain: str) -> dict[str, Any]:
     return cache_prefix_report(model_id, prompt)
 
 
+@dataclass(slots=True)
+class _MantleMetricsView:
+    """Strands ``AgentResult.metrics`` shape, so the extractors need no second branch."""
+
+    accumulated_usage: dict[str, int] | None
+    accumulated_metrics: dict[str, float]
+
+
 class _MantleSpecialistResult:
     """Adapter giving a mantle response the shape the Converse path already returns.
 
@@ -587,14 +595,6 @@ class _MantleSpecialistResult:
                 {} if self.latency_ms is None else {"latencyMs": float(self.latency_ms)}
             ),
         )
-
-
-@dataclass(slots=True)
-class _MantleMetricsView:
-    """Strands ``AgentResult.metrics`` shape, so the extractors need no second branch."""
-
-    accumulated_usage: dict[str, int] | None
-    accumulated_metrics: dict[str, float]
 
 
 async def _invoke_specialist_mantle(domain: str, model_id: str, domain_input: str) -> Any:

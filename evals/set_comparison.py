@@ -68,7 +68,6 @@ import re
 import statistics
 import sys
 import time
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Final, Iterable, Sequence
@@ -83,6 +82,7 @@ from agents.pricing import cost_usd_or_none  # noqa: E402
 from evals.bench import LIVE_ENV_GATE, summarize_values  # noqa: E402
 from evals.tier_quality import (  # noqa: E402
     _JUDGE_INSTRUCTIONS,
+    BAND_ALIASES,
     AnalysisRow,
     anonymise,
     context_grounding,
@@ -110,6 +110,7 @@ __all__ = [
     "SWEEP_DOMAINS",
     "aggregate",
     "build_report",
+    "declared_band",
     "evaluate_row",
     "judge_one",
     "known_failure_reproduction",
@@ -762,6 +763,109 @@ def spend_estimate(
 
 _BAND_RANK: Final[dict[str, int]] = {"LOW RISK": 0, "POSSIBLE RISK": 1, "HIGH RISK": 2}
 
+#: A band standing ALONE on the analysis's opening line: "HIGH RISK", "**LOW RISK**",
+#: "# POSSIBLE RISK", "LOW RISK." - and nothing else on the line.
+_LEAD_BAND = re.compile(
+    r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*|__|\*)?\s*"
+    r"(LOW|POSSIBLE|MEDIUM|MODERATE|HIGH)\s+RISK\b\s*(?:\*\*|__|\*)?\s*(?P<tail>.*)$"
+)
+
+#: What may follow the band on that line and still leave it a BARE declaration: nothing,
+#: or closing punctuation and markdown only. Matching the whole remainder (``$``) is
+#: load-bearing - an earlier version checked only the first character, which accepted
+#: "LOW RISK, however, HIGH RISK applies here" as a bare LOW declaration because the tail
+#: merely STARTED with a comma. A line with a trailing sentence is prose, and prose is the
+#: ``bold-lead`` case or nothing.
+_LEAD_TAIL_OK = re.compile(r"^[.:;,)\]\-—–!?*_\s]*$")
+
+#: A band opening the first body line as its own statement, then prose: "**LOW RISK.** The
+#: only supported indicator is ...", "LOW RISK. The address-reuse signal is explained by
+#: ...", "Low risk — 96 identities across 240 units.". The band is not alone on the line so
+#: ``_LEAD_BAND`` rejects it, and it is not a heading so the primary extractor's heading
+#: branch misses it, but a line that OPENS with the band and a terminator is a declaration
+#: by any reading.
+#:
+#: The terminator is what keeps this from matching prose. "Low risk indicators are present
+#: but insufficient" and "This application clears as low risk for identity fraud" have the
+#: band token without one and are correctly not read; so is "LOW RISK outcomes remain the
+#: most common band", which is the prompt's own calibration text quoted back.
+_SENTENCE_LEAD_BAND = re.compile(
+    r"^\s{0,3}(?:\*\*|__)?\s*(LOW|POSSIBLE|MEDIUM|MODERATE|HIGH)\s+RISK\b\s*"
+    r"(?:\*\*|__)?\s*[.:!—-]",
+    re.IGNORECASE,
+)
+
+#: A title line that may precede the declaration: a markdown heading, or a whole line of
+#: bold text ("``**Identity Fraud Risk Analysis**``"). At most one is skipped.
+_TITLE_LINE = re.compile(r"^\s{0,3}(?:#{1,6}\s+\S|\*\*[^*]+\*\*\s*$|__[^_]+__\s*$)")
+
+
+def declared_band(text: str) -> tuple[str | None, str]:
+    """The band the analysis declares, with a fallback the primary extractor lacks.
+
+    WHY THIS WRAPPER EXISTS - it is a correction to a measurement artifact that was
+    silently penalising the set under test. ``evals.tier_quality.extract_declared_band``
+    finds a band after a classification word ("Risk Classification: HIGH RISK"), after an
+    arrow, or inside a heading. GPT frequently opens with the band ALONE on the first
+    line and no label at all::
+
+        HIGH RISK
+
+        The precomputed ring signals are strongly corroborated by ...
+
+    That is an unambiguous declaration by any reader, and the primary extractor returned
+    None for it. Because it is a GPT stylistic habit, the misses were not random: 6 of the
+    50 committed analyses were unreadable and ALL SIX were GPT, which dropped whole cells
+    out of the band-agreement denominator (rings/terra fell to n=0) and would have read as
+    "GPT fails to state a classification". Scoring the comparison on that would have been
+    an artifact of the extractor, not a finding about the model.
+
+    So the fallback is added HERE rather than by editing the shared extractor, and it is
+    deliberately narrow. Two shapes are accepted, and ONLY at the start of the analysis
+    (optionally after a single title line):
+
+    * ``lead-line`` - the band alone on the line, nothing after it but punctuation.
+    * ``sentence-lead`` - the band opening the line as its own statement, closed by a
+      terminator, then prose ("``LOW RISK. The address-reuse signal is explained by ...``").
+
+    VALIDATED BOTH WAYS over the 168 committed analyses in ``evals/results/`` (this study's
+    120 plus the prior tier study's 48): together the two shapes recover 25 rows the primary
+    extractor could not read, and on every analysis where the primary extractor DOES read a
+    band they agree with it - **0 contradictions**. The primary extractor always wins when
+    it finds anything.
+
+    None remains a real outcome and MUST: four distinct analyses declare no locatable band
+    at all. APP-1004 identity/sonnet-5 says only "support a high-risk finding" in lower-case
+    prose; APP-1010 and APP-1013 identity/sonnet-5 open straight into findings; APP-1014
+    identity/terra opens "Conclusion: Possible identity fraud requiring verification", which
+    names no band from the customer's vocabulary. Those are genuine misses of "reasoning,
+    classification, and conclusion must logically align", they are counted per cell as
+    ``n_unreadable_band`` rather than dropped silently, and repairing them into an agreement
+    would be inventing data. Note the residue does not favour the set under test: three of
+    the four are Claude.
+    """
+    band, source = extract_declared_band(text)
+    if band is not None:
+        return band, source
+    seen_title = False
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        match = _LEAD_BAND.match(line)
+        if match and _LEAD_TAIL_OK.match(match.group("tail").strip()):
+            return BAND_ALIASES[f"{match.group(1).upper()} RISK"], "lead-line"
+        sentence = _SENTENCE_LEAD_BAND.match(line)
+        if sentence:
+            return BAND_ALIASES[f"{sentence.group(1).upper()} RISK"], "sentence-lead"
+        # A single title line may sit above the declaration. Anything else means the
+        # analysis began its prose without declaring a band, and a band appearing further
+        # down would be a section heading or a quoted rule, not the verdict.
+        if not seen_title and _TITLE_LINE.match(line):
+            seen_title = True
+            continue
+        break
+    return None, "none"
+
 
 def shared_signal_names(domain: str, app: str) -> tuple[str, ...]:
     """The signal names the payload for ``(app, domain)`` actually carries."""
@@ -839,7 +943,7 @@ def evaluate_row(row: AnalysisRow, verdicts: dict[str, dict[str, Any]]) -> dict[
     """
     expectation = expected_for(row.app)["domains"][row.domain]
     expected_band = expectation["band"]
-    band, band_source = extract_declared_band(row.text) if row.text else (None, "no-text")
+    band, band_source = declared_band(row.text) if row.text else (None, "no-text")
     contract = output_contract.check(row.domain, row.text) if row.text else None
     findings = contract_findings(row.domain, row.text, band) if row.text else []
     declared_rank = _BAND_RANK.get(band or "")
@@ -909,10 +1013,21 @@ def _judge_scores(rows: Sequence[dict[str, Any]], judge: str) -> list[dict[str, 
 def aggregate(evaluated: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """Per (agent, model): the deterministic scores, then each judge separately.
 
-    Percentiles go through ``evals.bench.summarize_values``, which refuses a p50 below
-    5 samples and a p95 below 20 and records the refusal. At six applications per cell
-    the medians stand and the p95s are refused, which is the truthful shape of this
-    sample.
+    THREE DIFFERENT DENOMINATORS, deliberately not one. An analysis that never declares a
+    locatable band still has a real wall clock, a real cost and a real output contract, so:
+
+    * ``answered`` (every non-error row) is what latency, cost, length, grounding and
+      contract violations are measured over. Scoring those over the band-readable subset
+      only would silently discard measurements that were genuinely taken - a model whose
+      prose is hard to parse would look FASTER because its slow rows were dropped.
+    * ``with_band`` (band readable) is what band agreement, escalation and dismissal are
+      measured over, because those are undefined without a band. ``n_unreadable_band``
+      publishes the gap so a reader can see how much of the cell that subset covers.
+    * ``anti_fp`` is the anti-false-positive fixtures inside ``with_band``.
+
+    Percentiles go through ``evals.bench.summarize_values``, which refuses a p50 below 5
+    samples and a p95 below 20 and records the refusal. At six applications per cell the
+    medians stand and the p95s are refused, which is the truthful shape of this sample.
     """
     cells: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for row in evaluated:
@@ -920,18 +1035,24 @@ def aggregate(evaluated: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
 
     out: list[dict[str, Any]] = []
     for (domain, label), rows in sorted(cells.items()):
-        usable = [r for r in rows if not r["error"] and r["declared_band"] is not None]
-        with_band = usable
-        anti_fp = [r for r in usable if r["is_anti_fp_fixture"]]
+        answered = [r for r in rows if not r["error"]]
+        usable = answered
+        with_band = [r for r in answered if r["declared_band"] is not None]
+        anti_fp = [r for r in with_band if r["is_anti_fp_fixture"]]
         cell: dict[str, Any] = {
             "domain": domain,
             "model_label": label,
             "model": MODELS.get(label, label),
             "set": set_of(label),
             "n_calls": len(rows),
-            "n_usable": len(usable),
+            # Rows that produced an analysis at all. This is the denominator for latency,
+            # cost, length, grounding and contract.
+            "n_usable": len(answered),
             "n_failed": sum(1 for r in rows if r["error"]),
-            "n_unreadable_band": sum(1 for r in rows if not r["error"] and r["declared_band"] is None),
+            # Rows that answered but declared no locatable band. Reported, never hidden:
+            # it is both a real quality defect and the size of the band subset's shortfall.
+            "n_unreadable_band": len(answered) - len(with_band),
+            "unreadable_band_apps": [r["app"] for r in answered if r["declared_band"] is None],
             "band": {
                 "n": len(with_band),
                 "agreements": sum(1 for r in with_band if r["band_agrees"]),
@@ -1481,10 +1602,21 @@ def per_set_verdict(cells: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
                 reasons.append(
                     f"grounded fraction {ground} is less than half the incumbent's {base_ground}"
                 )
-            if cell["n_usable"] < MIN_APPS_FOR_A_BAND_CLAIM:
+            # An analysis that declares no band cannot support a band claim, so the sample
+            # test uses the BAND-READABLE count rather than the answered count. A model
+            # that answers six times and declares a band twice has n=2 here, which is the
+            # honest reading and is also a quality signal in its own right.
+            if cell["n_unreadable_band"]:
+                reasons.append(
+                    f"{cell['n_unreadable_band']} analysis/analyses declared no locatable "
+                    f"risk band ({', '.join(cell['unreadable_band_apps'])}), which breaches "
+                    f"the customer's requirement that reasoning, classification and "
+                    f"conclusion align"
+                )
+            if cell["band"]["n"] < MIN_APPS_FOR_A_BAND_CLAIM:
                 verdict = (
-                    f"n TOO SMALL - {cell['n_usable']} usable application(s); a band claim "
-                    f"needs {MIN_APPS_FOR_A_BAND_CLAIM}"
+                    f"n TOO SMALL - {cell['band']['n']} application(s) with a readable band; "
+                    f"a band claim needs {MIN_APPS_FOR_A_BAND_CLAIM}"
                 )
             elif reasons:
                 verdict = "NOT AS GOOD: " + "; ".join(reasons)
@@ -1494,7 +1626,9 @@ def per_set_verdict(cells: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
                 {
                     "model_label": cell["model_label"],
                     "verdict": verdict,
-                    "n": cell["n_usable"],
+                    "n": cell["band"]["n"],
+                    "n_answered": cell["n_usable"],
+                    "n_unreadable_band": cell["n_unreadable_band"],
                     "band": f"{band}/{cell['band']['n']}",
                     "anti_fp_false_positives": f"{fp}/{cell['anti_false_positive']['n_fixtures']}",
                     "false_negatives": f"{fn}/{cell['false_negatives']['n_at_risk']}",
@@ -1511,7 +1645,9 @@ def per_set_verdict(cells: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
                 "domain": domain,
                 "incumbent": incumbent_label,
                 "incumbent_scores": {
-                    "n": incumbent["n_usable"],
+                    "n": incumbent["band"]["n"],
+                    "n_answered": incumbent["n_usable"],
+                    "n_unreadable_band": incumbent["n_unreadable_band"],
                     "band": f"{base_band}/{incumbent['band']['n']}",
                     "anti_fp_false_positives": (
                         f"{base_fp}/{incumbent['anti_false_positive']['n_fixtures']}"
@@ -1525,7 +1661,8 @@ def per_set_verdict(cells: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
                 },
                 "candidates": candidates,
                 "sample_note": (
-                    f"{incumbent['n_usable']} application(s) per cell; a band claim needs "
+                    f"{incumbent['n_usable']} application(s) answered per cell, "
+                    f"{incumbent['band']['n']} with a readable band; a band claim needs "
                     f"{MIN_APPS_FOR_A_BAND_CLAIM}. Anti-false-positive fixtures in this "
                     f"sample: {incumbent['anti_false_positive']['n_fixtures']}."
                 ),
@@ -1630,6 +1767,17 @@ def _fmt(value: Any, dash: str = "—") -> str:
     return dash if value is None else str(value)
 
 
+def _judge_short(judge: str) -> str:
+    """Short judge label for a table header, with the family it is biased toward.
+
+    Splitting on "." would render ``openai.gpt-5.5`` as "5", so the whole tail after the
+    first dot is kept and the family is appended - the reader needs to know which way a
+    column is expected to lean in order to read the margin at all.
+    """
+    tail = judge.split(".", 1)[-1] if "." in judge else judge
+    return f"{tail} ({JUDGES.get(judge, '?')})"
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     """Human-readable summary. Every table cell traces to a measured field."""
     lines: list[str] = []
@@ -1685,16 +1833,17 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.append("## Per (agent, model): deterministic scores")
     lines.append("")
     lines.append(
-        "| agent | set | model | n | band | escalations | dismissals | anti-FP false pos | "
-        "contract viol | grounded frac p50 | signals cited p50 | wall p50 s | $/call p50 | "
-        "out tok p50 |"
+        "| agent | set | model | answered | no band | band | escalations | dismissals | "
+        "anti-FP false pos | contract viol | grounded frac p50 | signals cited p50 | "
+        "wall p50 s | $/call p50 | out tok p50 |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for cell in report["per_cell"]:
         band = cell["band"]
         measured = cell["measured"]
         lines.append(
             f"| {cell['domain']} | {cell['set']} | {cell['model_label']} | {cell['n_usable']} "
+            f"| {cell['n_unreadable_band']} "
             f"| {band['agreements']}/{band['n']} | {band['escalations']} | {band['dismissals']} "
             f"| {cell['anti_false_positive']['false_positives']}/"
             f"{cell['anti_false_positive']['n_fixtures']} "
@@ -1710,7 +1859,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.append("")
     judges = list(run["judges"])
     header = "| agent | set | model | " + " | ".join(
-        f"{j.split('.')[-1]} cal/sub" for j in judges
+        f"{_judge_short(j)} cal/sub" for j in judges
     ) + " |"
     lines.append(header)
     lines.append("|---|---|---|" + "---|" * len(judges))
@@ -1734,7 +1883,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     agreement = report["two_judge_agreement"]
     lines.append(agreement["rule"])
     lines.append("")
-    lines.append("| axis | scope | " + " | ".join(j.split(".")[-1] for j in judges) + " | verdict |")
+    lines.append("| axis | scope | " + " | ".join(_judge_short(j) for j in judges) + " | verdict |")
     lines.append("|---|---|" + "---|" * len(judges) + "---|")
     for axis in agreement["axes"]:
         margins = [
