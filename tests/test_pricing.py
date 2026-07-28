@@ -457,17 +457,32 @@ def test_saving_decomposes_into_tier_shape_plus_model_generation() -> None:
 
 
 def test_the_tier_shape_alone_saves_nothing_on_a_uniform_token_mix() -> None:
-    """2 Haiku + 2 Opus 5 against an all-Sonnet-4.6 baseline cancel exactly.
+    """The cancellation identity, asserted on the SHAPE rather than on the roster.
 
-    This is the honest headline: on uniform per-agent token counts the current
-    tier *structure* is worth $0.00, and the entire reported saving comes from
-    the MID tier's model generation. Anyone re-introducing a "tiering saves
-    money" claim has to move this number first.
+    Original finding (2 Haiku + 2 Opus 5 vs an all-Sonnet-4.6 baseline): the tier shape
+    was worth exactly $0.00, because Haiku->Sonnet is a 2.00/10.00 per-MTok step down and
+    Sonnet->Opus is the identical step up, so two LIGHT agents funded two HEAVY agents.
+
+    After the 2026-07-28 measured re-derivation there is no HEAVY agent left -- rings and
+    synthetic both moved to MID on evidence (evals/results/tier_quality.json) -- so the
+    two sides no longer cancel and the structural saving is genuinely positive. The
+    identity itself is still true and still worth pinning, so it is asserted directly:
+    add a hypothetical HEAVY agent back and the LIGHT discount is cancelled exactly.
     """
     result = p.compare_tiered_vs_uniform(_uniform_usage(), as_of=BEFORE_INTRO_EXPIRY)
-    assert result["structural_saving_usd"] == pytest.approx(0.0, abs=1e-12)
-    assert result["model_saving_usd"] == pytest.approx(result["saving_usd"], rel=1e-12)
 
+    # No HEAVY agent remains, so the shape now saves real money rather than nothing.
+    heavy_roles = [r for r in m.ROLES if m.tier_label(m.model_for(r)) == "heavy"]
+    assert heavy_roles == [], f"a HEAVY agent reappeared: {heavy_roles}"
+    assert result["structural_saving_usd"] > 0
+
+    # And the reason the ORIGINAL figure was zero: the two steps are symmetric. One LIGHT
+    # agent's discount is exactly one HEAVY agent's surcharge at equal token counts.
+    usage = _uniform_usage()["identity"]
+    baseline = p.cost_usd(m.BASELINE_MODEL, usage, as_of=BEFORE_INTRO_EXPIRY)
+    light = p.cost_usd(m.LIGHT_MODEL, usage, as_of=BEFORE_INTRO_EXPIRY)
+    heavy = p.cost_usd(m.HEAVY_MODEL, usage, as_of=BEFORE_INTRO_EXPIRY)
+    assert (baseline - light) == pytest.approx(heavy - baseline, rel=1e-12)
 
 def test_the_whole_current_saving_expires_with_the_sonnet_5_promo() -> None:
     """MID is Sonnet 5 at 2.00/10.00; on 2026-09-01 it becomes 3.00/15.00.
@@ -491,11 +506,15 @@ def test_the_whole_current_saving_expires_with_the_sonnet_5_promo() -> None:
     # onto the baseline and the tier shape is still worth zero, so if the synthesizer
     # were ever moved back to a Claude tier this whole saving would go to zero with the
     # promo, which is what the original version of this test asserted.
-    assert lapsed["saving_usd"] == pytest.approx(
-        lapsed["synthesizer_saving_usd"], rel=1e-9
-    )
-    assert lapsed["structural_saving_usd"] == pytest.approx(0.0, abs=1e-12)
+    # After the expiry MID collapses onto the baseline, so what survives is the shape
+    # (now positive: no HEAVY agent remains after the measured re-derivation) plus the
+    # synthesizer substitution, which is a different model FAMILY on a non-promotional
+    # rate. Both are asserted, and their sum must account for the whole saving.
+    assert lapsed["structural_saving_usd"] > 0
     assert lapsed["synthesizer_saving_usd"] > 0
+    assert lapsed["saving_usd"] == pytest.approx(
+        lapsed["structural_saving_usd"] + lapsed["synthesizer_saving_usd"], rel=1e-9
+    )
     assert lapsed["synthesizer_model"] == m.SYNTHESIZER_MODEL
 
 
@@ -518,26 +537,39 @@ def test_a_tier_step_down_and_a_tier_step_up_are_worth_the_same_per_token() -> N
 
 
 def test_the_brevity_rules_in_the_light_agents_prompts_make_the_shape_negative() -> None:
-    """The tier shape actively costs money once the prompts are honoured.
+    """Why the shape USED to be negative, and why it no longer can be.
 
-    Because a step down and a step up are worth the same per token, the shape only
-    pays if the LIGHT agents carry MORE tokens than the HEAVY ones. The customer's
-    prompts say the opposite: straw is capped at '2-3 sentences max' with no
-    co-borrower, while synthetic and rings write 'Detailed analysis proportional
-    to severity'. So the LIGHT discount shrinks, the HEAVY surcharge does not, and
-    the structural saving goes negative.
+    A step down and a step up are worth the same per token, so the shape only paid if the
+    LIGHT agents carried MORE tokens than the HEAVY ones. The customer's prompts said the
+    opposite -- straw is capped at '2-3 sentences max' with no co-borrower while synthetic
+    and rings write 'Detailed analysis proportional to severity' -- so the LIGHT discount
+    shrank, the HEAVY surcharge did not, and the shape went negative.
+
+    With rings and synthetic moved to MID on measurement there is no HEAVY surcharge left,
+    so a brevity-aware profile can no longer push the shape below zero. Both halves are
+    asserted: the mechanism on a hypothetical HEAVY roster, and the current roster's
+    immunity to it.
     """
     profile = {d: usage(1800, 450) for d in m.DOMAINS}
     profile["straw"] = usage(1800, 90)  # '2-3 sentences max'
     profile["dealer"] = usage(1800, 150)
-    # The synthesizer is deliberately excluded: it is a model substitution on a
-    # different endpoint, not one of the eight tier assignments under test here.
+
+    # Current roster: brevity on the LIGHT agents can only shrink the saving, not invert it.
     result = p.compare_tiered_vs_uniform(profile, as_of=BEFORE_INTRO_EXPIRY)
-    assert result["structural_saving_usd"] < 0
-    # It is still worth running, but only because of the MID model generation.
-    assert result["model_saving_usd"] > -result["structural_saving_usd"]
+    assert result["structural_saving_usd"] >= 0
     assert result["saving_usd"] > 0
 
+    # The original mechanism, on the roster that produced it: two brief LIGHT agents
+    # against two verbose HEAVY ones nets out negative.
+    light_saving = 2 * (
+        p.cost_usd(m.BASELINE_MODEL, usage(1800, 120), as_of=BEFORE_INTRO_EXPIRY)
+        - p.cost_usd(m.LIGHT_MODEL, usage(1800, 120), as_of=BEFORE_INTRO_EXPIRY)
+    )
+    heavy_surcharge = 2 * (
+        p.cost_usd(m.HEAVY_MODEL, usage(1800, 1500), as_of=BEFORE_INTRO_EXPIRY)
+        - p.cost_usd(m.BASELINE_MODEL, usage(1800, 1500), as_of=BEFORE_INTRO_EXPIRY)
+    )
+    assert light_saving - heavy_surcharge < 0
 
 def test_the_shape_only_pays_when_light_agents_outweigh_heavy_ones() -> None:
     """The one condition under which the tier shape is genuinely worth money."""
@@ -581,38 +613,117 @@ def test_the_fabricated_latency_table_is_gone() -> None:
     assert "latency" not in m.model_assignment_table().lower()
 
 
-def test_model_assignment_table_shows_which_tiers_are_prompt_justified() -> None:
+def test_model_assignment_table_reports_the_evidence_grade_not_a_boolean() -> None:
+    """The table used to carry a 'justified by prompt text' yes/no column.
+
+    That column could not express the state that matters most - "nobody measured this
+    agent at all" - so it read `no` for both an agent held on deliberately thin evidence
+    and an agent never compared to anything. It now prints the grade, and the grades must
+    be exactly the ones ``evidence_grade`` derives from the rationale text.
+    """
     table = m.model_assignment_table()
     for role in m.ROLES:
         assert role in table
+        assert m.evidence_grade(role) in table
     assert m.BASELINE_MODEL in table
+    # The retired boolean column must not come back: it hid the UNPROVEN case.
+    assert "justified by prompt text" not in table
 
 
 def test_every_role_has_a_recorded_tier_rationale() -> None:
+    """Every one of the nine cites a measurement, and the grades are the measured ones.
+
+    Updated 2026-07-28 with the re-derivation: the old assertion keyed off a
+    "<TIER> - justified" prefix and expected exactly {straw, dealer, synthetic, rings}.
+    It is not deleted, it is re-expressed against ``evidence_grade``, which distinguishes
+    the three states the prefix could not.
+    """
     assert set(m.TIER_RATIONALE) == set(m.ROLES)
-    justified = {r for r in m.ROLES if m.rationale_for(r).startswith(("LIGHT - justified", "HEAVY - justified"))}
-    assert justified == {"straw", "dealer", "synthetic", "rings"}
-    # Everything unjustified-by-prompt-text sits on MID, except the synthesizer, whose
-    # model was chosen on a latency MEASUREMENT (6.1s vs 55.2s) rather than on a reading
-    # of the prompt -- see agents.models.SYNTHESIZER_MODEL.
-    for role in set(m.ROLES) - justified - {"synthesizer"}:
+    assert {r: m.evidence_grade(r) for r in m.ROLES} == {
+        # Assignment decided by a measurement on this agent.
+        "rings": "MEASUREMENT",
+        "synthetic": "MEASUREMENT",
+        "dealer": "MEASUREMENT",
+        "straw": "MEASUREMENT",
+        "synthesizer": "MEASUREMENT",
+        # Swept at n=3 and deliberately not acted on.
+        "bustout": "HELD",
+        "identity": "HELD",
+        # Never compared against another model at all.
+        "employment": "UNPROVEN",
+        "income": "UNPROVEN",
+    }
+    # Nothing may be left ungraded: an assignment with no evidence statement is the
+    # failure this module exists to prevent.
+    assert "UNRECORDED" not in {m.evidence_grade(r) for r in m.ROLES}
+
+    # Every agent that is not on LIGHT sits on MID -- there is no HEAVY agent left, and
+    # the synthesizer is a different model family entirely.
+    for role in set(m.ROLES) - {"dealer", "straw", "synthesizer"}:
         assert m.model_for(role) == m.MID_MODEL, role
     assert m.model_for("synthesizer") == m.SYNTHESIZER_MODEL
 
+    # The two HELD agents must state the n that stopped them, and it must be the n the
+    # eval actually ran, not a round number.
+    for role in ("bustout", "identity"):
+        rationale = m.rationale_for(role)
+        assert "HELD" in rationale, role
+        assert f"n={m.QUALITY_SWEPT_AGENTS[role]}" in rationale, role
+        assert m.QUALITY_SWEPT_AGENTS[role] < m.MIN_APPLICATIONS_FOR_A_BAND_CLAIM, role
 
-def test_justified_rationales_quote_the_customer_prompt_they_rely_on() -> None:
-    """Each justified tier must quote text that really exists in docs/."""
+
+def test_a_rationale_cites_a_measurement_that_exists_on_disk() -> None:
+    """A rationale must point at something real, and the two kinds are checked differently.
+
+    A quality claim is only honest if the artifact it cites exists and actually measured
+    that agent, so the file is opened and the domain looked up. A prompt quote is only
+    honest if the sentence is really the customer's, so it is verified against
+    ``SPECIALIST_PROMPTS``. Neither can be satisfied by prose alone.
+    """
+    import json
+    from pathlib import Path
+
     from prompts import SPECIALIST_PROMPTS
 
-    quotes = {
+    repo_root = Path(__file__).resolve().parent.parent
+    tier_quality = repo_root / "evals" / "results" / "tier_quality.json"
+
+    # Quality-swept agents: the cited report must exist and must cover the agent at the
+    # n the rationale claims.
+    for domain, n in m.QUALITY_SWEPT_AGENTS.items():
+        rationale = m.rationale_for(domain)
+        assert "evals/results/tier_quality.json" in rationale, domain
+        assert f"n={n}" in rationale, domain
+        if tier_quality.is_file():
+            report = json.loads(tier_quality.read_text())
+            covered = {v["domain"] for v in report["per_agent_verdict"]}
+            assert domain in covered, f"{domain} cites a report that does not measure it"
+            cells = [c for c in report["per_cell"] if c["domain"] == domain]
+            assert cells, domain
+            assert {c["n_calls"] for c in cells} == {n}, (
+                f"{domain} claims n={n} but the report's cells are "
+                f"{sorted({c['n_calls'] for c in cells})}"
+            )
+
+    # The two agents graded MEASUREMENT on latency/cost alone must NOT imply a quality
+    # result they do not have -- they were never judged.
+    for domain in ("dealer", "straw"):
+        assert domain not in m.QUALITY_SWEPT_AGENTS
+        assert "NOT quality-swept" in m.rationale_for(domain), domain
+
+    # Where a rationale still leans on the customer's own text, the sentence must be hers.
+    prompt_quotes = {
         "straw": "If no co-borrower exists, straw risk is inherently minimal",
         "dealer": "Do NOT escalate fraud risk classification based solely on dealer default rates",
-        "synthetic": "thin file + reuse + velocity",
-        "rings": "Do NOT recompute network relationships through excessive queries",
     }
-    for domain, quote in quotes.items():
+    for domain, quote in prompt_quotes.items():
         assert quote in SPECIALIST_PROMPTS[domain], domain
         assert quote in m.rationale_for(domain), domain
+
+    # The UNPROVEN pair must say so and must not cite a quality report they are not in.
+    for domain in ("income", "employment"):
+        assert "never quality-swept" in m.rationale_for(domain), domain
+        assert "tier_quality.json" not in m.rationale_for(domain), domain
 
 
 # ---------------------------------------------------------------------------

@@ -8,7 +8,105 @@ that keeps the rest honest.
 
 ## 1. Measurement status — what has and has not actually been measured
 
-### What the harness has measured in this repo
+### The pipeline benchmark: 14 applications x 3 repetitions, n=42 adjudications
+
+This is the headline measurement and it is committed:
+`evals/results/pipeline_14x3_us-east-1.json` (full report, every raw run) and
+`evals/results/pipeline_14x3_us-east-1.md` (the summary below). Produced by
+`python -m evals.bench --pipeline --repetitions 3`, which calls
+`agents.fanout.fan_out` and `agents.synthesize.synthesize` — the shipped code
+path, not a re-implementation — once per (application, repetition).
+
+**378 real model calls** (336 specialist + 42 synthesis), `us-east-1`,
+2026-07-28, git `9bb569ba`. Total measured spend **$6.4659**.
+
+| stage | n | min | p50 | p95 | max |
+|---|---:|---:|---:|---:|---:|
+| **end to end** | 42 | 18.93s | **31.45s** | **46.55s** | 74.97s |
+| fan-out (8 specialists) | 42 | 15.37s | 24.93s | 41.05s | 70.62s |
+| synthesis (GPT-5.6 Luna) | 42 | 3.08s | 4.20s | 5.59s | 15.21s |
+| sum-of-eight (sequential counterfactual) | 42 | 65.52s | 85.62s | 157.14s | 173.00s |
+
+p99 is **refused**, not omitted: 42 samples, and a p99 needs 100.
+
+**Under the 60s target: 40 of 42 runs. 12 of the 14 applications came in under
+60s on every repetition; all 14 did on at least one.** `APP-1001` and `APP-1007`
+straddle the line — each has one repetition over (70.24s and 74.97s) and two
+comfortably under. No application was ever over on all three. That is the honest
+form of the claim: the p50 is half the target, and the tail crosses it.
+
+**Parallel speed-up, fan-out vs sum-of-eight (n=42): min 1.85x, p50 3.64x,
+p95 4.99x, max 5.11x.** One ratio per run, not one number for the port. The
+fan-out is bounded by its slowest dimension, so the ratio moves with which
+specialist ran long — the 1.85x run is one where a single specialist took 70.6s
+of a 70.6s fan-out.
+
+**Per-specialist latency — the spread is the story.** `rings` was the fan-out's
+tail in **25 of 42 runs**; `straw` never was:
+
+| specialist | model | n ok | n failed | p50 | p95 | max | tail in N runs |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `identity` | sonnet-5 | 42 | 0 | 12.56s | 33.40s | 41.04s | 4 |
+| `dealer` | haiku-4-5 | 42 | 0 | 6.56s | 14.56s | 18.85s | 0 |
+| `straw` | haiku-4-5 | 42 | 0 | 4.40s | 8.76s | 12.52s | 0 |
+| `employment` | sonnet-5 | 42 | 0 | 7.48s | 17.64s | 20.00s | 0 |
+| `income` | sonnet-5 | 42 | 0 | 8.09s | 31.44s | 66.01s | 5 |
+| `synthetic` | opus-5 | 41 | 1 | 8.52s | 20.82s | 26.70s | 1 |
+| `bustout` | sonnet-5 | 42 | 0 | 14.46s | 35.71s | 69.78s | 7 |
+| `rings` | opus-5 | 41 | 1 | 20.96s | 32.25s | 36.17s | 25 |
+
+`rings` has the highest p50 (20.96s) but *not* the highest max — `bustout`
+(69.78s) and `income` (66.01s) both spiked higher. So the p50 tail and the p95
+tail are different agents, and shaving `rings` alone would not fix the two runs
+that crossed 60s. Failed calls are excluded from these percentiles: a call that
+errored after 200ms would otherwise make its dimension look fast.
+
+**Cost per adjudication (n=41 fully priced runs, 1 excluded): min $0.1177,
+p50 $0.1440, p95 $0.2271, max $0.2536.** The variance driver is measured, not
+asserted: comparing the cheapest run (`APP-1001` rep 3, $0.1177) with the dearest
+(`APP-1004` rep 3, $0.2536), specialist *input* tokens barely move
+(20,237 → 21,657) while specialist *output* tokens go 4,098 → 13,735. **Cost
+tracks how much the specialists write, and they write more on the fraud-heavy
+applications.** The synthesis call is a small and stable share throughout
+($0.0089 → $0.0151).
+
+**Failures: 1 degraded run of 42.** `APP-1011` repetition 3 lost both `synthetic`
+and `rings` to Bedrock `InternalServerException` (two `server_5xx`). **No
+throttling and no `MaxTokensReachedException` occurred in 378 calls.** The
+degraded run stays in the latency distribution — it really took 21.22s — and is
+excluded from the cost distribution, because eight priced calls presented as the
+cost of a nine-call adjudication is an under-count wearing a total's name. The
+run still produced a valid 21-key adjudication on six specialists, which is the
+graceful-degradation path working.
+
+**All 42 adjudications validated against the 21-key contract, and zero needed a
+repair attempt** (`repair_attempts` total: 0).
+
+**Verdict agreement — measured here, and worth the customer's attention.** 12 of
+14 applications returned the same `overall_risk_decision` on all three
+repetitions. Three applications differ from their pinned fixture expectation:
+
+| application | pinned | observed | matched |
+|---|---|---|---:|
+| `APP-1003` | MEDIUM RISK | LOW RISK (all 3) | 0 of 3 |
+| `APP-1005` | MEDIUM RISK | HIGH RISK / MEDIUM RISK | 2 of 3 |
+| `APP-1012` | HIGH RISK | HIGH RISK / MEDIUM RISK | 1 of 3 |
+
+This is reported, not adjudicated. Note that "stable" and "correct" are
+independent: `APP-1003` was perfectly stable across three runs and stably
+disagreed with its pin. Whether the pin or the model is wrong is Point
+Predictive's call; run the calibration judge in `evals/evaluators/` before drawing
+an accuracy conclusion from it. It does condition every latency figure above,
+though — a per-application time is a time for whichever answer the model gave.
+
+**What this run does NOT measure:** AgentCore runtime overhead (calls left the
+developer host directly, so no container cold start, session setup or SSE
+framing), signal generation (`build_payload` runs outside the timed window
+because the customer's architecture precomputes signals), and **throughput** —
+applications ran one at a time, so nothing here says what happens when N
+adjudications overlap.
+
+### What else the harness has measured in this repo
 
 | Measured | How | Where the number lives |
 |---|---|---|
@@ -41,12 +139,15 @@ rejects inference-profile prefixes — the `global.*` and `us.*` forms fail; the
 bare `anthropic.*` id is required. `bench.py` strips the prefix and reports
 `None` for the unsupported models rather than substituting an estimate.
 
-### Real live Bedrock measurements taken (small sample — do not generalize)
+### The earlier `--live` smoke runs (superseded — kept for the two findings they produced)
 
-Two `--live` smoke runs were executed to prove the measurement path works, one
-per region, one iteration each, `max_tokens` 1200 then 4000. **n=1 per agent, so
-every percentile was correctly suppressed.** These are real numbers from real
-calls, and they are a sample of one:
+These predate the pipeline benchmark above and are **not** the measurement to
+quote; the 42-run report supersedes them. They are retained because the two
+failures they caught are still the reason two settings are what they are.
+
+Two `--live` smoke runs, one per region, one iteration each, `max_tokens` 1200
+then 4000. **n=1 per agent, so every percentile was correctly suppressed.** Real
+numbers from real calls, and a sample of one:
 
 | Agent | Model | wall ms | SDK `latencyMs` | TTFT ms | in tok | out tok | cost $ |
 |---|---|---:|---:|---:|---:|---:|---:|
@@ -64,36 +165,51 @@ Every cache field measured a **miss** on these runs, and the cacheability check
 resolved from real token counts: haiku-4-5 at 2389 tokens → `never_cacheable`
 (4096 minimum), sonnet-5 at 2702 → `cacheable`, opus-5 at 3028 → `cacheable`.
 
-**No complete adjudication was measured.** In both runs one specialist failed —
-`rings` on `MaxTokensReachedException` at `max_tokens=1200`, then `synthetic` on a
-transient Bedrock `InternalServerException`. The harness therefore reports
-`cost_per_adjudication_usd: null`, because averaging the eight surviving calls
-would publish an under-count as a total. Two things follow, both worth raising
-with the customer rather than papering over: **`max_tokens` must be ≥ ~4000** for
-these prompts (a 1200-token cap truncates the bustout and rings analyses, which
-run long by design), and **the fan-out needs a retry policy** for transient
-5xx before any throughput claim is credible.
+Neither smoke run completed all nine calls: `rings` failed on
+`MaxTokensReachedException` at `max_tokens=1200`, then `synthetic` on a transient
+Bedrock `InternalServerException`. Both findings still stand:
+
+- **`max_tokens` must be ≥ ~4000** for these prompts. A 1200-token cap truncates
+  the bustout and rings analyses, which run long by design. `agents/models.py` now
+  sets 3072/4096 by tier, and **no call in the 378-call pipeline benchmark hit
+  `MaxTokensReachedException`** — that is the fix being confirmed, at n=378.
+- **Transient 5xx are real and the fan-out needs a retry policy.** The pipeline
+  benchmark hit two `InternalServerException`s in 378 calls at concurrency 1
+  (~0.5%), both inside one adjudication. Graceful degradation held — that run
+  still produced a valid 21-key adjudication on six specialists — but a lost fraud
+  dimension is not a saving, and this rate is measured at concurrency 1 only.
 
 ### What HAS NOT BEEN MEASURED
 
 Nothing below has been measured in this repo. Do not put any of it on a slide.
 
-- **A complete end-to-end application-processing time.** See above: no
-  adjudication has yet completed all nine calls in one run. The observed
-  end-to-end wall clock of ~47s came from a run with a failed agent and a
-  1200-token cap, so it is **not** a per-application latency. The customer's
-  "<1 minute per application" target remains **unverified in this repo**.
-- **Any latency or cost distribution.** n=1 per agent. There is no measured p50,
-  p95 or p99 for anything, and the harness refuses to print one.
-- **Cost per adjudication.** Null for the reason above.
-- **Prompt-cache hit rate under repeat load.** Both runs were cold; every call
-  measured a miss. The `never_cacheable` verdict for the two Haiku specialists is
-  measured and permanent, but no warm-cache hit rate exists yet.
-- **Concurrency behaviour.** Both live runs were `--concurrency 1`. Nothing is
-  known about throttling, queueing or tail latency at 4 or 16.
+- **A p99 of anything.** The pipeline benchmark is n=42; a p99 needs 100. The
+  harness refuses to print one and the committed report carries `null` with the
+  reason beside it. 14 x 8 repetitions (~$18) would reach it.
+- **A per-application p95.** Each application has n=3 in the committed run, so
+  every per-application p95 in that file is suppressed. Only the pooled p95
+  (n=42) is supportable, and it describes the workload as a whole, not any one
+  application.
+- **Throughput, or latency under concurrent load.** The pipeline benchmark ran
+  **one application at a time**. Nothing in this repo says what happens to p95 or
+  to the throttling rate when 4, 10 or 50 adjudications overlap — and the one
+  `server_5xx` pair observed at concurrency 1 is a reason to expect that question
+  to matter.
+- **Prompt-cache hit rate under repeat load for the specialists.** Every
+  specialist call in the 42-run benchmark measured a miss, and that is the
+  documented behaviour rather than a defect: the assembled prompts are 547–956
+  tokens against minimums of 512 (Opus 5) / 1024 (Sonnet 5) / 4096 (Haiku 4.5),
+  and the large per-application payload differs every time, so a cache entry is
+  never reused. See §4.
+- **Accuracy.** The benchmark measures whether an adjudication *validated* and
+  whether repeated runs *agreed*, which is not the same as whether the verdict is
+  right. The three pin disagreements above are surfaced, not resolved. Run the
+  calibration judge before making any accuracy claim.
 - **AgentCore runtime overhead** — container cold start, session setup, SSE
-  framing. A `--live` run measures Bedrock from the developer's host, not through
-  a deployed runtime.
+  framing. `--live` and `--pipeline` both measure Bedrock from the developer's
+  host, not through a deployed runtime. This is the single largest known gap
+  between the 31.45s p50 above and what a deployed customer would see.
+- **Any region other than `us-east-1`,** for the pipeline as a whole.
 - **Any Snowflake comparison.** This repo has never run the customer's Snowflake
   pipeline and cannot measure it. The customer's own reported figures (4,500
   applications taking >48h; $700K–$1M ARR) are **theirs, by attribution**, and
@@ -113,6 +229,71 @@ returns.
 ---
 
 ## 2. Running the harness
+
+Three modes. `--pipeline` is the one that answers "how long does one application
+take"; the other two exist for narrower jobs.
+
+| mode | calls a model? | measures |
+|---|---|---|
+| `--offline` | no | this repo's orchestration overhead only |
+| `--live` | yes | per-call Bedrock latency/cost, via this module's own agents |
+| `--pipeline` | yes, unless `--mock` | **the shipped pipeline**, end to end, per application |
+| `--reaggregate` | no | recomputes a committed report's statistics from its own raw runs |
+
+### Pipeline (the benchmark; real Bedrock; costs money)
+
+```bash
+# Structural dry run: exercises the whole path, calls nothing, spends nothing.
+python -m evals.bench --pipeline --mock --repetitions 1
+
+# The committed benchmark. 14 applications x 3 repetitions = 42 adjudications,
+# 378 model calls. Measured spend for this exact command: $6.4659.
+AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.bench --pipeline \
+    --repetitions 3 --region us-east-1 \
+    --json evals/results/pipeline_14x3_us-east-1.json \
+    --markdown evals/results/pipeline_14x3_us-east-1.md
+
+# One application, to check credentials and the mantle endpoint before spending.
+AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.bench --pipeline \
+    --repetitions 1 --application APP-1001
+```
+
+Why this is a separate mode from `--live`: `--live` builds its own
+`strands.Agent` per specialist and its own synthesis call, so it measures *a*
+fan-out rather than *the* fan-out. It does not go through `agents.fanout`'s
+semaphore, widened executor or shared botocore pool, it does not go through
+`agents.synthesize`'s structured-output validation or bounded repair, and it
+cannot reach the GPT-5.6 synthesizer at all, because GPT-5.x is not on Converse.
+`--pipeline` calls `fan_out` and `synthesize` directly, so the number describes
+the program AgentCore actually runs.
+
+`--pipeline` is gated on the same `AGENTCORE_BENCH_ALLOW_LIVE=1` as `--live`,
+prints the full plan (applications, repetitions, call count, every model id, and
+a budget estimate explicitly labelled a *prior from an earlier run*) before
+calling anything, and streams one line per adjudication as it goes so a run that
+starts throttling is visible immediately rather than at the end.
+
+Choosing `--repetitions`: 3 is the default because it is what the cost allows and
+because 14 x 3 = 42 clears the 20-sample minimum for a **pooled** p95. It does
+**not** clear it per application (3 each), and the report suppresses those rather
+than printing them. Reaching a p99 needs 100 pooled samples, i.e.
+`--repetitions 8` and roughly $18.
+
+### Re-aggregating without re-spending
+
+If the aggregation changes but the measurements have not, do not re-run the
+benchmark:
+
+```bash
+python -m evals.bench --reaggregate evals/results/pipeline_14x3_us-east-1.json \
+    --markdown evals/results/pipeline_14x3_us-east-1.md
+```
+
+Every measured field lives in `raw_runs`, so every statistic is recomputable from
+it. The provenance block is carried through unchanged — the numbers still belong
+to the run that measured them, and re-aggregating does not restamp them with
+today's git sha — and a `reaggregated_at_utc` field plus a caveat record that the
+derivation, and only the derivation, is newer than the measurement.
 
 ### Offline (default; no AWS, no credentials, no spend)
 
@@ -147,10 +328,10 @@ AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.bench --live \
     --max-tokens 4000 --json evals/last_live_run.json
 ```
 
-To produce the figures the customer actually asked about — a per-application time
-and a per-application cost with real percentiles — this needs to run at
-`--iterations 40 --concurrency 1,4,16`, which is roughly 1,800 calls. Price it
-with `--dry-run` first and get sign-off on the spend before running it.
+A per-application time and a per-application cost with real percentiles now come
+from `--pipeline` (above), not from this mode. `--live` remains useful for one
+thing `--pipeline` does not do: it streams, so it is the only mode that measures
+**time-to-first-token** per specialist.
 
 Before calling anything, `--live` prints every model id with its resolved rate
 card and an **upper-bound** spend estimate. The input side of that estimate is a
