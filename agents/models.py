@@ -344,6 +344,9 @@ TIER_RATIONALE: Final[dict[str, str]] = {
         "prompt's own scope ('If no co-borrower exists, straw risk is inherently minimal - keep "
         "analysis to 2-3 sentences'), which measurement corroborates at 672 chars p50. Moving it UP "
         "would need a quality argument nobody has measured."
+        "This agent is NOT cross-family swept: no GPT-5.6 model has "
+        "analysed it, and APP-1006/1007/1008 -- three of the five anti-false-positive "
+        "fixtures -- target exactly dealer, employment and income."
     ),
     "dealer": (
         "LIGHT - justified by MEASUREMENT. n=42 calls, evals/results/pipeline_14x3_us-east-1.json: "
@@ -352,6 +355,9 @@ TIER_RATIONALE: Final[dict[str, str]] = {
         "either - like straw, dealer never went through the judge, so LIGHT rests on latency, cost "
         "and the prompt's banded-lookup scope ('Do NOT escalate fraud risk classification based "
         "solely on dealer default rates or consortium scores'), not on a measured quality parity."
+        "This agent is NOT cross-family swept: no GPT-5.6 model has "
+        "analysed it, and APP-1006/1007/1008 -- three of the five anti-false-positive "
+        "fixtures -- target exactly dealer, employment and income."
     ),
     "rings": (
         "MID - justified by MEASUREMENT, moved down from HEAVY (Opus 5) on 2026-07-28, and it is "
@@ -370,6 +376,10 @@ TIER_RATIONALE: Final[dict[str, str]] = {
         "rings leaves the next agent as the floor. NOT FIXED by this move: on APP-1014 all three "
         "models declared POSSIBLE against a pinned LOW RISK (RNG-020), all three judged "
         "FalsePositive - a prompt/guardrail failure no tier buys out."
+        "Cross-family swept: evals/results/set_comparison.json, n=6 applications, two judges. "
+        "GPT-5.6 Luna was graded AS GOOD here (band 5/6 against the incumbent opus-5 5/6, "
+        "$0.005 against $0.0583, 3.201s against 26.2175s p50) and is NOT taken: its _context "
+        "grounding is 0.5 against 0.875, and every prompt requires that validation."
     ),
     "synthetic": (
         "MID - justified by MEASUREMENT on QUALITY, moved down from HEAVY (Opus 5) on 2026-07-28, "
@@ -389,6 +399,11 @@ TIER_RATIONALE: Final[dict[str, str]] = {
         "is also why Haiku was NOT taken here despite banding 5/5 at $0.0059 and 9.56s: it carried "
         "8 output-contract violations against Sonnet's 5, including citing numeric alert ids on 3 "
         "of 5 calls, which synthetic_agent_prompt.txt forbids."
+        " Cross-family swept: evals/results/set_comparison.json, n=6 applications. GPT-5.6 "
+        "Luna reached the same band 5/6 as the Opus incumbent but grounded only 0.150 of its "
+        "signals against the paired _context rows against 0.517, so it was REJECTED here even "
+        "though it was graded AS GOOD on rings, bustout and identity. Terra was the one GPT "
+        "variant graded AS GOOD on all four swept agents (grounding 0.350, $0.0106, 7.05s p50)."
     ),
     "identity": (
         "MID - HELD at Sonnet 5 after a measured trial too small to act on. n=3 applications, "
@@ -402,6 +417,10 @@ TIER_RATIONALE: Final[dict[str, str]] = {
         "pipeline benchmark identity is 12.56s p50 / 33.40s p95 at $0.01727 and was the slowest "
         "agent in 4 of 42 runs, so it is not a critical-path priority. Extend the sweep to 5+ "
         "applications before moving it."
+        "Cross-family swept: evals/results/set_comparison.json, n=6 applications, two judges. "
+        "GPT-5.6 Luna was graded AS GOOD here (band 6/6 against the incumbent sonnet-5 3/3, "
+        "$0.0045 against $0.0164, 2.604s against 13.4865s p50) and is NOT taken: its _context "
+        "grounding is 0.3575 against 0.429, and every prompt requires that validation."
     ),
     "bustout": (
         "MID - HELD at Sonnet 5, and the evidence is deliberately NOT acted on. n=3 applications, "
@@ -414,6 +433,11 @@ TIER_RATIONALE: Final[dict[str, str]] = {
         "with NO character cap, writing 1097 output tokens p50 against 288-394 for the capped "
         "agents. NOT FIXED by any tier: on APP-1004 all three models over-escalated to HIGH RISK "
         "against a pinned POSSIBLE RISK (BST-020)."
+        "Cross-family swept: evals/results/set_comparison.json, n=6 applications, two judges. "
+        "GPT-5.6 Luna was graded AS GOOD here (band 4/6 against the incumbent sonnet-5 3/6, "
+        "$0.0053 against $0.0173, 3.2095s against 15.8995s p50) and is NOT taken: its "
+        "_context grounding is 0.286 against 0.571, and every prompt requires that "
+        "validation."
     ),
     "income": (
         "MID - UNPROVEN. income was never quality-swept: no judge comparison against Haiku or Opus "
@@ -424,6 +448,9 @@ TIER_RATIONALE: Final[dict[str, str]] = {
         "at 4.7 output tok/s against a 66 tok/s median - server-side, not verbosity). MID is the "
         "conservative hold; the next sweep should include it precisely because its p95/p50 spread "
         "is the second widest of the eight."
+        "This agent is NOT cross-family swept: no GPT-5.6 model has "
+        "analysed it, and APP-1006/1007/1008 -- three of the five anti-false-positive "
+        "fixtures -- target exactly dealer, employment and income."
     ),
     "employment": (
         "MID - UNPROVEN. employment was never quality-swept; no judge comparison exists, so the "
@@ -433,6 +460,9 @@ TIER_RATIONALE: Final[dict[str, str]] = {
         "It is the cheapest and fastest of the six MID agents and a plausible LIGHT candidate on "
         "cost, which is exactly why it needs a judged sweep rather than a guess: a LIGHT move here "
         "would save ~$0.005/app and cannot be justified without a band comparison."
+        "This agent is NOT cross-family swept: no GPT-5.6 model has "
+        "analysed it, and APP-1006/1007/1008 -- three of the five anti-false-positive "
+        "fixtures -- target exactly dealer, employment and income."
     ),
     "synthesizer": (
         "CUSTOM (GPT-5.6 Luna on bedrock-mantle) - justified by MEASUREMENT, and it is NOT a Claude "
