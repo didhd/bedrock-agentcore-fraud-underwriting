@@ -1,0 +1,55 @@
+# Dependency closure for the `francis` AgentCore runtime.
+#
+# Read app/underwriter/pyproject.toml for the full account of how the CLI uses
+# this file (`agentcore dev` -> uvicorn main:app with cwd here; `agentcore
+# package` -> `uv pip install -r <this file> --target <staging> --only-binary
+# :all:`, then copies this directory's tree into the staging dir and zips it with
+# its contents at the archive root, 250 MB cap).
+#
+# Francis's closure differs from the underwriter's in exactly one place: she may
+# attach an AgentCore Memory session manager, which lives in the
+# `bedrock_agentcore.memory.integrations.strands` subpackage of the SAME
+# bedrock-agentcore distribution -- so there is no extra dependency, only an extra
+# env var (MEMORY_FRANCISMEMORY_ID / FRANCIS_MEMORY_ID). She does NOT need
+# fixtures/ for her own operation, but her specialist tools read the signal layer
+# through the same seam the underwriter uses, so the same vendoring applies.
+#
+# PACKAGING NOTE: the zip root is THIS directory. `tools/specialists.py` is
+# already inside it and ships automatically. The shared repo-root packages
+# (prompts/ with its verbatim files and manifest.json, signal_layer/, agents/,
+# app/runtime_support.py) sit ABOVE it and must be vendored next to main.py before
+# deploying; `_find_shared_root()` searches this directory first, then its
+# ancestors, so no code changes between the dev layout and the packaged one. See
+# deploy/deploy.md.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "francis"
+version = "0.1.0"
+description = "Francis: interactive fraud-analysis router over the eight Point Predictive specialist agents"
+readme = "README.md"
+# Matches runtimeVersion PYTHON_3_12 in agentcore/agentcore.json.
+requires-python = ">=3.12"
+dependencies = [
+    # Required by the opentelemetry-instrument wrapper AgentCore puts in front of
+    # the entrypoint because this runtime sets instrumentation.enableOtel.
+    "aws-opentelemetry-distro>=0.18.0",
+    # Pinned: main.py relies on _takes_context() matching the second parameter
+    # literally by the name `context`, on async-generator entrypoints becoming
+    # text/event-stream, and on bedrock_agentcore.memory.integrations.strands
+    # exposing AgentCoreMemorySessionManager + AgentCoreMemoryConfig(batch_size=).
+    "bedrock-agentcore==1.14.0",
+    "botocore[crt]>=1.43.54",
+    "boto3>=1.43.54",
+    # Pinned: the ToolCapHook depends on BeforeToolCallEvent exposing a writable
+    # `cancel_tool`, and on ConcurrentToolExecutor being the default tool executor
+    # (which is what makes a legitimate 2-tool turn parallel).
+    "strands-agents==1.26.0",
+    "pydantic>=2.13",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]

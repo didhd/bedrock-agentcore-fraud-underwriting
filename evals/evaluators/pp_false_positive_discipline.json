@@ -1,0 +1,37 @@
+{
+  "name": "pp_false_positive_discipline",
+  "level": "TRACE",
+  "description": "Checks one analysis against the customer's anti-false-positive rules: 900+ dealer consortium score without coordination, all-null employer contact fields, staffing-agency SSN volume, multi-unit address reuse, and explainable alert volume.",
+  "config": {
+    "llmAsAJudge": {
+      "model": "us.anthropic.claude-opus-4-8",
+      "instructions": "You are auditing a fraud analysis for FALSE POSITIVES against Point Predictive's own anti-false-positive rules. Each rule below is the customer's, and each names a pattern that must NOT drive a fraud escalation on its own.\n\nRULES (each is a rule from the customer's production prompts):\n\n  1. Dealer consortium score, dealer default rate and EPD rate are PORTFOLIO and CREDIT RISK metrics. A score of 900 or above, absent evidence of active dealer participation in deception, must stay LOW and be reported factually as credit-risk context. Dealer fraud requires coordinated identity patterns, fabricated borrower information, or phone/employer manipulation at the dealer level.\n\n  2. A missing employer address, phone, city, state or ZIP -- including all of them null -- is an UNDERWRITING DATA GAP, not employment fraud evidence. Missing fields alone means LOW. Vague employer names are a data-quality issue unless combined with other fraud patterns.\n\n  3. Large national employers, military, government, staffing agencies and gig platforms naturally carry high SSN counts and rapid new-SSN growth. That is NOT a fraud signal and is not evidence of a shell or fabricated employer.\n\n  4. Address reuse in multi-unit or dense housing -- apartment complexes, shelters, military housing -- is benign. Only repeated EXACT-UNIT reuse by unrelated SSNs, corroborated by other inconsistencies, is meaningful. Building-level overlap is not.\n\n  5. Alert volume alone is not risk. An application can fire many alerts and remain LOW when the alerts are explainable, trace to one underlying behaviour, or are contradicted by context.\n\n  6. Benign explanations must be weighed before escalating: shared households, family relationships, employer scale, population density, career progression, commission and seasonal income, thin files from youth or immigration, authorized-user credit building, rate shopping, and data-quality issues.\n\nWHAT YOU ARE JUDGING\n\nConversation context: {context}\n\nThe analysis under review: {assistant_turn}\n\nDecide whether the analysis committed a false positive under any rule above. An analysis that reports one of these metrics factually while correctly declining to escalate on it has NOT committed a false positive -- that is the required behaviour. Name the rule number in your explanation.",
+      "ratingScale": {
+        "categorical": [
+          {
+            "label": "Pass",
+            "definition": "No false positive. Every pattern the rules cover was either absent, or reported factually and correctly excluded from the fraud classification."
+          },
+          {
+            "label": "PassWithNote",
+            "definition": "No escalation resulted, but the analysis failed to state the benign explanation the customer's rule requires (for example it left a 900+ consortium score unlabelled rather than calling it credit-risk context)."
+          },
+          {
+            "label": "FalsePositive",
+            "definition": "The analysis escalated risk on a pattern the rules define as benign, as credit risk, or as a data gap -- or treated alert volume as independent corroboration."
+          },
+          {
+            "label": "FalseNegative",
+            "definition": "The analysis invoked an anti-false-positive rule to dismiss evidence that actually met the rule's escalation condition, for example repeated exact-unit reuse by unrelated SSNs alongside other inconsistencies, or a dealer with coordinated phone reuse across synthetic-linked borrowers."
+          }
+        ]
+      }
+    }
+  },
+  "tags": {
+    "customer": "PointPredictive",
+    "domain": "auto-loan-fraud",
+    "contract": "anti-false-positive",
+    "source": "prompts/verbatim CRITICAL DISTINCTION and SIGNAL INTERPRETATION rules"
+  }
+}

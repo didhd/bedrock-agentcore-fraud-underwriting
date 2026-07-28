@@ -1,0 +1,23 @@
+{
+  "name": "pp_output_contract_check",
+  "level": "SESSION",
+  "description": "Deterministic output-contract checker. Exact titles where the prompt defines one and NO title for bustout/rings; LOW = 3-5 sentences; POSSIBLE/HIGH <= 4000 chars; straw with no co-borrower <= 3 sentences; no 'Alert <n>' citations; no emoji; no risk label in a section header; the 21-key JSON in exact order with valid enums and summaries under 1200 chars.",
+  "config": {
+    "codeBased": {
+      "managed": {
+        "codeLocation": "app/pp_output_contract_check/",
+        "entrypoint": "lambda_function.handler",
+        "timeoutSeconds": 60,
+        "additionalPolicies": [
+          "execution-role-policy.json"
+        ]
+      }
+    }
+  },
+  "tags": {
+    "customer": "PointPredictive",
+    "domain": "auto-loan-fraud",
+    "contract": "output-format",
+    "checks": "titles / lengths / no-Alert-n / no-emoji / no-risk-label-in-headers / 21-keys-in-order / enums / flags-int / summaries-under-1200"
+  }
+}
