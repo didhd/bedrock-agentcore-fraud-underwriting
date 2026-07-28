@@ -1,0 +1,12 @@
+# Build output (rebuild with: npm run build)
+dist/
+
+# Dependencies
+node_modules/
+
+# Local env overrides
+.env
+.env.local
+
+# Tooling caches
+.vite/

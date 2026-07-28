@@ -1,0 +1,22 @@
+# Secrets (local environment files are never committed)
+.env.local
+
+# CDK Build Artifacts
+cdk/cdk.out/
+cdk/node_modules/
+cdk/dist/
+
+# CLI Internals
+.cli/*
+
+# Ephemeral Staging
+.cache/*
+
+# `agentcore package` output: a per-runtime staging tree + a ~40MB zip with the
+# whole dependency closure. Regenerated on every package/deploy.
+*.zip
+underwriter/
+francis/
+
+# Exception: Commit the State
+!.cli/deployed-state.json

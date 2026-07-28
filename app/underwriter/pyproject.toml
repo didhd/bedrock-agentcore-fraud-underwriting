@@ -1,0 +1,67 @@
+# Dependency closure for the `underwriter` AgentCore runtime.
+#
+# HOW THE CLI USES THIS FILE (verified by reading @aws/agentcore 1.0.0-preview.22):
+#   * `agentcore dev` -> ensures a `.venv` in THIS directory, then spawns
+#     `.venv/bin/uvicorn main:app --reload` with cwd set here. So `main` must be a
+#     top-level module in this directory, which is why main.py inserts the repo
+#     root on sys.path rather than relying on a package-relative import.
+#   * `agentcore package`/`deploy` -> resolves the nearest pyproject.toml walking
+#     UP from cwd, runs
+#         uv pip install -r <that pyproject> --target <staging>
+#            --python-version 3.12 --python-platform manylinux_2_28_aarch64
+#            --only-binary :all:
+#     copies that same directory's tree into the staging dir, and zips the
+#     staging dir with its contents at the ARCHIVE ROOT (createZipFromDir).
+#     Excluded from the copy: .git, .venv, __pycache__, .pytest_cache, .DS_Store,
+#     node_modules. Hard 250 MB limit on the resulting zip.
+#
+# THE PACKAGING CONSEQUENCE, stated plainly because it is easy to get wrong:
+# the zip root is THIS directory. The shared repo-root packages this runtime
+# imports -- prompts/ (with its verbatim/ prompt files and manifest.json),
+# signal_layer/, agents/, fixtures/, app/runtime_support.py -- are ABOVE it and
+# are therefore NOT included by a plain `agentcore package`. Before deploying,
+# those packages must be present next to main.py. main.py's `_find_shared_root()`
+# anchors on `prompts/loader.py` and searches this directory first, then its
+# ancestors, so both layouts work with no code change:
+#     app/underwriter/{main.py, prompts/, signal_layer/, agents/, app/}   (packaged)
+#     <repo>/app/underwriter/main.py + <repo>/prompts/ ...                (dev)
+# See deploy/deploy.md for the vendoring step. `--only-binary :all:` also means
+# every dependency must publish a manylinux wheel; none of the pins below are
+# sdist-only.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "underwriter"
+version = "0.1.0"
+description = "Point Predictive batch underwriting: 8-way specialist fan-out + master synthesis on Amazon Bedrock AgentCore"
+readme = "README.md"
+# 3.12 matches runtimeVersion PYTHON_3_12 in agentcore/agentcore.json. The CLI's
+# own scaffold default is PYTHON_3_14; keep the two in sync deliberately.
+requires-python = ">=3.12"
+dependencies = [
+    # Required by the `opentelemetry-instrument` wrapper AgentCore puts in front
+    # of the entrypoint because this runtime sets instrumentation.enableOtel.
+    # Without it the wrapper cannot start and the runtime emits ZERO spans.
+    "aws-opentelemetry-distro>=0.18.0",
+    # Pinned, not floored: main.py depends on _takes_context() matching the
+    # second parameter literally by the name `context`, and on an async-generator
+    # entrypoint being auto-converted to text/event-stream.
+    "bedrock-agentcore==1.14.0",
+    # [crt] for faster checksums on the Bedrock request path.
+    "botocore[crt]>=1.43.54",
+    "boto3>=1.43.54",
+    # Pinned in lockstep with the repo requirements.txt: 1.26.0 is the version
+    # every API decision here was verified against (BedrockModel's flat
+    # **model_config, `structured_output_model=` on Agent(...), the
+    # threading.Lock in stream_async that raises ConcurrencyException on a
+    # concurrently reused Agent).
+    "strands-agents==1.26.0",
+    # agents/contracts.py validates the 21-key adjudication with pydantic v2.
+    "pydantic>=2.13",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
