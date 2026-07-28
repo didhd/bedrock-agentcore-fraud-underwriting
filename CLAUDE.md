@@ -139,11 +139,20 @@ Function URLs verify SigV4). Snowflake's own official AgentCore guide uses an
 Recommended path: a **Lambda Gateway target** with a `SIGNAL_MODE` flag
 (`cortex` | `aurora`), so live-Cortex and precomputed-Aurora are one config change.
 
-### AgentCore CLI: the old commands silently no-op
+### AgentCore CLI: the old commands do not exist, and which binary you have decides how badly
 `agentcore configure` and `agentcore launch` **do not exist** in
-`@aws/agentcore 1.0.0-preview.22` — they print root help and **exit 0**, so a CI
-script calling them appears to succeed while deploying nothing. `deploy/ci.sh`
-greps for them and fails the build. Real flow: `create` / `add agent` /
+`@aws/agentcore 1.0.0-preview.22`. Re-verified on 2026-07-28: the npm CLI prints
+`error: unknown command 'configure'` plus root help and **exits 1** — the safe
+failure, which stops a `set -e` script. The silent-success failure comes from the
+**deprecated pip `bedrock-agentcore-starter-toolkit`**, which installs a
+*different* binary also named `agentcore` on which those subcommands parse and
+then no-op. Whichever resolves first on `PATH` decides. So the danger is not the
+exit code, it is the **ambiguity**: `deploy/ci.sh` step 0 both greps for the two
+strings and fails if the pip toolkit is installed at all.
+
+(An earlier revision of this file said the npm CLI itself exits 0. It does not;
+that was the pip binary's behaviour attributed to the wrong program.
+`deploy/ci.sh:19` had it right.) Real flow: `create` / `add agent` /
 `(cd agentcore/cdk && npm install)` / `validate` / `deploy --dry-run` / `deploy`.
 `deploy` has no `--region/--profile/--agent`; region+account come from
 `agentcore/aws-targets.json`. `agentcore/.cli/deployed-state.json` must be
@@ -207,7 +216,7 @@ S3 before it can fail.
   `time.sleep(nominal * 0.05)`.
 - The signal/analysis split existed only inside a CLI display function; the real
   path fetched the full record 9 times and gave every specialist every signal.
-- `deploy/deploy.md` instructed two commands that do not exist and exit 0.
+- `deploy/deploy.md` instructed two commands that do not exist.
 
 ## Status
 

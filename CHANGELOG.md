@@ -216,9 +216,10 @@ Per-agent cost came from hard-coded `NOMINAL_TOKENS`. All of it is deleted;
 
 ### Things learned the hard way (all verified, details in CLAUDE.md)
 
-- **`agentcore configure` and `agentcore launch` do not exist** in the current CLI. They
-  print root help and **exit 0** — a CI script calling them looks successful while
-  deploying nothing.
+- **`agentcore configure` and `agentcore launch` do not exist** in the current CLI. The npm
+  CLI rejects them and exits 1; the deprecated pip starter toolkit installs a *different*
+  binary of the same name on which they parse and no-op, so a CI script can look successful
+  while deploying nothing. Which binary is first on `PATH` decides.
 - **A Strands `Agent` cannot be invoked concurrently** (`ConcurrencyException`). Build a
   fresh one per invocation. `BedrockModel` also defaults to `max_pool_connections=10`,
   which throttles an eight-way fan-out.

@@ -1,0 +1,249 @@
+---
+title: What was built
+description: The architecture — the signal-layer / analysis-layer split, the eight-way parallel fan-out, the master synthesizer, and the two AgentCore Runtime entrypoints.
+---
+
+<Callout type="info" title="Audience">
+This page is for the customer's engineer and for any AWS SA who has to explain the shape of
+the system. It describes structure, not results; the numbers live in
+[Measured results](/docs/measured-results).
+</Callout>
+
+## What it replaces, and what "1:1" means here
+
+The incumbent is Point Predictive's agentic auto-loan fraud underwriting platform running on
+Snowflake Intelligence (Cortex Agents): eight specialist fraud agents plus a master
+synthesizer, all written by the customer's own engineer. This port reproduces those nine
+agents on Amazon Bedrock AgentCore.
+
+**1:1 means the prompts and the output contracts are the customer's, byte for byte** — not
+"equivalent in intent". Prompt text is loaded from git-ignored `prompts/verbatim/` under
+sha256 verification and the port never rewrites it. Fidelity is the product, because the
+person reviewing this wrote the originals. See
+[Prompt fidelity](/docs/fidelity/prompt-fidelity).
+
+## The two-layer split
+
+The single most important architectural decision, and it came from the customer's own
+finding about what worked best in their environment: **generate the governed query results
+first, then hand them to agents for interpretation. The same agent never both queries and
+investigates.**
+
+```
+                    ┌───────────────────────────────────────┐
+                    │  SIGNAL LAYER   (signal_layer/)       │
+                    │  governed, deterministic, no LLM      │
+                    │                                       │
+                    │  registry.py      60 signals, owners  │
+                    │  schema.py        SignalPayload /     │
+                    │                   DomainView          │
+                    │  alert_categories.py  10 categories   │
+                    │  bands.py         score bands, PRODUCT│
+                    │  rules/           the General Rules   │
+                    └──────────────┬────────────────────────┘
+                                   │  one DomainView per specialist
+                                   │  (its own signals + _context + alerts only)
+                                   ▼
+   ┌───────────────────────────────────────────────────────────────────┐
+   │  ANALYSIS LAYER  (agents/)     asyncio.gather over 8 fresh Agents │
+   │                                                                   │
+   │  ISAAC_IDENTITY   DIANA_DEALER    SAMMY_STRAW    EMILY_EMPLOYMENT │
+   │  IRIS_INCOME      SYLVIA_SYNTHETIC BRUCE_BUSTOUT  RENEE_RINGS     │
+   └──────────────────────────────┬────────────────────────────────────┘
+                                  │  eight prose analyses, in the customer's
+                                  │  input order (not alphabetical)
+                                  ▼
+                    ┌───────────────────────────────────────┐
+                    │  MASTER SYNTHESIZER                   │
+                    │  agents/synthesize.py                 │
+                    │  structured_output_model →            │
+                    │  Adjudication: exactly 21 keys        │
+                    └───────────────────────────────────────┘
+```
+
+Two consequences worth stating to the customer:
+
+- **Each specialist sees only its own domain's view.** `signal_layer.schema.DomainView` is
+  the complete universe a specialist reasons over: its signals, their paired `_context`
+  values, and its own fired alerts. There is no data tool on the agent side at all, so
+  "the agent only saw its own signals" is a structural property, not a prompt instruction.
+- **Text-to-SQL is out of the per-application hot path.** For a fixed set of fraud signal
+  groups the queries are known at design time, so there is no reason to regenerate them per
+  application. This is also the mechanism by which the port avoids the per-application
+  Analyst latency the incumbent pays. See [the semantic layer](/docs/platform/semantic-layer).
+
+## The eight specialists
+
+Each has a persona name from the customer's own documents (`prompts.loader.AGENT_NAMES`) and
+an anti-false-positive rule its prompt requires it to honour. "Reduce false positives" is
+the customer's stated quality goal. Six of the eight prompts say so outright — *"LOW should be
+the most common outcome"* — though notably `bustout` and `rings` do not.
+
+| Specialist | Persona | Detects | The anti-false-positive rule it must honour |
+|---|---|---|---|
+| identity | `ISAAC_IDENTITY` | SSN sharing, PII mismatch, identity volatility | Multiple alerts from one underlying data point count as one signal |
+| dealer | `DIANA_DEALER` | Dealer-*orchestrated* fraud | Default / EPD / consortium scores are portfolio risk, not fraud |
+| straw | `SAMMY_STRAW` | Proxy or nominee co-borrowers, role-switching | No co-borrower means straw risk is inherently minimal |
+| employment | `EMILY_EMPLOYMENT` | Fabricated or shell employers | Missing employer fields are a data gap, not fraud |
+| income | `IRIS_INCOME` | Overstatement, inconsistent reporting | Under 15% variance is normal; self-employment explains variance |
+| synthetic | `SYLVIA_SYNTHETIC` | Fabricated identity plus manufactured credit | Thin files are legitimate for young adults and new immigrants |
+| bustout | `BRUCE_BUSTOUT` | Rapid velocity, unsustainable exposure | Geography alone must not move the classification |
+| rings | `RENEE_RINGS` | Shared identifiers, exact-unit reuse | Multi-unit housing and large employers explain overlap |
+
+## The signal registry
+
+`signal_layer/registry.py` is the contract every other layer resolves names through.
+Measured from the module at import:
+
+| | Count |
+|---|---|
+| Signals in `SIGNAL_OWNER` | **60** |
+| Signals owned by exactly one domain | 55 |
+| Signals legitimately shared by two domains (`SHARED_SIGNALS`) | **5** |
+
+Per-domain ownership: dealer 14, synthetic 10, straw 8, employment 8, identity 7, income 7,
+bustout 5, rings 1. Rings owns one name of its own because most of what it reasons over is
+shared with identity — the three `*_reuse_distinct_ssn_count` signals.
+
+<Callout type="warn" title="Near-duplicate names are both materialised, never aliased">
+The customer's prompts spell the same *concept* differently in different domains, and
+collapsing those spellings silently degrades whichever agent uses the other name. So
+`employer_other_ssns_count` (rings) and `employer_distinct_other_ssns_count` (employment)
+are separate keys; so are `phone_ssn_count` (synthetic) and
+`phone_reuse_distinct_ssn_count` (identity, rings); so are
+`ssn_income_increase_20_percent_or_more` (income) and
+`ssn_income_increased_20_percent_last_30d_rapid_growth` (bustout). A specialist handed a
+signal its prompt never mentions is being invited to reason about something it has no
+interpretation for.
+</Callout>
+
+<Callout type="error" title="The registry is reconstructed, not received">
+`full_underwriting_signal_dictionary.xlsx` — the authoritative signal contract — was
+**never received**. It appears only as an embedded thumbnail on page 3 of the process-guide
+PDF, with zero extractable attachments. `CLEAN_MAIN_STREAM_FILE.sql` was likewise never
+received. The 60-signal registry is therefore **reconstructed from the nine prompts**, and
+that is the correct thing to say to the customer rather than presenting it as the signal
+set. See [Open questions](/docs/open-questions#4-the-artifacts-we-never-received).
+</Callout>
+
+## The fan-out
+
+`agents/fanout.py` runs `asyncio.gather` over **eight freshly constructed Strands `Agent`
+instances**, one per domain, each on its own configured model. End-to-end is therefore
+*slowest specialist + synthesis*, not the sum of eight.
+
+<Callout type="warn" title="Three design constraints that are not stylistic">
+- A Strands `Agent` instance **cannot be invoked concurrently** — it raises
+  `ConcurrencyException`. A fresh `Agent` per invocation is mandatory, never module-level.
+- `strands.multiagent.GraphBuilder` is the wrong primitive here and was rejected on four
+  specific grounds, including that it is fail-fast on any node error while this pipeline
+  needs 7-of-8 graceful degradation.
+- `BedrockModel` defaults to `max_pool_connections=10`, a hard ceiling for an eight-way
+  fan-out, and supplying `boto_client_config` silently drops Strands' `read_timeout=120`
+  back to botocore's 60.
+
+Full detail with the failure modes: [Strands Agents SDK](/docs/platform/strands).
+</Callout>
+
+**Graceful degradation is designed in.** A specialist that fails does not fail the
+adjudication. The 42-run benchmark contains a live demonstration: APP-1011 repetition 3 lost
+both `synthetic` and `rings` to `server_5xx`, finished in **21.2 s** — a 5xx fails fast, so
+it costs a fraud dimension rather than time — and **still validated all 21 keys**.
+
+## The synthesizer
+
+`agents/synthesize.py` substitutes the eight analyses into the customer's verbatim master
+prompt's own placeholders, in her input order — `IDENTITY, DEALER, STRAW, EMPLOYMENT,
+INCOME, SYNTHETIC, BUSTOUT, RINGS`, which is deliberately **not** alphabetical
+(`prompts.loader.DOMAINS`) — and emits the 21-key `Adjudication` via Strands'
+`structured_output_model=` kwarg, with one bounded repair attempt.
+
+Across the 42 benchmark runs, `repair_attempts` totalled **0**.
+
+The synthesizer runs on **GPT-5.6 Luna** via the `bedrock-mantle` endpoint. That is the one
+place a non-Claude model earned its slot on a measurement, and the measurement is
+[on its own page](/docs/model-selection/synthesizer).
+
+## The two AgentCore Runtime entrypoints
+
+| Entrypoint | Path | Shape |
+|---|---|---|
+| Batch underwriting | `app/underwriter/main.py` | Async-generator `@app.entrypoint` → SSE. Fan-out then synthesis, streaming each specialist as it completes. |
+| Interactive router ("Francis") | `app/francis/main.py` | The eight specialists as `@tool` wrappers, with the customer's **maximum-2-tools-per-query** cap. |
+
+Francis carries her own behavioural contract, all of it from
+`master_agent_orchestration_062026` (which is a different artifact from
+`master_agent_prompt.txt` — the former is the interactive router, the latter is the batch
+synthesizer):
+
+| Rule | Where it comes from |
+|---|---|
+| Never identify as Claude; always refer to herself as Francis | The prompt's opening lines |
+| Deflect RETRO questions to `RETRO_FRANCIS` | Named explicitly in the prompt |
+| **Call a MAXIMUM of 2 tools per query**, picking the 2 most relevant | The prompt's `SPEED OPTIMIZATION` clause |
+| Response shaped `## EXECUTIVE SUMMARY` / `## ANALYSIS` / conditional `###RECOMMENDATIONS` | The same document's `instructions.response` block |
+| No unsolicited loan recommendations | The prompt's closing line, and separately General Rule 12 |
+
+<Callout type="warn" title="Runtime gotchas that produce silent or confusing failures">
+`@app.entrypoint`'s second parameter must be **literally named `context`** or it is not
+injected and every request raises `TypeError`. An async-generator entrypoint returns SSE
+automatically — never hand-format it. And exceptions raised mid-stream arrive as a terminal
+`data: {"error": ...}` frame **after HTTP 200**, so a client that checks only the status
+code will report success on a failed run.
+Full list: [AgentCore Runtime](/docs/platform/agentcore-runtime).
+</Callout>
+
+## Model assignment as it stands
+
+From `agents/models.py:SPECIALIST_MODELS` and `DEFAULT_SYNTHESIZER_MODEL`, read from the
+module:
+
+| Role | Model | max_tokens |
+|---|---|---|
+| dealer, straw | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | 3072 |
+| identity, employment, income, synthetic, bustout, rings | `global.anthropic.claude-sonnet-5` | 4096 |
+| master synthesizer | `openai.gpt-5.6-luna` (`bedrock-mantle`) | 4096 |
+
+**There is no Opus 5 agent.** `synthetic` and `rings` were on Opus 5 until 2026-07-28,
+because a reading of the customer's prompts said fraud rings needs heavy multi-signal
+reasoning. Measurement contradicted that on both, and the correction is recorded rather than
+quietly applied: [the tier re-derivation](/docs/model-selection/tier-rederivation).
+
+<Callout type="info" title="The benchmark ran under the previous assignment">
+The 42-run pipeline benchmark records `synthetic` and `rings` on
+`global.anthropic.claude-opus-5`. Its latency and cost figures therefore describe the
+**old** assignment. The new assignment's end-to-end cost is a
+[projection, labelled as one](/docs/cost/levers), until
+`evals/bench.py --pipeline` is re-run. This site does not present the projection as a
+measurement.
+</Callout>
+
+## The repository map
+
+```
+prompts/verbatim/        byte-identical customer prompts (9) + orchestration docs (9)
+prompts/loader.py        sha256-guarded loading; raises PromptIntegrityError on drift
+signal_layer/
+  registry.py            60 signals: owner domain(s), the customer's verbatim thresholds
+  schema.py              SignalPayload / DomainView / AlertFinding / render_for_agent
+  alert_categories.py    the ten alert-ID categories (166 entries, 148 distinct IDs)
+  bands.py               fraud-score and dealer-score bands, PRODUCT decode, credit validity
+  rules/                 one module per numbered General Rule + catalog.py coverage table
+agents/
+  models.py              per-agent model assignment, rationales, recorded usage
+  pricing.py             real rate card: global vs us. prefix, cache and batch rates
+  mantle.py              GPT-5.6 on bedrock-mantle; the measured latency matrix
+  fanout.py              asyncio.gather over 8 fresh Agents, per-agent real usage capture
+  contracts.py           Adjudication: exactly 21 required fields, the customer's order
+  output_contract.py     which output rule applies to which agent, derived from the prompts
+  synthesize.py          structured-output synthesis off the verbatim master prompt
+app/underwriter/main.py  AgentCore Runtime entrypoint — batch fan-out + synthesis (SSE)
+app/francis/main.py      AgentCore Runtime entrypoint — interactive router, 8 agents-as-tools
+fixtures/                14 applications with full signal coverage, _context, alerts_fired
+evals/bench.py           the ONLY code allowed to publish latency or cost
+evals/results/           the artifacts every number on this site is quoted from
+ui/                      Vite + React + Tailwind + shadcn/ui customer-facing demo
+agentcore/               agentcore.json + aws-targets.json for the real CLI
+```
+
+**1,215 offline tests** are collected by `MOCK_MODE=1 python3 -m pytest tests/`.

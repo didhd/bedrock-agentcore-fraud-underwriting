@@ -1,0 +1,106 @@
+---
+title: Engagement record
+description: What was built, what was measured, and what is still unknown — a 1:1 port of Point Predictive's eight-specialist fraud underwriting platform onto Amazon Bedrock AgentCore.
+---
+
+This site is the complete record of one engagement: porting Point Predictive's agentic
+auto-loan fraud underwriting platform — **eight specialist fraud agents running in
+parallel plus a master synthesizer** — from Snowflake Intelligence (Cortex Agents) onto
+**Amazon Bedrock AgentCore**.
+
+It is written for two readers, and every page states which one it is for.
+
+<Cards>
+  <Card
+    title="Start here if you are an engineer"
+    href="/docs/fidelity/prompt-fidelity"
+    description="Prompt fidelity, the 21-key contract, the 29 General Rules, and how each measurement was taken."
+  />
+  <Card
+    title="Start here if you are an executive"
+    href="/docs/executive-summary"
+    description="What was proven, what it costs, the one open question, and the Friday recommendation."
+  />
+</Cards>
+
+## The one rule this site follows
+
+Every number on this site traces to an artifact committed in the repository, and the page
+that quotes it names the file. Where a figure was not measured, the page says
+**NOT MEASURED** rather than estimating. Where two artifacts disagree, both are shown and
+the authoritative one is named.
+
+<Callout type="warn" title="Why that rule is stated up front">
+An earlier draft of a summary for this engagement claimed *"130 analyses over 8 domains,
+judged by GPT-5.6 Sol, band 23/26 per model, 12.3 s end-to-end at $0.0508."* None of those
+figures appear in any artifact on disk. The real cross-family study is
+[120 analyses over 4 domains with two judges](/docs/model-selection/cross-family-study);
+the real measured end-to-end is
+[31.45 s p50 at $0.1440 p50 over 42 runs](/docs/measured-results). Detecting that class of
+error is why percentiles here always carry their `n`.
+</Callout>
+
+## The four headline results
+
+| Result | Figure | Artifact |
+|---|---|---|
+| End-to-end adjudication latency | **31.45 s p50 / 46.55 s p95** (n=42) | `evals/results/pipeline_14x3_us-east-1.json` |
+| Runs under the customer's 60 s target | **40 of 42** | same file |
+| Cost per adjudication | **$0.1440 p50** (n=41 priced runs) | same file |
+| Specialists held on Claude, on one deterministic metric | `_context` grounding **0.642 Claude vs 0.357 GPT** | `evals/results/set_comparison.json` |
+
+Full derivation, per-specialist breakdown and every caveat: [Measured results](/docs/measured-results).
+
+## The one question that blocks the cost case
+
+The customer reports a projected **$700K–$1M** annual Snowflake AI spend. Our measured cost
+is **$0.1440 per adjudication** (p50, n=41). Those two numbers cannot be compared without a
+figure the customer has not yet supplied: **how many applications per day go through the
+full eight-agent forensic underwriting path.**
+
+At ~3,000/day the measured p50 annualises to roughly **$158K**. At 300,000/day it annualises
+to roughly **$15.8M**. Same architecture, opposite conclusion. This is the single most
+important open item and it has its own page:
+[The Snowflake comparison and its blocker](/docs/cost/snowflake-comparison).
+
+## How the site is organised
+
+<Cards>
+  <Card
+    title="Fidelity"
+    href="/docs/fidelity/prompt-fidelity"
+    description="For the customer's engineer. Byte-identical prompts, the exact output contracts, the General Rules as code, and the defects the sweeps found in the prompts themselves."
+  />
+  <Card
+    title="Performance"
+    href="/docs/performance/pipeline-results"
+    description="The 42-run benchmark, why the 75 s tail exists, why it is irreducible, and which agent owns the critical path."
+  />
+  <Card
+    title="Model selection"
+    href="/docs/model-selection/cross-family-study"
+    description="Two blind studies, the tier re-derivation that measurement overturned, and the judge methodology that makes either credible."
+  />
+  <Card
+    title="Cost"
+    href="/docs/cost/levers"
+    description="What the levers really are, the three that look like levers and are not, and the volume question that decides the comparison."
+  />
+  <Card
+    title="Platform"
+    href="/docs/platform/agentcore-cli"
+    description="The AgentCore CLI commands that silently do nothing, Strands concurrency, the bedrock-mantle base URL, and the SDK upgrade."
+  />
+  <Card
+    title="Reference"
+    href="/docs/reference/artifact-index"
+    description="The fixture set, the eval harness and its refusal rules, an index of every artifact, and a glossary."
+  />
+</Cards>
+
+<Callout type="info" title="Confidentiality">
+The customer's nine agent prompts and their orchestration documents are confidential. They
+live in git-ignored `prompts/verbatim/` and in `docs/`, and are **not** reproduced on this
+site. Pages describe them, cite their file names, and quote at most a short phrase where the
+exact wording of a rule is the point being made.
+</Callout>

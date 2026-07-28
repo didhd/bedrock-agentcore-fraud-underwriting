@@ -1,0 +1,317 @@
+---
+title: Prompt fidelity
+description: The nine customer prompts are byte-identical copies under a sha256 manifest, CI-diffed against source. Five mutation attempts were caught, including regenerating the manifest.
+---
+
+<Callout type="info" title="Audience">
+This page is for the customer's engineer. It is the mechanism, not a claim: what is loaded,
+what is hashed, what fails the build, and what was deliberately broken to prove the guard
+fires. Nothing on this page reproduces prompt text.
+</Callout>
+
+## Why this is the first page in the fidelity section
+
+The customer's own engineer wrote all nine production agents. She will diff this port against
+her originals, and a paraphrase is not a style disagreement — it silently changes what the
+agent detects. So the design goal was to make paraphrase **impossible to land**, not
+discouraged.
+
+<Callout type="error" title="What this replaced, and why it was dangerous">
+The prior revision of this repository shipped a module at `agents/prompts.py` — **deleted in
+commit `9bb569b`, so it is not in the tree you are reading** — which hand-rewrote all nine
+prompts. Its own docstring conceded the position: *"preserved verbatim in intent."* It also
+invented an output format the customer never wrote — `ROLE:` / `RISK:` / `FINDINGS:` lines.
+
+The defect that makes this more than a fidelity complaint is in the **parser** that read the
+invented format: when it could not find a `RISK:` line, it **defaulted to `LOW RISK`**. Feed
+that parser the customer's real prompts — which produce titled prose and never a `RISK:`
+line — and every application clears. A fraud detection system whose failure mode is "no
+fraud found" is worse than one that crashes.
+
+Source: `CHANGELOG.md` (2026-07-27 entry, "The three things that would have lost the
+technical review").
+</Callout>
+
+## What is loaded
+
+Eighteen customer documents, all read from disk, none present as a Python string literal
+anywhere in the repository.
+
+| Class | Count | Files |
+|---|---:|---|
+| Specialist agent prompts | 8 | `<domain>_agent_prompt.txt` for the eight fraud domains |
+| Master synthesizer prompt | 1 | `master_agent_prompt.txt` |
+| Per-domain orchestration documents | 8 | one per fraud domain |
+| Master / Francis orchestration document | 1 | `master_agent_orchestration_062026` |
+| **Total under the manifest** | **18** | `prompts/manifest.json` |
+
+Counts and file list from `prompts/manifest.json` (18 entries) and
+`tests/test_prompt_fidelity.py::test_all_eighteen_customer_documents_are_packaged`.
+
+<Callout type="warn" title="Confidentiality is why a fresh clone cannot import prompts">
+Every one of those files is marked confidential by the customer. Both the originals under
+`docs/` and the working copies under `prompts/verbatim/` are **git-ignored**. A fresh clone
+therefore has `prompts/loader.py`, `prompts/manifest.json` and the tests, but no prompt text,
+and importing `prompts` raises `PromptIntegrityError` naming the first missing file.
+
+That is intended. The alternative — a fallback to bundled paraphrased text — is precisely
+the defect this package exists to prevent. Restoration instructions are in
+`prompts/README.md`.
+</Callout>
+
+## The three independent layers
+
+Fidelity here is not one check. It is three, and each one closes a hole the previous one
+leaves open.
+
+<Steps>
+
+<Step>
+
+### Byte-for-byte copy, never retyped
+
+`prompts/verbatim/` is populated by `shutil.copyfile` from the customer's `docs/` originals.
+No transcription step exists, so a typo has nowhere to enter.
+
+</Step>
+
+<Step>
+
+### sha256 verified on every read
+
+`prompts/loader.py:read_verbatim` re-reads and re-hashes the file on **every call** and
+compares against `prompts/manifest.json`. A mismatch raises `PromptIntegrityError` naming
+the file, the expected digest and the found digest.
+
+The loader deliberately does **not** cache. Quoting its own reasoning: caching would mean
+*"a file edited after import keeps serving stale bytes, which is exactly the silent drift the
+manifest exists to prevent."* The files are small — the largest recorded in the manifest is
+`identity_orchestration_062026.txt` at 17,929 bytes — and are read a couple of dozen times at
+import only.
+
+</Step>
+
+<Step>
+
+### CI diffs the copy against the customer's source
+
+`tests/test_prompt_fidelity.py::test_verbatim_copy_is_byte_identical_to_docs_source` reads
+both files as **bytes** and asserts equality, parametrised over all 18 names. `SOURCES` in
+the loader maps each packaged name to its `docs/` origin, which is why this test can exist at
+all.
+
+This is the layer that makes the manifest non-bypassable. See below.
+
+</Step>
+
+</Steps>
+
+## The manifest
+
+`prompts/manifest.json` carries one entry per file with three fields — `sha256`, `bytes`,
+and `source`. Its own `_comment` states the rule: regenerate **only** when the customer's
+document changes.
+
+A sample of the recorded provenance, showing that the two document classes come from
+different places (the orchestration documents are RTF exports converted to text under
+`docs/.converted/`):
+
+| Packaged file | Recorded source | bytes |
+|---|---|---:|
+| `identity_agent_prompt.txt` | `docs/identity_agent_prompt.txt` | 2,412 |
+| `master_agent_prompt.txt` | `docs/master_agent_prompt.txt` | 5,067 |
+| `bustout_agent_prompt.txt` | `docs/bustout_agent_prompt.txt` | 4,048 |
+| `rings_agent_prompt.txt` | `docs/rings_agent_prompt.txt` | 3,758 |
+| `identity_orchestration_062026.txt` | `docs/.converted/identity_orchestration_062026.txt` | 17,929 |
+| `master_agent_orchestration_062026.txt` | `docs/.converted/master_agent_orchestration_062026.txt` | 2,638 |
+
+Source: `prompts/manifest.json`. Sizes are the manifest's own `bytes` field, which
+`test_manifest_covers_exactly_the_packaged_files` asserts against `stat().st_size`.
+
+## The five mutation attempts
+
+A guard that has never been observed to fire is an assumption. Five deliberate mutations were
+run against these layers and **all five were caught**. Recorded in `prompts/README.md`
+(*"Five mutation attempts, including that one, were verified to fail"*) and `CLAUDE.md`.
+
+<Accordions type="single">
+
+<Accordion title="1. Edit a packaged prompt in place">
+
+Change a sentence in `prompts/verbatim/identity_agent_prompt.txt`.
+
+**Caught by** the sha256 check at import. `read_verbatim` raises `PromptIntegrityError`
+naming the file, the expected hash and the found hash. The pinned form of this attempt is
+`test_loader_raises_naming_the_file_on_drift`, which rewrites the persona sentence into
+`ROLE: Identity Fraud Detection Agent` — i.e. it mutates the file *toward the old paraphrased
+format* — and asserts both the filename and the expected digest appear in the error.
+
+</Accordion>
+
+<Accordion title="2. Edit the prompt AND regenerate the manifest to cover it">
+
+The obvious bypass: paraphrase the text, then re-run manifest generation so the hash agrees
+again. Layer 2 now passes.
+
+**Caught by** layer 3. `test_verbatim_copy_is_byte_identical_to_docs_source` compares the
+packaged bytes against the customer's `docs/` original, which the manifest has no influence
+over. Regenerating the manifest makes the hash consistent with the *edit*, not with the
+customer. This is the single most important of the five, and it is why the CI diff exists as
+a separate layer rather than being folded into the hash check.
+
+</Accordion>
+
+<Accordion title="3. Delete a packaged prompt">
+
+Remove a file from `prompts/verbatim/`.
+
+**Caught by** `read_verbatim`, which raises before hashing and names both the missing file
+and the `docs/` path to re-copy it from. Pinned by `test_loader_raises_on_missing_file`. The
+failure mode this prevents is a silent fallback to substituted text.
+
+</Accordion>
+
+<Accordion title="4. Rename a persona identifier">
+
+Change `AGENT_NAMES["identity"]` from `ISAAC_IDENTITY` to something plausible.
+
+**Caught at import** by `loader._verify_agent_names()`, which cross-checks every one of the
+eight persona ids against the `# <NAME> Agent Prompt` header line inside the customer's own
+file. The header is stripped before the prompt is used, so this function is the only place
+the two representations can be reconciled. Pinned by
+`test_loader_rejects_a_persona_id_absent_from_the_customer_text`, which monkeypatches in
+`IVAN_IDENTITY` and asserts the error names `identity_agent_prompt.txt`.
+
+These ids are not cosmetic: they are the `RESULT_TABLE.AGENT_NAME` values downstream queries
+filter on.
+
+</Accordion>
+
+<Accordion title="5. Upper-case Francis">
+
+Normalise `AGENT_NAMES["francis"]` to `FRANCIS`, which looks like tidying up.
+
+**Caught at import** by an explicit guard. The customer's only all-caps spelling appears
+inside `RETRO_FRANCIS` — the *separate* retro system Francis is instructed to deflect to — so
+an all-caps id here collides with the one name Francis must never answer as. Pinned by
+`test_loader_rejects_an_uppercased_francis`, and separately by a test asserting that every
+`FRANCIS` token in the customer's orchestration document belongs to `RETRO_FRANCIS`.
+
+</Accordion>
+
+</Accordions>
+
+## What the loader is allowed to change
+
+Exactly two things, both mechanical, both tested:
+
+1. **Strip the extraction banner.** The confidentiality line, the `====` rule lines and the
+   `# <NAME> Agent Prompt` / `# Extracted from ...` comment lines the extraction tool
+   prepended. The match is anchored to the top of the file and stops at the first real
+   content line, so an interior `#` is never touched.
+   `test_stripping_removes_only_the_header` asserts that **every non-header line of the
+   source survives, in order, unchanged**.
+2. **De-indent the YAML block scalars** in the orchestration documents — remove the longest
+   whitespace prefix common to all non-blank lines, and nothing else.
+
+<Callout type="warn" title="The customer's irregular whitespace is content, not formatting">
+The orchestration documents are RTF exports of Snowflake Cortex Agent YAML, so they are not
+valid YAML: key indentation is inconsistent (0, 1 and 2 spaces all occur) and block bodies
+are sometimes less indented than their key. A real YAML parser rejects several of them.
+
+More to the point, `straw_orchestration_instructions_062026` contains doubled and tripled
+spaces inside its rule text. `test_straw_doc_keeps_the_customers_doubled_spaces` pins them.
+The tests flex — matching loosely on whitespace — rather than the prompt being normalised. The
+same file naming inconsistency is preserved: her filenames are variously
+`..._orchestration_062026`, `..._orchestration_instructions_062026` and
+`bustout_fraudbot_...`, and the loader carries that table rather than regularising it.
+</Callout>
+
+## What is pinned beyond the hashes
+
+A sha256 proves the bytes did not move. It says nothing about whether the *load-bearing
+strings survived the banner strip and reached the model*. So 215 tests in
+`tests/test_prompt_fidelity.py` assert the contract strings individually.
+
+| Pinned | Count | Note |
+|---|---:|---|
+| Persona sentences | 8 | One per specialist, asserted to be **line 1** of the loaded prompt |
+| Exact output titles | 6 | The six agents whose prompts define one — see [output contracts](/docs/fidelity/adjudication-contract) |
+| The two "return only …" rules | 2 | bustout and rings; **both spellings pinned separately** |
+| Calibration bands per specialist | 8 | `LOW RISK` / `POSSIBLE RISK` / `HIGH RISK` |
+| The 4,000-character cap | 6 | Asserted present on six and **absent on bustout and rings** |
+| The `_context` validation rule | 8 | The rule the cross-family study later measured compliance with |
+| Master prompt placeholders | 8 | In the customer's input order, under bare uppercase headings |
+| Master JSON keys | 21 | Read out of the prompt's own `REQUIRED JSON FORMAT` block |
+| Francis's behavioural rules | — | Identity rule, RETRO deflection, the 2-tool budget, the response shape, the routing table |
+
+`tests/test_prompt_fidelity.py` collects **215 tests**
+(`MOCK_MODE=1 python3 -m pytest tests/test_prompt_fidelity.py -q --collect-only`).
+
+<Callout type="info" title="Two details worth showing her directly">
+- **bustout and rings differ from each other by one word.** One says *"the final analysis"*,
+  the other *"final analysis"*. Both spellings are pinned separately
+  (`test_return_only_wording_differs_between_bustout_and_rings`), which is also why
+  `agents/output_contract.py` derives each agent's rules from *its own* prompt text rather
+  than matching one string across all eight.
+- **A customer-source quirk is pinned rather than fixed.** The `General Rules` heading is
+  absent from the employment document even though the rules themselves are present.
+  `test_general_rules_heading_is_absent_from_the_employment_doc` records that, so nobody
+  later "corrects" the copy.
+</Callout>
+
+## The anti-regression canary
+
+Three tests exist to make sure the invented format cannot come back, and one of them exists
+to make sure the other two are not vacuous:
+
+- `test_invented_marker_regex_actually_matches_the_old_format` feeds the regex a synthetic
+  sample of the *old* `ROLE:` / `RISK:` / `FINDINGS:` format and asserts it matches all
+  three markers. Without this, an over-narrow regex would make the absence assertions below
+  pass on any input.
+- `test_no_loaded_prompt_uses_the_invented_format` asserts no loaded prompt contains those
+  markers.
+- `test_risk_colon_appears_only_as_a_calibration_band_label` is the subtle one. `RISK:` **is**
+  legal in the customer's text — but only as `LOW RISK:`, `POSSIBLE RISK:`, `HIGH RISK:`,
+  `MEDIUM RISK:` or `OVERALL RISK:`. Every occurrence is checked for one of those prefixes,
+  so a bare `RISK:` marker anywhere fails.
+
+## Where fidelity ends and interpretation begins
+
+Two honest limits, stated because the engineer will look for them.
+
+<Callout type="warn" title="Two derived names are not the customer's strings">
+`AGENT_NAMES` holds ten entries. Eight are literal customer strings quoted from her file
+headers. Two are not, and the loader records the distinction in place so nobody quotes them
+back to her as hers:
+
+- **`MASTER_FRAUD_AGENT`** is this port's identifier, derived by underscore-joining the words
+  of her master prompt header. `_verify_agent_names()` pins that derivation rather than
+  trusting it.
+- **`Francis`** is her exact casing from the master orchestration document, and is
+  deliberately not upper-cased for the reason in mutation 5.
+</Callout>
+
+<Callout type="warn" title="The General Rules are extracted from one document of eight">
+All 29 numbered General Rules are read from the **identity** orchestration document, which
+carries the longest form of them. The other seven differ: rule 6 is absent from some, and
+rules 11, 13, 17, 18, 20 and 24 are worded differently or truncated per agent.
+`signal_layer.rules._source.variants_of()` reports the differences and
+`test_rule_variants_across_documents` pins them, so a re-import surfaces any change. Source:
+`docs/general_rules_coverage.md`, "Known gaps".
+
+Detail: [the General Rules](/docs/fidelity/general-rules).
+</Callout>
+
+## How to verify this yourself
+
+```bash
+# with the customer's documents restored under docs/ and prompts/verbatim/
+MOCK_MODE=1 python3 -m pytest tests/test_prompt_fidelity.py -q     # 215 tests
+
+# the integrity check on its own, outside pytest
+python3 -c "from prompts.loader import verify_integrity; verify_integrity()"
+```
+
+`verify_integrity()` walks every manifest entry and raises on the first drift. It is the
+same code path the package's own import runs.

@@ -1,0 +1,248 @@
+---
+title: The critical path
+description: rings owned the critical path in 25 of 42 runs, the floor is 96.3% of fan-out, and the measured ceiling on any single-agent fix is 6.34s at p50 — plus which fixtures to demo on.
+---
+
+<Callout type="info" title="Audience">
+For the customer's engineer and for whoever is planning the Friday demo. Every figure comes from
+`evals/results/tail_analysis.json` (question 4) and
+`evals/results/pipeline_14x3_us-east-1.json`, n=42 runs / 336 specialist calls.
+</Callout>
+
+## The structural fact
+
+A fan-out cannot return before its slowest member. So end-to-end latency is:
+
+```
+end_to_end  =  slowest specialist
+            +  orchestration above the floor
+            +  synthesis + validation
+```
+
+Measured, n=42:
+
+| Layer | p50 | p95 | max | Median share of e2e |
+|---|---:|---:|---:|---:|
+| **Fan-out floor** (slowest agent's own wall clock) | **24.03 s** | 41.04 s | 69.78 s | — |
+| Orchestration above the floor | **0.83 s** | 1.87 s | 2.71 s | — |
+| Fan-out total | 24.93 s | 41.05 s | 70.62 s | **85.6%** |
+| Synthesis + validation | 4.20 s | 5.59 s | 15.21 s | 14.4% |
+
+| Share | Median |
+|---|---:|
+| Floor as a share of fan-out | **96.3%** |
+
+Quoting the artifact's reading: *"Fan-out cannot return before its slowest member, so the floor
+distribution IS the fan-out latency distribution up to ~1s of gathering. Any fix that does not
+lower the slowest agent lowers nothing."*
+
+<Callout type="warn" title="There is nothing to win in the orchestration layer">
+0.83 s at the median, and **never more than 2.71 s** across 42 runs. A perfect orchestration
+layer — zero scheduling cost, zero gathering cost — buys under a second at the median and under
+three at the worst observed case.
+
+That is worth stating explicitly because "optimise the orchestration" is the first instinct on a
+multi-agent latency problem, and here it is measurably the wrong place to look. The 0.83 s covers
+`asyncio.gather` scheduling, the admission semaphore, and result collection for eight concurrent
+Bedrock streams.
+</Callout>
+
+## Who owns the critical path
+
+The slowest specialist in each of the 42 runs:
+
+| Specialist | Model in this run | Runs where it was slowest | Its own p50 | Its own max |
+|---|---|---:|---:|---:|
+| **`rings`** | Opus 5 | **25** (59.5%) | **20.96 s** | 36.17 s |
+| `bustout` | Sonnet 5 | 7 | 14.46 s | **69.78 s** |
+| `income` | Sonnet 5 | 5 | 8.09 s | **66.01 s** |
+| `identity` | Sonnet 5 | 4 | 12.56 s | 41.04 s |
+| `synthetic` | Opus 5 | 1 | 8.52 s | 26.70 s |
+| `dealer` | Haiku 4.5 | 0 | 6.56 s | 18.85 s |
+| `straw` | Haiku 4.5 | 0 | 4.40 s | 12.52 s |
+| `employment` | Sonnet 5 | 0 | 7.48 s | 20.00 s |
+
+Three agents **never** led. `dealer`, `straw` and `employment` are structurally irrelevant to
+latency: `employment`'s p95 of 17.64 s is below `rings`'s p50 of 20.96 s.
+
+### rings leads because its floor is high, not because it spikes
+
+The distinguishing statistic is `rings`'s **minimum**: 14.47 s. That is above `dealer`'s p95
+(14.56 s is marginally higher, but `dealer`'s p50 is 6.56 s) and above `straw`'s **max** of
+12.52 s. There is no cheap run of rings.
+
+`rings`'s max, 36.17 s, is meanwhile the **lowest max** of the five agents that ever led. It is
+the most consistently slow agent and the least explosive one.
+
+<Callout type="error" title="The agent that sets the median and the agent that produces the tail are different agents">
+Split the 42 runs by speed:
+
+| Subset | Critical-path owners |
+|---|---|
+| The **10 slowest** runs | bustout 3, identity 3, income 2, rings 2 |
+| The **10 fastest** runs | **rings 7**, bustout 3 |
+
+`rings` appears in the fastest ten more than three times as often as in the slowest ten. The
+artifact records `same_owner_for_median_and_tail: false`.
+
+Practical consequence: **fixing rings moves the p50 and does nothing for the p95 or the max.**
+Both over-target runs were owned by `bustout` (69.78 s) and `income` (66.01 s), and those were
+[server-side stalls, not slow agents](/docs/performance/the-tail). Two separate problems that a
+single "make the slow agent faster" framing merges into one.
+</Callout>
+
+## The ceiling on any single-agent fix — measured
+
+Slowest minus second-slowest, per run. This is the most any single-agent improvement can remove
+from fan-out before another agent becomes the floor:
+
+| n | min | p50 | p95 | max | mean |
+|---:|---:|---:|---:|---:|---:|
+| 42 | **0.014 s** | **6.34 s** | 20.56 s | 50.13 s | 8.53 s |
+
+Definition, quoted from the artifact: *"slowest specialist wall clock minus second slowest, per
+run: the most any single-agent fix can remove from fan-out before another agent becomes the
+floor."*
+
+<Callout type="warn" title="Making the critical-path agent instantaneous buys 6.34 s at the median">
+Not 20 s. Not "half the latency." **6.34 s**, at p50 — from a 31.45 s end-to-end p50 to roughly
+25 s if nothing else changed, which is about a 20% reduction and does **not** touch either
+over-target run.
+
+The minimum of 0.014 s is the sharpest form of the point: in at least one run the two slowest
+agents finished **14 milliseconds apart**, so removing the leader bought nothing at all. The
+p95 of 20.56 s is the opposite case — the runs where one agent genuinely dominated — and those are
+precisely the stalled ones, which no tier change prevents.
+</Callout>
+
+## What was actually done about it
+
+`rings` was moved from Opus 5 to Sonnet 5 on 2026-07-28, on measurement rather than on this
+latency observation alone.
+
+From `evals/results/tier_quality.json`, n=5 applications per cell, paired so only same-payload
+analyses are compared:
+
+| | Opus 5 | Sonnet 5 |
+|---|---:|---:|
+| Band agreement with the pinned expectation | 4 / 5 | **4 / 5** |
+| Judge-confirmed false positives | 1 | **1** |
+| Judge calibration mean | 4.20 | 4.00 |
+| Wall clock p50 | 32.81 s | **22.05 s** |
+| $/call p50 | $0.0696 | **$0.0241** |
+| Output tokens p50 | 2,448 | 2,026 |
+
+Same band, same false positive, 1.49x faster, 2.9x cheaper. The only remaining Opus edge is
+**+0.20 judge calibration**, which is **smaller than the judge's own measured +0.31 self-preference
+for its family** and is therefore not distinguishable from bias. Full reasoning:
+[tier re-derivation](/docs/model-selection/tier-rederivation) and
+[judge methodology](/docs/model-selection/judge-methodology).
+
+<Callout type="error" title="NOT MEASURED: the end-to-end effect of that change">
+The 42-run benchmark **predates** the move — `run.model_ids` still records rings and synthetic on
+Opus 5. So no measured end-to-end p50 exists for the current assignment.
+
+Applying the 6.34 s p50 ceiling to it would be arithmetic on a projection, and this site does not
+publish that. One command produces the measurement:
+
+```bash
+AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.bench --pipeline --repetitions 3
+```
+
+Roughly $5 of spend, about 25 minutes of wall clock.
+</Callout>
+
+## Where the remaining floor sits, and where it does not
+
+If `rings` drops to roughly its Sonnet-5 p50 of 22.05 s, the next candidates on measured p50 are
+`bustout` at 14.46 s and `identity` at 12.56 s. Both are already on Sonnet 5, so there is no tier
+step left to take on either.
+
+That leaves exactly two levers on the floor, and only one of them is ours:
+
+| Lever | Status |
+|---|---|
+| The **missing character cap** in the bustout and rings prompts | The customer's artifact. Those two write 1,331 output tokens p50 against 381 for the six capped agents, and latency is linear in output tokens at r²=0.9531 (n=332). **Unmeasured** whether adding the sentence helps. [The ask](/docs/open-questions#5-two-of-her-prompts-carry-no-character-cap) |
+| Lowering `max_tokens` | **Measured and rejected.** 14 of 30 cells truncated, no latency gain, 13 of 30 band agreement. [The measurement](/docs/performance/the-tail#the-max-tokens-fix-was-measured-and-it-failed) |
+
+<Callout type="info" title="One lever exists that this engagement did not test">
+Moving the four cross-family-swept agents to GPT-5.6 Luna would drop the fan-out **floor lower
+bound** from **22.05 s** (rings, the swept agent that currently binds) to **8.09 s** (`income`,
+the fastest unswept agent that would then bind) — and a projected **47.8%** cost reduction,
+$0.1247 → $0.0651 per adjudication.
+
+Both are **projections**, labelled as such in `docs/model-selection.md` §"the price of holding".
+The terms are measured — 22.05 s from `evals/results/tier_quality.json` (n=5) and 8.09 s from
+`evals/results/pipeline_14x3_us-east-1.json` (n=42) — but the arrangement is not, and
+`python -m evals.bench --pipeline` is what would confirm either.
+
+It is rejected on `_context` grounding, not on latency, and one specific reason is a critical-path
+reason: a **partial** migration would leave `income` — which has **no quality evidence at all**,
+in either study — as the binding fan-out agent.
+[Cross-family study](/docs/model-selection/cross-family-study).
+</Callout>
+
+## For Friday: which fixtures to demo on
+
+The only defensible basis for predicting a single live run is an application that ran three
+repetitions of byte-identical input within a narrow band. Three qualify.
+
+<Callout type="info" title="Recommended demo fixtures">
+| Application | Repetitions (s) | Spread | Critical path each rep | Pinned band | Observed |
+|---|---|---:|---|---|---|
+| **APP-1010** | 27.96, 28.38, 28.59 | **0.64 s** | rings, rings, rings | LOW RISK | LOW RISK, 3/3 |
+| **APP-1002** | 22.32, 22.92, 23.18 | **0.86 s** | rings, rings, rings | LOW RISK | LOW RISK, 3/3 |
+| **APP-1011** | 21.22, 22.40, 22.79 | **1.57 s** | bustout, bustout, bustout | LOW RISK | LOW RISK, 3/3 |
+
+All three are **verdict-stable** as well as latency-stable, and all three had the **same** agent on
+the critical path in all three repetitions — which is a second, independent sign of a
+well-behaved cell.
+
+Sources: `evals/results/tail_analysis.json` (spread), `evals/results/pipeline_14x3_us-east-1.json`
+(`verdict_stability`, `raw_runs`).
+</Callout>
+
+Two things those three fixtures also demonstrate on substance, not just on latency:
+
+- **APP-1010** is an **anti-false-positive** fixture: eleven fired alerts, every one from a single
+  shared household phone, pinned LOW. It came back LOW on all three runs. That is the customer's
+  own quality bar — *"LOW should be the most common outcome"* — being met on the hardest case for
+  it, and it is a much better demo than a HIGH-risk application, which any system can flag.
+- **APP-1011** has **no co-borrower and no alerts at all**, which is the `straw` prompt's
+  "inherently minimal, 2-3 sentences" branch. It is also the run that lost two specialists to
+  `server_5xx` on repetition 3 and **still validated all 21 keys in 21.2 s** — so if a 5xx happens
+  live, that behaviour has been seen.
+
+### What to avoid, and why
+
+| Application | Repetitions (s) | Why not |
+|---|---|---|
+| **APP-1007** | 23.52, 34.58, **74.97** | 51.45 s spread on identical input. The 75 s run |
+| **APP-1001** | 18.93, 24.25, **70.24** | 51.32 s spread. The 66 s `income` stall |
+| APP-1005 | 42.01, 43.91, 46.55 | Tight, but **verdict-unstable** (HIGH / MEDIUM across reps) and the slowest stable application |
+| APP-1012 | 36.58, 38.22, 42.72 | Verdict-unstable, matched its pin 1 of 3 |
+| APP-1003 | 31.68, 34.30, 34.41 | Latency-stable but returned LOW on all three runs against a MEDIUM pin |
+
+<Callout type="warn" title="n=3 is an observation, not a guarantee">
+Stated plainly because it is the part a demo plan gets wrong: the stall rate measured in this
+engagement is **0.6% per call**, and one adjudication makes **eight** calls. Three clean
+repetitions of APP-1010 is evidence that its workload is well-behaved; it is not protection
+against a draw.
+
+And the 0.6% itself is *"a count divided by a denominator, not a predicted frequency"* — two events
+over 336 calls cannot support a rate. If a live demo draws a stall, the correct response is the
+tail page: it is inside Bedrock's own reported latency, there were zero throttles, and 40 of 42
+measured runs finished under target.
+</Callout>
+
+## Summary for a slide
+
+| Claim | Figure | n | Artifact |
+|---|---|---:|---|
+| One agent owns the median | `rings`, **25 of 42** runs | 42 | `tail_analysis.json` |
+| Fan-out is bounded by that agent | floor is **96.3%** of fan-out (median) | 42 | same |
+| Orchestration is not the problem | **0.83 s** p50, 2.71 s max | 42 | same |
+| A perfect single-agent fix buys | **6.34 s** at p50 | 42 | same |
+| The tail is a different problem | 2 of 336 calls, server-side, 0 throttles | 336 | same |
+| The fix applied | rings Opus 5 → Sonnet 5, same band 4/5 | 5 | `tier_quality.json` |
+| Its end-to-end effect | **NOT MEASURED** | — | — |

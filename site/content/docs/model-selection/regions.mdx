@@ -1,0 +1,276 @@
+---
+title: Region selection
+description: The measured model x region latency matrix that picks the synthesizer's region, why AWS_REGION is deliberately not consulted, and why a short-prompt probe ranks the same regions differently.
+---
+
+<Callout type="info" title="Audience">
+For the customer's engineer, and for anyone about to quote a vendor latency dashboard in a
+deployment decision. The transferable finding on this page is the last section: **a region
+ranking is a property of your reply length, and ranking on someone else's probe picks the wrong
+region.**
+
+Code: `agents/mantle.py` (`MEASURED_SYNTHESIS_LATENCY`, `THIRD_PARTY_SHORT_PROMPT_PROBE`,
+`region_choice`, `measure_matrix`). Raw probe output was `/tmp/bench/matrix.json` — scratch,
+uncommitted — and the numbers below are transcribed from it into the module, where
+`measure_matrix` can re-derive them.
+</Callout>
+
+## Why a region choice needs a measurement at all
+
+A `bedrock-mantle` call is **in-region only**. There is no `global.*` or `us.*` inference
+profile for GPT-5.x and no cross-region inference, so whichever region the client points at is
+the region that answers. And the synthesizer is the pipeline's serial bottleneck, so its
+region is on the critical path of every adjudication.
+
+<Callout type="error" title="AWS_REGION is deliberately not consulted, and it measurably mattered">
+`resolve_mantle_region` does **not** read `AWS_REGION`. With `AWS_REGION=us-west-2` — this
+repo's own dev default — a previous revision sent every synthesis to us-west-2 at **5.02 s p50**
+instead of us-east-1 at **4.61 s p50** (n=3 each, real prompt). That is an **8.9% latency tax**
+on the pipeline's bottleneck, paid for no benefit.
+
+Co-locating the synthesizer with the Converse specialists buys nothing either, because the
+mantle call is in-region only with no cross-region profile to share.
+</Callout>
+
+## The measured matrix
+
+Streamed Responses calls on the **real 31,343-character synthesis prompt** — the customer's
+verbatim master prompt with all eight specialist narratives substituted in, APP-1004 —
+`effort=low`, `max_output_tokens=8192`, **n=3 per cell, 24 calls total, 2026-07-28**.
+
+**All 24 calls returned a valid 21-key `Adjudication` and all 24 adjudicated HIGH RISK /
+DECLINE.** The latency spread below is therefore not bought with a shorter or a worse answer.
+
+| Model | Region | p50 total (n=3) | p50 TTFT | p50 tok/s | p50 out tok |
+|---|---|---:|---:|---:|---:|
+| **luna** | **us-east-1** | **4.61 s** | **0.79 s** | 176.0 | 812 |
+| luna | us-west-2 | 5.02 s | 1.19 s | **180.0** | 903 |
+| luna | us-east-2 | 6.79 s | 1.63 s | 115.8 | 878 |
+| terra | us-east-2 | 6.29 s | 0.63 s | 126.4 | 825 |
+| terra | us-east-1 | 6.72 s | 0.69 s | 122.3 | 785 |
+| terra | us-west-2 | 7.63 s | 0.89 s | 95.1 | 790 |
+| sol | us-east-1 | 11.19 s | 4.19 s | 91.1 | 1020 |
+| sol | us-east-2 | **30.66 s** | **22.07 s** | 31.6 | 900 |
+
+`openai.gpt-5.5` and `openai.gpt-5.4` are priced and region-mapped in `agents/mantle.py` but
+carry **no latency cell at all**, because they were never measured on this prompt. Absence is
+treated as "unknown", never as "slow": `measured_region_preference` returns `()` for an
+unmeasured model and the caller falls back to declared availability order.
+
+<Callout type="warn" title="Three ways to read this table honestly, from the module's own notes">
+1. **n=3 is a median of three points, not a percentile.** It separates 4.61 s from 30.66 s. It
+   does **not** defend 4.61 s against 5.02 s as a stable ranking, and the code says so:
+   `MIN_TRIALS_FOR_A_RANKING = 3` and every rendering prints its n.
+2. **The four p50 columns are independent medians**, taken column-wise. `tok/s` is the median of
+   the per-trial throughputs, **not** `out tok / total`. Those coincide exactly in **3 of the 8**
+   cells and differ by up to **10.5%** elsewhere. They are kept as measured rather than
+   recomputed, because a recomputed number is not a measured one.
+3. **Totals are streamed totals.** Streaming is the only way to observe TTFT;
+   `agents/synthesize.py` calls the endpoint **non-streamed**, and the report says so rather
+   than assuming the two are equal.
+</Callout>
+
+## What the ranking is ordered on, and what that is worth
+
+`measured_region_preference` orders on **total** latency, because for this workload total is the
+number the customer feels — one adjudication, no streaming UI on the critical path.
+
+The module is unusually careful about how much that choice is worth, and the care is warranted:
+
+| Ranking key | Luna's first place | Same as ordering on total? |
+|---|---|---|
+| Total p50 | us-east-1 (4.61 s) | — |
+| TTFT p50 | us-east-1 (0.79 s) | **Yes** — coincidentally identical for all three variants |
+| **Tokens/s p50** | **us-west-2 (180.0)** | **No** |
+
+So "we rank on total, not TTFT" is a statement of intent that **changed nothing on this data**,
+and it is asserted as such in the tests rather than overstated. The axis that actually flips the
+answer is **throughput**, and `test_ranking_on_throughput_would_pick_a_different_region` pins
+that.
+
+## Sol's regional gap is an availability question, not just a latency one
+
+| Variant | Available in |
+|---|---|
+| `openai.gpt-5.6-luna` | us-east-1, us-east-2, us-west-2 |
+| `openai.gpt-5.6-terra` | us-east-1, us-east-2, us-west-2 |
+| `openai.gpt-5.6-sol` | **us-east-1, us-east-2 only** |
+
+A stack deployed in us-west-2 that asks for Sol gets a confusing 404. `region_choice` therefore
+**replaces** an unavailable region with the measured-best *available* one and logs the reason:
+availability overrides both an explicit `region=` argument **and** the `BEDROCK_MANTLE_REGION`
+override, because the alternative is a call that cannot succeed.
+
+And Sol in us-east-2 measured **30.66 s p50 with 22.07 s TTFT** — 2.7x its own us-east-1 number
+and **6.7x Luna's** us-east-1 number. That one cell would blow the customer's sub-minute target
+on the synthesis call by itself.
+
+## The precedence order
+
+`agents/mantle.py:region_choice` returns `(region, why)`, and the `why` string is the point of
+the function — it lands in the log once per distinct choice rather than once per adjudication.
+
+<Steps>
+
+<Step>
+**An explicit `region=` argument** — a caller that has already decided.
+</Step>
+
+<Step>
+**`BEDROCK_MANTLE_REGION`** — the operator override: data residency, a new region, or simply
+disagreeing with our measurement.
+</Step>
+
+<Step>
+**The measured-fastest region** for that model from `MEASURED_SYNTHESIS_LATENCY`.
+</Step>
+
+<Step>
+**The model's first declared available region**, for a variant nobody measured.
+</Step>
+
+<Step>
+**`DEFAULT_MANTLE_REGION` = us-east-1** — chosen because it is the only region where every
+GPT-5.6 variant is available, and because it is measured-fastest for the default synthesizer.
+</Step>
+
+</Steps>
+
+Steps 1 and 2 are still subject to the availability check.
+
+## THIRD-PARTY corroboration — not our measurement
+
+Customer-supplied third-party dashboard readings on a **~16–32 output-token** prompt. **No
+sample count, no prompt text, no verdict validation came with them.** Recorded in
+`THIRD_PARTY_SHORT_PROMPT_PROBE` behind a mandatory provenance label
+(`THIRD_PARTY_PROBE_SOURCE`), so a screenshot of it cannot be mistaken for one of ours, and it
+**never selects a region**.
+
+| Model | Region | TTFT | tok/s |
+|---|---|---:|---:|
+| luna | us-west-2 | **531 ms** | **405** |
+| luna | us-east-1 | 666 ms | 220 |
+| luna | us-east-2 | 2703 ms | 73 |
+| terra | us-west-2 | 796 ms | — |
+| terra | us-east-1 | 914 ms | — |
+| terra | us-east-2 | 1105 ms | — |
+| sol | us-east-1 | 3896 ms | — |
+| sol | us-east-2 | **15636 ms** | — |
+
+A missing tok/s means the reading did not include one. It is recorded as `None`, not as zero.
+
+### Where it agrees with ours — which is what makes it worth keeping
+
+- **us-east-2 is the worst region for Luna in both.** Theirs: 2703 ms TTFT vs 666 ms in
+  us-east-1. Ours: 1.63 s vs 0.79 s.
+- **us-east-2 is catastrophic for Sol in both.** Theirs: 15636 ms TTFT. Ours: 22.07 s TTFT and
+  a 30.66 s total.
+- **Sol has by far the highest TTFT of the three variants in both.** Theirs: 3896 ms in
+  us-east-1. Ours: 4.19 s, against Luna's 0.79 s.
+
+Three independent agreements on a dataset gathered a different way is real corroboration, and it
+is why the table is kept at all.
+
+## Where it diverges, and why that is the actual lesson
+
+The short-prompt reading ranks **us-west-2 first** for Luna (531 ms / 405 tok/s against
+us-east-1's 666 ms / 220 tok/s). On our 31,343-character prompt, **us-east-1 wins** on total
+latency (4.61 s vs 5.02 s p50) even though us-west-2 edges it on throughput (180.0 vs 176.0
+tok/s).
+
+**Both readings are correct about their own workload.**
+
+<Tabs items={['A ~32-token reply', 'An ~800-1000 token reply']}>
+
+<Tab value="A ~32-token reply">
+
+Almost all the wall clock is **time to first token**. Generating 32 tokens at any plausible
+throughput takes a fraction of a second, so the region with the lowest TTFT wins essentially by
+definition.
+
+The third-party data puts Luna's lowest TTFT in **us-west-2 (531 ms)**, and therefore ranks
+us-west-2 first.
+
+</Tab>
+
+<Tab value="An ~800-1000 token reply">
+
+**~83% of the wall clock is generation** — computed from our own numbers as
+(4.61 − 0.79) / 4.61. Throughput decides the total and TTFT is a smaller additive term.
+
+On the long prompt Luna's lowest TTFT is in **us-east-1 (0.79 s vs us-west-2's 1.19 s)** — so
+the two datasets disagree about the **TTFT ordering itself**, not merely about which metric to
+rank on. That is a stronger divergence than a metric-choice disagreement and it is worth
+stating precisely rather than glossing.
+
+</Tab>
+
+</Tabs>
+
+<Callout type="error" title="The transferable finding">
+**Ranking on a short probe and then deploying your own workload picks the wrong region.**
+
+Which is why the table in the code is labelled as a measurement of *our* prompt, why every cell
+carries its own `prompt_chars`, and why a re-measurement on a materially different prompt size
+**refuses to diff itself** against the recorded table.
+</Callout>
+
+## The table is re-derivable, not merely assertable
+
+```bash
+python3 -m agents.mantle                          # print the recorded table; spends nothing
+
+AGENTCORE_MANTLE_ALLOW_MEASURE=1 \
+  python3 -m agents.mantle --measure --dry-run    # call plan + spend upper bound, then stop
+
+AGENTCORE_MANTLE_ALLOW_MEASURE=1 \
+  python3 -m agents.mantle --measure              # re-run the matrix and diff it
+```
+
+Re-measuring is **double-gated** on the flag *and* the env var, because it is 24 billed
+inference calls on a 31K-character prompt. Several guards are worth naming:
+
+| Guard | Behaviour |
+|---|---|
+| `--dry-run` spend estimate | An explicit **UPPER BOUND** whose basis is stated: input estimated at chars/4 (there is no `CountTokens` API on the mantle endpoint), priced at the 1.25x cache-write rate, output priced at the **full** token cap that no measured call reached (recorded p50 output was 785–1020). |
+| `--trials` below 3 | **Refused.** A cell below `MIN_TRIALS_FOR_A_RANKING` is dropped by `measured_region_preference`, so a smaller run would spend money and change nothing. |
+| An unpriced model id | **Refused.** `rates_for` raises rather than guessing a rate. |
+| `prompt_comparability` | A re-measurement more than **±25%** off 31,343 chars is labelled **NOT comparable** and reported as a new experiment rather than a diff — because the ranking depends on the TTFT-vs-throughput balance, which is a function of prompt and reply size. |
+| `DRIFT_TOLERANCE` | 25%, deliberately generous: n=3 medians are noisy and the recorded min/max spreads span 1.3x **within** a single cell. |
+| `STALE_AFTER_DAYS` | 90. Past that the renderer prints a staleness warning with the table's age in days. |
+| Regions enumerated from `MANTLE_REGIONS` | Not from the recorded matrix — so a newly available region shows up as a `new` row instead of being invisible. |
+
+The diff reports each cell as `unchanged` / `faster` / `slower` / `new` / `failed` / `missing`,
+and **separately** reports whether the *ranking* moved — an individual cell drifting 10% matters
+much less than us-east-1 losing first place. When the ranking changes, the printed advisory says
+to update `MEASURED_SYNTHESIS_LATENCY` **with the new n and date**, not to paper over it with
+`BEDROCK_MANTLE_REGION`.
+
+<Callout type="info" title="The probe prompt is rebuilt, not stubbed">
+`build_probe_prompt` runs the real eight-way fan-out and assembles today's synthesis prompt,
+because the narratives **are** the prompt: substituting stubs produces a few-hundred-character
+prompt whose ranking says nothing about production. Under `MOCK_MODE=1` the fan-out returns
+canned analyses, the prompt is much shorter, and `prompt_comparability` catches it — the diff
+labels itself not comparable rather than silently comparing two different experiments.
+</Callout>
+
+## Specialist regions are a separate question, and were not measured this way
+
+Everything above is about the `bedrock-mantle` endpoint. The eight Claude specialists go through
+Bedrock Converse with a `global.*` inference profile, where region selection is a different
+problem:
+
+- `agents/models.py:resolve_region` reads `AWS_REGION` (then `AWS_DEFAULT_REGION`, then
+  us-east-1) and governs the Converse client only.
+- The `global.*` prefix means those calls are **not** pinned to one region's capacity in the way
+  a mantle call is — and it costs exactly **1/1.10** of the `us.*` prefix for identical
+  behaviour. [Cost levers](/docs/cost/levers#lever-1-global-instead-of-us--exactly-909).
+- **No model x region matrix was measured for the Claude specialists.** The 42-run benchmark ran
+  entirely in us-east-1, and nothing on this site says what us-west-2 would have measured.
+
+One older, narrower measurement exists and is worth keeping only for the shape of its result: on
+a real fraud prompt with `maxTokens=120` in us-east-1, **Haiku 4.5 1848 ms, Sonnet 4.6 4481 ms,
+Opus 4.8 2990 ms, Sonnet 5 @effort=low 2393 ms, Opus 5 @effort=low 2924 ms**. Sonnet 4.6 is
+*slower* than Opus 4.8 — **latency does not track price.** That is a 120-token probe, so by this
+page's own argument it is a TTFT-dominated measurement and must not be used to predict a
+1,500-token specialist analysis.
