@@ -147,6 +147,25 @@ def medium_payload(**overrides) -> dict:
 # ===========================================================================
 
 
+
+@pytest.fixture(autouse=True)
+def claude_specialists(monkeypatch):
+    """Pin the specialists to a Claude id for this module.
+
+    The shipped assignment is GPT-5.6 Luna on bedrock-mantle (measured 4.5x faster and
+    6.8x cheaper at identical band agreement). These tests assert properties of the
+    CONVERSE path -- that ``_build_agent`` is called fresh per invocation, that eight
+    Strands agents run concurrently, that a cachePoint report is carried -- so they must
+    name a Converse model rather than inherit whatever the assignment happens to be.
+    The mantle path has its own coverage in tests/test_fanout_mantle.py.
+    """
+    import agents.fanout as fanout_module
+
+    monkeypatch.setattr(
+        fanout_module, "model_for", lambda domain: "global.anthropic.claude-sonnet-5"
+    )
+
+
 def test_exactly_twenty_one_fields():
     assert len(Adjudication.model_fields) == 21
     assert len(SPEC_ORDER) == 21

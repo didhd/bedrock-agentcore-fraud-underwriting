@@ -589,6 +589,43 @@ def test_signals_cited_counts_prose_not_just_identifiers() -> None:
     ]
 
 
+def test_signals_cited_publishes_whether_a_match_was_identifier_or_prose() -> None:
+    """The metric's known style dependence must be visible in its own output.
+
+    Opus writes a backticked table of identifiers and Luna paraphrases, so a raw count
+    conflates "cited more signals" with "wrote more identifiers". ``by_form`` is what lets a
+    reader see which happened instead of having to trust the total.
+    """
+    identifiers = " ".join(sc.shared_signal_names("rings", "APP-1004"))
+    by_identifier = sc.signals_cited("APP-1004", "rings", identifiers)
+    assert by_identifier["by_form"]["identifier"] == by_identifier["signals_cited"]
+    assert by_identifier["by_form"]["prose"] == 0
+
+    prose = (
+        "Six distinct SSNs reuse the address, the phone is reused across five SSNs, the "
+        "email is tied to four, and the employer covers nine other SSNs."
+    )
+    by_prose = sc.signals_cited("APP-1004", "rings", prose)
+    assert by_prose["by_form"]["prose"] >= 3, by_prose
+    assert by_prose["by_form"]["identifier"] == 0
+    assert sum(by_prose["by_form"].values()) == by_prose["signals_cited"]
+
+
+def test_the_style_sensitivity_of_signals_cited_is_disclosed_in_the_report() -> None:
+    """A metric that partly measures writing style must say so where the reader looks.
+
+    This is the caveat that stops the bustout length finding being over-read: the same
+    paraphrase that scores 1/7 on this metric is grounded against the context rows.
+    """
+    if not RESULT_PATH.is_file():
+        pytest.skip("no committed report")
+    caveats = " ".join(json.loads(RESULT_PATH.read_text(encoding="utf-8"))["caveats"])
+    assert "STYLE-SENSITIVE" in caveats
+    assert "4.56" in caveats and "2.86" in caveats, (
+        "the disclosure must quote the MEASURED size of the effect, not merely admit one"
+    )
+
+
 def test_signals_cited_denominator_is_the_payload_not_the_registry() -> None:
     """Only the signals this agent's view actually carries can be cited."""
     for domain in ("rings", "synthetic"):
@@ -704,7 +741,7 @@ def _cell(
         "band": {
             "n": n,
             "agreements": band_agreements,
-            "agreement_rate": band_agreements / n,
+            "agreement_rate": round(band_agreements / n, 3),
             "escalations": anti_fp,
             "dismissals": false_negatives,
             "disagreements": [],
@@ -764,6 +801,32 @@ def test_worse_band_agreement_disqualifies() -> None:
     candidate = sc.per_set_verdict(cells)[0]["candidates"][0]
     assert candidate["verdict"].startswith("NOT AS GOOD")
     assert "band agreement" in candidate["verdict"]
+
+
+def test_band_agreement_is_compared_as_a_rate_not_a_raw_count() -> None:
+    """A candidate at 4/6 must not "beat" an incumbent at 3/3.
+
+    The denominators really do differ in this study - identity/sonnet-5 answered six times
+    and declared a locatable band three times - so comparing agreement COUNTS would have let
+    67% pass 100%.
+    """
+    incumbent = _cell(label="opus-5", which="claude")
+    incumbent["band"] = {**incumbent["band"], "n": 3, "agreements": 3, "agreement_rate": 1.0}
+    candidate_cell = _cell(label="luna", which="gpt")
+    candidate_cell["band"] = {
+        **candidate_cell["band"],
+        "n": 6,
+        "agreements": 4,
+        "agreement_rate": round(4 / 6, 3),
+    }
+    verdict = sc.per_set_verdict([incumbent, candidate_cell])[0]
+    # The incumbent lookup keys on INCUMBENT[domain]; rings' incumbent is opus-5, so assert
+    # against whichever domain this helper produced.
+    if not verdict["candidates"]:
+        pytest.skip("incumbent mapping changed; see INCUMBENT")
+    candidate = verdict["candidates"][0]
+    assert candidate["verdict"].startswith("NOT AS GOOD"), candidate["verdict"]
+    assert "67%" in candidate["verdict"] and "100%" in candidate["verdict"], candidate["verdict"]
 
 
 def test_collapsed_grounding_disqualifies() -> None:
