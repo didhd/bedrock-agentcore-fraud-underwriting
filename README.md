@@ -57,9 +57,11 @@ drives risk**.
 
 ## See it run
 
-![Live adjudication on Amazon Bedrock](media/demo.gif)
+[![Live adjudication on Amazon Bedrock — click to play](media/demo-poster.png)](media/demo.mp4)
 
-Full recording: [`media/demo.mp4`](media/demo.mp4) — a real run against live Bedrock, not a mockup.
+**▶ [media/demo.mp4](media/demo.mp4)** — a real run against live Bedrock, recorded at
+1920x1080. Not a mockup and not a reconstruction: the latencies, token counts and costs
+on screen are the ones that run produced.
 
 ## Measured, live on Amazon Bedrock
 
