@@ -4,6 +4,12 @@ What runs on what, and the measurement behind each choice. Every number below wa
 measured by this repo unless it is explicitly marked THIRD-PARTY or PROJECTION. Every
 latency and cost carries its sample count. Nothing here is nominal or extrapolated.
 
+**If you read one section, read
+[Should the specialists be GPT too?](#should-the-specialists-be-gpt-too-the-answer-is-not-yet).**
+GPT-5.6 measured 4–8x faster and 3–12x cheaper than the Claude specialists on the real
+fraud prompts, and we are **not** taking it yet. That section says why, what the hold
+costs (a projected 47.8%), and the single experiment that would change the answer.
+
 Encoded in code at `agents/mantle.py` (`MEASURED_SYNTHESIS_LATENCY`) and
 `agents/models.py` (`SPECIALIST_MODELS`, `TIER_RATIONALE`, `MAX_TOKENS_BY_AGENT`,
 `DEFAULT_SYNTHESIZER_MODEL`), and asserted by `tests/test_models.py`,
@@ -18,10 +24,12 @@ silently.
 | identity, employment, income, bustout, **synthetic**, **rings** | Claude Sonnet 5 | 4096 | Bedrock Converse | mixed — see the table below |
 | master synthesizer | **GPT-5.6 Luna** | 4096 | `bedrock-mantle` | MEASUREMENT (`us-east-1`) |
 
-**All eight specialists stay on Claude.** They *are* the fraud analysis. No accuracy
-comparison has been run against another model family on this task, so there is no basis for
-moving them, and "it was faster" is not a basis. What was re-derived is which *Claude* each
-one gets — from measurement, not from a reading of the prompts.
+**All eight specialists stay on Claude — and that is now a decision, not a default.**
+A cross-family comparison *was* run (2026-07-28, 120 blind-judged analyses, two judges,
+$16.89 measured spend), it found GPT-5.6 **4–8x faster and 3–12x cheaper**, and the
+specialists are held anyway. The reason is one deterministic measurement, and the price of
+holding is stated below rather than left implied. See
+[Should the specialists be GPT too?](#should-the-specialists-be-gpt-too-the-answer-is-not-yet).
 
 **There is no Opus 5 agent.** `synthetic` and `rings` were on Opus 5 until 2026-07-28
 because a reading of the customer's prompts said fraud rings needs heavy multi-signal
@@ -39,17 +47,22 @@ Three evidence grades, and the difference between them is the point:
 - **UNPROVEN** — no comparison exists for this agent. Nothing is inferred from its
   neighbours.
 
-| Agent | Model | Grade | Quality-swept? | p50 | p95 | $/call | Slowest agent in N of 42 |
-|---|---|---|---|---|---|---|---|
-| rings | Sonnet 5 | MEASUREMENT | yes, n=5 apps | 22.05 s (n=5) | — | $0.0241 | **25** |
-| synthetic | Sonnet 5 | MEASUREMENT | yes, n=5 apps | 13.54 s (n=5) | — | $0.0194 | 1 |
-| bustout | Sonnet 5 | **HELD** | yes, n=3 apps | 14.46 s (n=42) | 35.71 s | $0.0170 | 7 |
-| identity | Sonnet 5 | **HELD** | yes, n=3 apps | 12.56 s (n=42) | 33.40 s | $0.0173 | 4 |
-| income | Sonnet 5 | **UNPROVEN** | **no** | 8.09 s (n=42) | 31.44 s | $0.0154 | 5 |
-| employment | Sonnet 5 | **UNPROVEN** | **no** | 7.48 s (n=42) | 17.64 s | $0.0102 | 0 |
-| dealer | Haiku 4.5 | MEASUREMENT | **no** | 6.56 s (n=42) | 14.56 s | $0.0054 | 0 |
-| straw | Haiku 4.5 | MEASUREMENT | **no** | 4.40 s (n=42) | 8.76 s | $0.0035 | 0 |
-| synthesizer | GPT-5.6 Luna | MEASUREMENT | **no** | 4.20 s (n=42) | 5.59 s | $0.0106 | n/a |
+| Agent | Model | Grade | Claude-tier swept? | GPT-swept? | p50 | p95 | $/call | Slowest agent in N of 42 |
+|---|---|---|---|---|---|---|---|---|
+| rings | Sonnet 5 | MEASUREMENT | yes, n=5 apps | yes, n=6 | 22.05 s (n=5) | — | $0.0241 | **25** |
+| synthetic | Sonnet 5 | MEASUREMENT | yes, n=5 apps | yes, n=6 | 13.54 s (n=5) | — | $0.0194 | 1 |
+| bustout | Sonnet 5 | **HELD** | yes, n=3 apps | yes, n=6 | 14.46 s (n=42) | 35.71 s | $0.0170 | 7 |
+| identity | Sonnet 5 | **HELD** | yes, n=3 apps | yes, n=6 | 12.56 s (n=42) | 33.40 s | $0.0173 | 4 |
+| income | Sonnet 5 | **UNPROVEN** | **no** | **no** | 8.09 s (n=42) | 31.44 s | $0.0154 | 5 |
+| employment | Sonnet 5 | **UNPROVEN** | **no** | **no** | 7.48 s (n=42) | 17.64 s | $0.0102 | 0 |
+| dealer | Haiku 4.5 | MEASUREMENT | **no** | **no** | 6.56 s (n=42) | 14.56 s | $0.0054 | 0 |
+| straw | Haiku 4.5 | MEASUREMENT | **no** | **no** | 4.40 s (n=42) | 8.76 s | $0.0035 | 0 |
+| synthesizer | GPT-5.6 Luna | MEASUREMENT | **no** | n/a — it *is* GPT | 4.20 s (n=42) | 5.59 s | $0.0106 | n/a |
+
+The two sweep columns are deliberately separate. An agent can be compared *within* Claude
+and never compared against another family, and **four of the eight are in exactly that
+state.** Conflating the two is how a within-family result gets quoted as coverage of a
+cross-family question.
 
 n=42 rows come from the 42-run pipeline benchmark
 (`evals/results/pipeline_14x3_us-east-1.json`). The two n=5 rows come from the tier sweep
@@ -60,6 +73,149 @@ Note `dealer` and `straw` are graded MEASUREMENT but were **never quality-swept*
 case is latency and cost at n=42, plus the scope their own prompts define. No blind judge
 has compared their analyses against a larger model. That is a real gap, and it is stated
 rather than papered over with the word "right-sized".
+
+## Should the specialists be GPT too? The answer is NOT YET
+
+The synthesizer already runs on GPT-5.6 Luna, on a measurement. The obvious next question
+is whether the eight specialists should follow it. **This was measured, and the answer is
+no — for now, and for two specific reasons.** It is the section to read first, because it
+is the one where the evidence and the deadline pull in opposite directions.
+
+**What was measured.** `evals/results/set_comparison.json`, 2026-07-28, `us-east-1`:
+4 agents (rings, synthetic, bustout, identity) x **6 applications** x 5 models
+(Claude Opus 5, Sonnet 5; GPT-5.6 Luna, Terra, Sol) = **120 analyses**. Model identifiers
+stripped before judging, order shuffled under seed 20260728. **$16.8869 measured spend**,
+$14.1343 of it on judging.
+
+**Two judges, biased in opposite directions.** This comparison cannot be judged by one
+model without the judge's identity deciding it — the prior tier study measured its Opus 5
+judge preferring its own family by **+0.31 calibration / +0.78 substance** while the
+band-agreement margin it could not influence moved only **−0.026**. So both were used:
+Claude Opus 5 (*also a candidate* — the strongest form of the conflict) and GPT-5.5 (same
+family as the candidates, not itself one). An axis where both agree has survived opposite
+biases. Nothing is "bias-corrected"; where they disagree, the axis is reported
+**NOT ESTABLISHED** and no recommendation rests on it.
+
+### The case for GPT is strong, and none of it is disputed
+
+| Axis | Claude | GPT | Notes |
+|---|---|---|---|
+| Wall clock p50, pooled | 18.88 s | **4.73 s** | rings: Luna 3.20 s vs Opus 5's 26.22 s — **8.2x** |
+| $/call p50, pooled | $0.03125 | **$0.01066** | rings: $0.0050 vs $0.0583 — **11.7x** |
+| Output tokens p50 | 1422 | 288 | GPT writes a fifth of the words |
+| Output-contract clean rows | 17/48 | **72/72** | deterministic, `agents.output_contract.check` |
+| Judged substance, pooled | — | **+0.398 / +0.684** | **better on BOTH judges** |
+
+Two of those deserve emphasis because they are the opposite of what "cheaper and shorter"
+predicts:
+
+- **The Claude judge scored GPT higher on substance** — −0.398 *against its own family*,
+  i.e. against its own measured preference. That is much harder to dismiss than a
+  single-judge win.
+- **The length gap is padding, not lost evidence.** Paired on identical payloads, Opus
+  writes **2.83x** Luna's characters on rings while naming **1.00x** the payload's signals,
+  and **3.44x** on identity for **1.17x**. Same band in **23 of 24** paired comparisons.
+  This is the same finding the Claude-only tier work reached (1.76x characters for 1.71x
+  evidence). **Brevity is not the defect here** — which matters, because "GPT writes a
+  fifth of the words on a fraud product" was the intuitive objection, and it does not
+  survive pairing.
+
+### What decided it: `_context` grounding
+
+Every specialist prompt requires signals to be validated against the paired `*_context`
+columns — `rings_agent_prompt.txt` says *"You MUST validate signals using relevant context
+(columns that end in `_context`)"*. This measures the fraction of the signals in view that
+the analysis actually validates that way. **No judge is involved.**
+
+| Agent | Opus 5 | Sonnet 5 | Luna | Terra | Sol |
+|---|---|---|---|---|---|
+| rings | 0.875 | 0.792 | 0.625 | 0.625 | 0.583 |
+| identity | 0.738 | 0.476 | 0.357 | 0.381 | 0.238 |
+| bustout | 0.833 | 0.524 | 0.286 | 0.310 | 0.215 |
+| synthetic | 0.517 | 0.383 | **0.150** | 0.350 | 0.167 |
+| **Pooled** | **Claude 0.642** | | **GPT 0.357** | | |
+
+**GPT is lower on 4 of 4 agents against both Claude incumbents.** That is not one bad cell
+dragging an average, and it is the axis where the customer's prompt states a requirement
+and GPT measurably meets it less often. It is invisible in the band, the latency and the
+cost — which is exactly why it decides. On `synthetic` it collapses to 0.150 against Opus's
+0.517, which is below half the incumbent and disqualifying on the study's own rule.
+
+### And the coverage is half the fan-out
+
+**4 of 8 agents were swept.** `dealer`, `straw`, `employment` and `income` were never run
+on GPT at all. Worse for the false-positive question: only **2 of the customer's 5
+anti-false-positive fixtures** exercise the swept four — **APP-1006, APP-1007 and APP-1008
+target employment, dealer and income** and were never run on GPT.
+
+That matters because the study contains a live demonstration of what an unswept agent
+could hide. **GPT-5.6 Sol on identity escalated BOTH anti-false-positive fixtures**
+(APP-1009, APP-1010) against the incumbent's zero, **dismissed** a corroborated application
+(APP-1014), and banded 2/6 against Sonnet's 3/3 — at $0.0269/call, **4x Luna's price**.
+Paying more did not buy calibration.
+
+### Per-agent verdicts at n=6
+
+n=6 clears the study's own bar for a band claim (5), so these verdicts *are* claimable.
+"As good" means the candidate lost on none of: band agreement, escalation on an
+anti-false-positive fixture, dismissal of a corroborated application, or grounded fraction
+below half the incumbent's.
+
+| Agent | Luna | Terra | Sol |
+|---|---|---|---|
+| rings | as good | as good | **not** — band 4/6 vs 5/6 |
+| bustout | as good | as good | **not** — grounding |
+| identity | as good | **not** — band 4/5, one analysis declared no band | **not** — 2 anti-FP false positives, 1 false negative, band 2/6 |
+| synthetic | **not** — grounded 0.150 vs 0.517 | as good | **not** — grounded 0.100 vs 0.517 |
+
+**Luna is "as good" on 3 of 4 and is still not taken.** That is the honest shape of this
+recommendation: the per-agent evidence would support moving rings, bustout and identity to
+Luna today. It is not being done because the grounding gap is real on all three, and
+because moving three of eight leaves a split fan-out whose remaining agents have *less*
+evidence than the ones that moved.
+
+### What holding costs — and it is not free
+
+Stated because a hold with an unstated price is not a decision. Both figures are
+**PROJECTIONS** from the measured per-agent tokens (`projected_cost_if_gpt_specialists`),
+not benchmarks:
+
+| | Hold on Claude | Move the four swept agents to Luna |
+|---|---|---|
+| $/adjudication (projected, 2026-07-28 rates) | $0.1247 | **$0.0651** |
+| Delta | — | **−$0.0596 (−47.8%)** |
+| Fan-out floor lower bound | 22.05 s (rings) | **8.09 s (income)** |
+
+We are declining a projected **47.8% cost reduction** and roughly **14 s of fan-out floor**.
+Note what the second column exposes: after such a move the binding agent becomes `income`,
+**which has no quality evidence of any kind** — so the agent with the least evidence would
+set the pipeline's latency. That is an argument for sweeping it, and a second argument
+against a partial migration.
+
+The floor figures are **lower bounds**, not predicted end-to-ends: fan-out is bounded by a
+per-run *maximum*, which per-agent medians cannot reconstruct.
+
+### What would change this answer
+
+1. **One prompt-engineering attempt on grounding.** Instruct the model to quote the paired
+   `_context` row it validated against, then re-measure `grounded_fraction`. The fix may be
+   cheap, and it is the only thing standing between this evidence and a migration.
+2. **Extend the sweep to the other four agents**, including APP-1006/1007/1008 so the
+   anti-false-positive result covers the whole fan-out.
+
+**If grounding closes, the latency and cost case is already made and this assignment should
+change.** Nothing here says GPT is worse at the fraud judgement — on band agreement the two
+families are within one case on every swept agent except identity/Sol, and one case is 17
+points at n=6. It says the evidence does not yet cover enough of the fan-out to move it
+before a customer milestone, plus one measured compliance gap.
+
+**One asymmetry that cannot be removed and rides along with every GPT number here:**
+GPT-5.x is not on Bedrock Converse, so a GPT specialist receives the prompt concatenated
+into the user turn while a Claude specialist receives it as a cached system prompt.
+
+**The plumbing is not the blocker.** `agents/fanout.py` routes a GPT specialist today
+(`transport_for('openai.gpt-5.6-luna') == 'bedrock-mantle'`), so reversing this decision is
+one value in `SPECIALIST_MODELS`. The hold is a measurement result, not a missing code path.
 
 ### rings: Opus 5 → Sonnet 5
 
@@ -150,23 +306,31 @@ the eight.
 The customer's calibration bar is *not* met by any tier on two fixtures, and this is the
 finding most likely to matter to them:
 
-- **APP-1014 rings**: all three models declared POSSIBLE RISK against a pinned LOW RISK
-  (RNG-020). All three judged FalsePositive.
-- **APP-1004 bustout**: all three over-escalated to HIGH RISK against a pinned POSSIBLE
-  RISK (BST-020).
+- **APP-1014 rings**: pinned LOW RISK (RNG-020). **All five models across both families
+  declared POSSIBLE RISK — 0 of 5 correct.**
+- **APP-1004 bustout**: pinned POSSIBLE RISK (BST-020). **All five models across both
+  families over-escalated to HIGH RISK — 0 of 5 correct.**
 
 The judge named the same fault in every case: a second alert firing off **the same
-underlying behaviour** treated as independent corroboration. Calibration scores were 1
-(Haiku) / 2 (Sonnet) / 2 (Opus) — **buying a bigger model does not fix it.** This is a
-prompt-and-guardrail problem against the customer's stated bar that "LOW RISK should be the
-most common outcome" and "alert volume alone does NOT indicate risk", and no model
-selection buys it.
+underlying behaviour** treated as independent corroboration. The cross-family sweep
+upgrades this from "no *tier* fixes it" to **"no model choice fixes it"** — Claude Opus 5,
+Claude Sonnet 5, GPT-5.6 Luna, Terra and Sol all get both wrong, and every one of them gets
+them wrong *the same way*. That is the signature of a shared prompt defect, not five
+independent mistakes.
 
-One more fidelity detail an engineer will check first: **all 24 bustout and rings analyses,
-on all three models, invented a title their prompt does not define.** Their prompts say
-only "Return only the final analysis" — no title, no length cap, no emoji ban, no
-alert-number ban. Universal across models, so no swap fixes it; it needs a prompt change
-or a post-processing strip.
+**This is the most important thing to tell the customer before Friday**, because it is the
+only quality problem in the whole study that no model selection addresses. It is a
+prompt-and-guardrail problem against her own stated bar — "LOW RISK should be the most
+common outcome", "alert volume alone does NOT indicate risk" — and the fix is a rule that
+says *alerts arising from one underlying behaviour count as one signal*. Buying a bigger
+model, or switching families, does not buy it.
+
+One more fidelity detail an engineer will check first: **all 24 bustout and rings analyses
+on the Claude models invented a title their prompt does not define** (23 of the Claude
+set's 31 contract violations). Their prompts say only "Return only the final analysis" — no
+title, no length cap, no emoji ban, no alert-number ban. Unlike the two calibration
+failures this one **is** model-sensitive — the GPT set is 72/72 clean and invents no titles
+— but the fix is still the prompt, which should say what heading it wants.
 
 ## The `max_tokens` story: a cap is not a brevity instrument
 
@@ -326,6 +490,21 @@ AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.bench --pipeline --repetitions 3
 end-to-end p50/p95, per-agent latency, cost per adjudication and verdict stability under
 the assignment above. Until it runs, `$0.1247` is a projection and this page says so.
 
+### The projection for the assignment we did NOT take
+
+For completeness, since the hold is the expensive option: moving the four cross-family-swept
+agents to GPT-5.6 Luna, priced at **Luna's own measured tokens** from the set comparison,
+projects **$0.0651** per adjudication against the held assignment's **$0.1247** — a
+**47.8%** reduction. `agents/models.py:projected_cost_if_gpt_specialists` computes it and
+labels itself `PROJECTION OF A REJECTED COUNTERFACTUAL`, which is a weaker object than the
+projection above: **no benchmark run would confirm it without changing the assignment
+first.**
+
+It also *understates* the GPT case, deliberately. The other four agents are priced at
+Claude in that figure, because there is no measured GPT token count for them and inventing
+one would be exactly the fabrication this page exists to avoid. A full-fan-out GPT figure
+would be lower and is **not offered**.
+
 ### What latency is claimable, and what is not
 
 **Claimable, paired on the same five applications:** rings on Sonnet 5 ran 22.05 s p50
@@ -367,9 +546,48 @@ Ranked by how likely a customer engineer is to ask:
    their output.** The recommended verbosity fix, entirely unmeasured, and a change to the
    customer's verbatim artifacts.
 7. **Luna's fraud reasoning versus a Claude synthesizer.** 42 runs validated 21 keys every
-   time, but no blind judge has scored Luna against Claude across the fixture set.
+   time, but no blind judge has scored Luna against Claude across the fixture set. The
+   specialist set comparison is mild corroboration that Luna reasons acceptably on this
+   customer's fraud material — but it is not a synthesizer result: that prompt is 31,343
+   characters against a specialist's ~7,500 and emits a 21-key object rather than prose.
+8. **Whether a grounding instruction closes GPT's `_context` gap.** The single experiment
+   that would unlock a 47.8% projected cost reduction. Unmeasured.
+9. **GPT on dealer, straw, employment and income.** Entirely unmeasured, and three of the
+   five anti-false-positive fixtures live there.
 
-One model, in one place, was chosen on a cross-family measurement: the synthesizer.
+## What the customer has to decide
+
+Four things are hers, not ours. Each is surfaced rather than silently resolved.
+
+1. **Two of her eight prompts have no character cap.** `bustout_agent_prompt.txt` and
+   `rings_agent_prompt.txt` say only "Return only the final analysis" — no length rule, no
+   title, no emoji ban, no alert-number ban, where the other six say "max 4000 characters".
+   Measured consequence: those two write **1331 output tokens p50** against **381** for the
+   capped six, and **30.1%** of their calls exceed 4000 characters against **3.6%**. They
+   are also the only two agents ever measured to truncate, and the source of all 23
+   invented titles. Adding the missing sentence is a one-line change to two verbatim
+   customer artifacts — **her decision, and NOT MEASURED.** It is the recommendation, not a
+   result.
+2. **The enum conflict between her two artifacts.** Her process-guide PDF uses a mid-band of
+   `POSSIBLE RISK` and a four-value recommendation enum:
+   `APPROVE WITH STIPULATIONS / MANUAL REVIEW / APPROVE / DECLINE`.
+   Her master prompt file uses `MEDIUM RISK` and three values:
+   `APPROVE / REVIEW AND APPLY STIPULATIONS / DECLINE`.
+   **The prompt file is the executable artifact and wins in this repo**, because it is what
+   the model actually receives — but the two documents disagree and only she can settle
+   which is canonical.
+   Anything downstream that keys off the band string (a queue router, a dashboard, an
+   audit trail) will be wrong for one of the two.
+3. **The calibration rule that no model fixes.** APP-1014 rings and APP-1004 bustout, above.
+   The fix is a sentence in her prompts stating that alerts arising from one underlying
+   behaviour count as one signal. We can draft it; she owns the artifact.
+4. **Whether to spend one more eval cycle before committing the specialists.** The
+   grounding experiment plus a four-agent sweep extension is what stands between the
+   current assignment and a projected 47.8% cost reduction with a ~14 s faster fan-out
+   floor.
+
+One model, in one place, was chosen on a cross-family measurement: the synthesizer. The
+specialists were *offered* the same measurement and declined it, above.
 
 ## Why the synthesizer is not Claude
 
@@ -602,3 +820,14 @@ time.
   shows the target is reachable and is not a distribution.
 - Any figure for GPT-5.5 or GPT-5.4. They are priced and region-mapped in the code but
   were never measured on this prompt, so they carry no latency cell at all.
+- **That GPT-5.6 is worse at the fraud judgement.** It is not what the set comparison
+  found. On band agreement the two families are within one case of each other on every
+  swept agent except identity/Sol, and one case is 17 points at n=6. The specialists are
+  held on a measured `_context` grounding gap and on half the fan-out being unswept — not
+  on a finding that GPT reasons less well.
+- **Any p95 from the set comparison.** 6 applications per cell supports a p50 and a band
+  rate; `evals.bench.summarize_values` refuses a p95 below 20 samples and the report
+  records the refusal rather than a number.
+- **That the four unswept agents would behave like the four swept ones on GPT.** No
+  evidence either way exists for `dealer`, `straw`, `employment` or `income`, and the three
+  anti-false-positive fixtures that target them were never run on GPT.

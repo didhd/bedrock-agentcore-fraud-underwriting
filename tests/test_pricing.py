@@ -671,6 +671,16 @@ def test_every_role_has_a_recorded_tier_rationale() -> None:
         assert f"n={m.QUALITY_SWEPT_AGENTS[role]}" in rationale, role
         assert m.QUALITY_SWEPT_AGENTS[role] < m.MIN_APPLICATIONS_FOR_A_BAND_CLAIM, role
 
+    # Every specialist is on a CLAUDE id, and that is now a decision rather than a
+    # default: the cross-family study measured three GPT-5.6 variants at 4-8x the speed
+    # and a third of the cost and they were refused. Asserted here because the whole
+    # assignment turning over to another family is precisely the change that must not
+    # happen without the evidence moving first.
+    for role in m.DOMAINS:
+        assert m.supports_prompt_caching(m.model_for(role)), role
+    # The synthesizer is the one role that IS on GPT, and on its own measurement.
+    assert not m.supports_prompt_caching(m.model_for("synthesizer"))
+
 
 def test_a_rationale_cites_a_measurement_that_exists_on_disk() -> None:
     """A rationale must point at something real, and the two kinds are checked differently.
@@ -724,6 +734,18 @@ def test_a_rationale_cites_a_measurement_that_exists_on_disk() -> None:
     for domain in ("income", "employment"):
         assert "never quality-swept" in m.rationale_for(domain), domain
         assert "tier_quality.json" not in m.rationale_for(domain), domain
+
+    # Same rule for the CROSS-FAMILY study, which covered only four of the eight. An agent
+    # outside it may not cite it, in either direction - "GPT was not tried here" and "GPT
+    # lost here" are different statements and only one of them is true for these four.
+    set_comparison = repo_root / "evals" / "results" / "set_comparison.json"
+    if set_comparison.is_file():
+        swept = set(json.loads(set_comparison.read_text())["run"]["domains"])
+        for domain in set(m.DOMAINS) - swept:
+            assert "set_comparison.json" not in m.rationale_for(domain), domain
+            assert "NOT cross-family swept" in m.rationale_for(domain), domain
+        for domain in swept:
+            assert "set_comparison.json" in m.rationale_for(domain), domain
 
 
 # ---------------------------------------------------------------------------

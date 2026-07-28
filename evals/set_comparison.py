@@ -873,34 +873,57 @@ def shared_signal_names(domain: str, app: str) -> tuple[str, ...]:
 
 
 def signals_cited(app: str, domain: str, text: str) -> dict[str, Any]:
-    """How many of THIS view's signals the analysis names, by name or in prose.
+    """How many of THIS view's signals the analysis names, by identifier or in prose.
 
-    Deliberately narrower than ``evidence_density``, which counts any snake_case token
-    and so rewards a model that happens to write in identifiers. Here the denominator is
-    the payload's own signal list, and a signal counts as cited if its identifier appears
-    or if every word of its de-underscored name appears - so "six distinct SSNs are linked
-    to the address" scores ``address_reuse_distinct_ssn_count`` for a model that writes
-    prose, and a model that writes identifiers gets no bonus for style.
+    Deliberately narrower than ``evidence_density``, which counts any snake_case token and
+    so rewards a model that happens to write in identifiers. Here the denominator is the
+    payload's own signal list, and a signal counts as cited if its identifier appears
+    verbatim OR if every content word of its de-underscored name appears - so "six distinct
+    SSNs are linked to the address" scores ``address_reuse_distinct_ssn_count`` for a model
+    writing prose.
 
-    This is the measure the length question turns on: if GPT's shorter analysis cites
-    fewer signals it is dropping evidence, and if it cites the same number it is dropping
-    words.
+    THIS MEASURE IS STYLE-SENSITIVE AND THE BIAS IS REPORTED, NOT TUNED AWAY. The word-match
+    branch requires EVERY content word, so a paraphrase that renames a token is missed:
+    Luna's APP-1004 bustout analysis discusses both application-velocity counts as "two SSN
+    applications in both the last 7 and 30 days", which never contains the token "apps", so
+    ``ssn_apps_last_7d`` scores as uncited. Opus, which writes a backticked table of every
+    identifier, scores it. The consequence is measured rather than assumed: ``by_form`` below
+    splits identifier matches from prose matches per analysis, and pooled over the 120
+    committed analyses Claude takes 4.56 signals per analysis to GPT's 2.86 while a looser
+    stemming variant moves GPT to 3.60 and Claude only to 4.65 - i.e. roughly 0.7 of the ~1.7
+    gap on this metric is GPT's paraphrasing, not missing evidence.
+
+    A looser matcher was tried and rejected, which is why the strict one stands: stemming
+    "apps" to match "applications" also collapses ``ssn_apps_last_7d`` and
+    ``ssn_apps_last_30d`` onto the same words, so the only way to keep them distinct is to
+    require their numeric discriminators - and that reintroduces the same style dependence at
+    a different place. Rather than iterate a matcher until it produced the preferred answer,
+    the metric is kept simple, its bias is stated here and in the report's caveats, and the
+    length verdict is read against the two style-free measures instead: ``grounded_ratio``
+    (from ``context_grounding``, which counts tokens unique to the ``_context`` row) and the
+    judges' substance scores.
     """
     names = shared_signal_names(domain, app)
     lowered = text.lower()
     cited: list[str] = []
+    by_form = {"identifier": 0, "prose": 0}
     for name in names:
         if name in lowered:
             cited.append(name)
+            by_form["identifier"] += 1
             continue
         words = [w for w in name.split("_") if len(w) > 3 and w not in ("count", "distinct")]
         if words and all(w in lowered for w in words):
             cited.append(name)
+            by_form["prose"] += 1
     return {
         "signals_in_view": len(names),
         "signals_cited": len(cited),
         "cited_fraction": round(len(cited) / len(names), 3) if names else None,
         "cited": cited,
+        # Published so a reader can see whether a cell's score came from writing
+        # identifiers or from describing the signal, which is the metric's known weakness.
+        "by_form": by_form,
     }
 
 
@@ -1337,15 +1360,25 @@ def length_gap(evaluated: Sequence[dict[str, Any]]) -> dict[str, Any]:
     Four ratios, because they can disagree and the disagreement is the answer:
 
       * ``chars_ratio`` - how much longer the Claude analysis is.
-      * ``evidence_ratio`` - distinct numeric facts plus signal identifiers.
-      * ``signals_cited_ratio`` - how many of the payload's OWN signals each names. This
-        is the one that decides the question: a ratio at 1.0 with chars at 4.0 means the
-        extra length carried no extra signal.
+      * ``evidence_ratio`` - distinct numeric facts plus signal identifiers. Also
+        style-sensitive: a backticked identifier table inflates it, so it is reported but
+        not decisive.
+      * ``signals_cited_ratio`` - how many of the payload's OWN signals each names.
       * ``grounded_ratio`` - ``_context`` fields validated, i.e. the instruction the
-        customer cares most about and the one brevity is most likely to sacrifice.
+        customer cares most about and the one brevity is most likely to sacrifice. This is
+        the STYLE-FREE one: ``context_grounding`` counts only tokens unique to the
+        ``_context`` row, which cannot be produced by restating the signals block.
 
     Plus ``band_justified_both``, so a shorter analysis cannot pass by declaring a band
     with no reason attached.
+
+    READ ``grounded_ratio`` FIRST WHERE THE TWO DISAGREE. ``signals_cited_ratio`` partly
+    measures whether a model writes identifiers or prose (see :func:`signals_cited`, which
+    quantifies the effect at roughly 0.7 of a ~1.7-signal gap), and on bustout it is the
+    ratio that swings the wording of ``finding`` the furthest. When it and
+    ``grounded_ratio`` point different ways, the honest reading is that the metrics
+    disagree about a paraphrase, and the judges' substance scores are the tiebreak - not
+    whichever number happens to support the conclusion already preferred.
     """
     pairs: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
     for row in evaluated:
@@ -1557,8 +1590,10 @@ def per_set_verdict(cells: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
          outranks every other axis including cost.
       2. **False negatives** - a dismissed corroborated application. Also disqualifying,
          because it is the expensive error in the other direction.
-      3. **Band agreement** must not be worse than the incumbent's on the same
-         applications.
+      3. **Band agreement RATE** must not be worse than the incumbent's. Compared as a rate
+         rather than a count because the two denominators can differ - a model that declares
+         no band on some applications has fewer band-readable rows - and comparing counts
+         there would let 4/6 pass 3/3.
       4. **Grounding** must not collapse: an analysis that never validates against
          ``_context`` is not doing the job the prompt describes, however well it guesses
          the band.
@@ -1589,6 +1624,11 @@ def per_set_verdict(cells: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
         base_fp = incumbent["anti_false_positive"]["false_positives"]
         base_fn = incumbent["false_negatives"]["count"]
         base_band = incumbent["band"]["agreements"]
+        # RATE, not count. The two cells can have different denominators when one model
+        # declared no locatable band somewhere - identity/sonnet-5 answered 6 times and
+        # declared a band 3 times - and comparing raw counts there would let a candidate at
+        # 4/6 (67%) "beat" an incumbent at 3/3 (100%).
+        base_band_rate = incumbent["band"]["agreement_rate"]
         base_ground = incumbent["measured"]["grounded_fraction_median"] or 0.0
         candidates: list[dict[str, Any]] = []
         for cell in group:
@@ -1609,10 +1649,15 @@ def per_set_verdict(cells: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
                     f"{fn} dismissal(s) of a corroborated application against the "
                     f"incumbent's {base_fn} ({', '.join(cell['false_negatives']['apps'])})"
                 )
-            if band < base_band:
+            band_rate = cell["band"]["agreement_rate"]
+            if (
+                base_band_rate is not None
+                and band_rate is not None
+                and band_rate < base_band_rate
+            ):
                 reasons.append(
-                    f"band agreement {band}/{cell['band']['n']} below the incumbent's "
-                    f"{base_band}/{incumbent['band']['n']}"
+                    f"band agreement {band}/{cell['band']['n']} ({band_rate:.0%}) below the "
+                    f"incumbent's {base_band}/{incumbent['band']['n']} ({base_band_rate:.0%})"
                 )
             # Half the incumbent's grounding is the line: below that the analysis is
             # asserting signal values rather than validating them, which is the one
@@ -1760,6 +1805,17 @@ def build_report(
             f"{len(SWEEP_APPS)} applications per cell. A band-agreement difference of one "
             f"case is {round(100 / len(SWEEP_APPS))} points, so a one-case gap between two "
             "models is inside this sample's resolution by construction.",
+            "signals_cited is STYLE-SENSITIVE and partly measures whether a model writes "
+            "signal identifiers or paraphrases them. Opus writes a backticked table of every "
+            "identifier; Luna writes 'two SSN applications in both the last 7 and 30 days', "
+            "which cites the same two velocity signals without containing the token 'apps'. "
+            "Measured: pooled over these 120 analyses Claude cites 4.56 signals per analysis "
+            "to GPT's 2.86, and a looser stemming matcher moves GPT to 3.60 while moving "
+            "Claude only to 4.65 - so about 0.7 of the ~1.7 gap is paraphrasing rather than "
+            "missing evidence. The looser matcher was rejected because it cannot keep "
+            "ssn_apps_last_7d and ssn_apps_last_30d distinct. Where signals_cited and the "
+            "style-free grounded_fraction disagree, grounded_fraction and the judges' "
+            "substance scores are the reading; this affects the bustout length finding most.",
             "Only 2 of the 5 anti-false-positive fixtures (APP-1009, APP-1010) exercise "
             "the four agents swept here; APP-1006/1007/1008 target employment, dealer and "
             "income, which were not swept. The false-positive finding is therefore narrow "
