@@ -1433,8 +1433,24 @@ def _paired(
     chars = median("chars_ratio")
     signals = median("signals_cited_ratio")
     grounded = median("grounded_ratio")
+    # All three ratios are Claude-over-GPT, so >1 means Claude wrote/cited more. The
+    # Claude-is-longer case is the expected one, but it is not guaranteed - on synthetic,
+    # Opus is already terse - and a finding that ASSUMED it would have printed "the shorter
+    # GPT analysis" about an analysis that was in fact the longer one.
     if chars is None or signals is None:
         finding = "not computable on this pairing"
+    elif chars < 1.0:
+        if signals >= 1.0:
+            finding = (
+                f"GPT IS THE LONGER ONE HERE ({round(1 / chars, 2)}x the characters) and "
+                f"still names no more of the payload's signals ({signals}x in Claude's "
+                f"favour): the extra GPT length is padding, not evidence"
+            )
+        else:
+            finding = (
+                f"GPT IS THE LONGER ONE HERE ({round(1 / chars, 2)}x the characters) and "
+                f"names {round(1 / signals, 2)}x the signals"
+            )
     elif chars > signals * 1.25 and (grounded is None or chars > grounded * 1.25):
         finding = (
             f"PADDING: the Claude analysis is {chars}x longer but names only {signals}x "
@@ -1449,8 +1465,11 @@ def _paired(
         finding = f"length and evidence scale together ({chars}x chars, {signals}x signals)"
     return {
         "scope": domain or "ALL AGENTS POOLED",
-        "longer_claude": claude_label,
-        "shorter_gpt": gpt_label,
+        # Named by family, not by an assumption about which one is longer: the ratios say
+        # which actually was, and on some agents it is not the Claude model.
+        "claude_model": claude_label,
+        "gpt_model": gpt_label,
+        "claude_is_longer": None if chars is None else chars > 1.0,
         "n_paired": len(both),
         "chars_ratio_median": chars,
         "evidence_ratio_median": median("evidence_ratio"),
@@ -1931,8 +1950,8 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.append("|---|---|---|---|---|---|---|---|---|---|")
     for comparison in gap["comparisons"]:
         lines.append(
-            f"| {comparison['scope']} | {comparison['longer_claude']} "
-            f"| {comparison['shorter_gpt']} | {comparison['n_paired']} "
+            f"| {comparison['scope']} | {comparison['claude_model']} "
+            f"| {comparison['gpt_model']} | {comparison['n_paired']} "
             f"| {_fmt(comparison['chars_ratio_median'])}x "
             f"| {_fmt(comparison['evidence_ratio_median'])}x "
             f"| {_fmt(comparison['signals_cited_ratio_median'])}x "

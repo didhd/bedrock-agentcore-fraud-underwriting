@@ -110,6 +110,7 @@ never a plausible-looking guess. ``source`` says which transport produced the ro
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 import weakref
@@ -149,6 +150,8 @@ __all__ = [
     "transport_for",
     "widen_default_executor",
 ]
+
+log = logging.getLogger("pp.fanout")
 
 #: Offline by default: nothing in this repo may require AWS to run its tests.
 MOCK_MODE: Final[bool] = os.environ.get("MOCK_MODE", "1") == "1"
@@ -617,6 +620,23 @@ async def _invoke_specialist_mantle(domain: str, model_id: str, domain_input: st
     """
     from agents import mantle  # noqa: PLC0415
 
+    # PREFERRED PATH: the native Strands Responses provider, when the installed
+    # strands has it (>=1.35; absent in 1.26.x). It is strictly better here, and not
+    # for tidiness:
+    #   * the prompt is a real ``system_prompt`` again, so the GPT specialist receives
+    #     the customer's verbatim text in the same position the Claude ones do rather
+    #     than concatenated into a single input string;
+    #   * usage, hooks, retry strategy and streaming come from the same Strands
+    #     machinery the other seven agents use, so one code path measures all eight;
+    #   * ``invoke_async`` is genuinely async, so no ``to_thread`` hop is needed.
+    # It falls back to ``mantle.complete`` rather than failing, because the fallback is
+    # measured-good and an SDK floor is not a reason to lose a fraud dimension.
+    if mantle.responses_provider_available():
+        try:
+            return await _invoke_specialist_responses_provider(domain, model_id, domain_input)
+        except mantle.MantleUnavailable as exc:
+            log.debug("native Responses provider unavailable (%s); using mantle.complete", exc)
+
     response = await asyncio.to_thread(
         mantle.complete,
         model_id,
@@ -624,6 +644,41 @@ async def _invoke_specialist_mantle(domain: str, model_id: str, domain_input: st
         max_output_tokens=_max_output_tokens(model_id),
     )
     return _MantleSpecialistResult(response)
+
+
+async def _invoke_specialist_responses_provider(
+    domain: str, model_id: str, domain_input: str
+) -> Any:
+    """One GPT-5.x specialist as an ordinary ``strands.Agent``.
+
+    Same construction as :func:`_build_agent` minus the two Converse-only pieces: no
+    ``cached_system_prompt`` (GPT-5.6 uses explicit Responses cache breakpoints, and a
+    ``cachePoint`` block would be meaningless here) and no ``build_bedrock_model``.
+
+    One measured caveat, recorded rather than papered over:
+    ``result.metrics.accumulated_metrics["latencyMs"]`` comes back as **0** on this
+    provider where Converse reports a real server-side figure. ``wall_ms`` is measured by
+    the caller either way, so the benchmark is unaffected, but ``latency_ms`` must be
+    treated as unavailable rather than as zero.
+    """
+    from strands import Agent  # noqa: PLC0415
+    from strands.agent import NullConversationManager  # noqa: PLC0415
+
+    from agents import mantle  # noqa: PLC0415
+
+    agent = Agent(
+        model=mantle.build_responses_model(
+            model_id, max_tokens=_max_output_tokens(model_id)
+        ),
+        system_prompt=SPECIALIST_PROMPTS[domain],
+        tools=[],
+        callback_handler=None,
+        conversation_manager=NullConversationManager(),
+        retry_strategy=build_retry_strategy(),
+        name=AGENT_NAMES[domain],
+        agent_id=AGENT_NAMES[domain],
+    )
+    return await agent.invoke_async(f"{_INPUT_HEADER}\n{domain_input}")
 
 
 def _build_agent(domain: str, model_id: str) -> Any:

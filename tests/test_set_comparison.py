@@ -634,6 +634,28 @@ def test_fewer_signals_in_the_shorter_analysis_is_reported_as_evidence_lost() ->
     assert pooled["finding"].startswith("EVIDENCE LOST"), pooled["finding"]
 
 
+def test_the_finding_does_not_assume_claude_is_the_longer_one() -> None:
+    """"the shorter GPT analysis" must not be printed about the LONGER GPT analysis.
+
+    Claude being longer is the expected case but not a guaranteed one - Opus is already
+    terse on synthetic - and an earlier revision hard-coded the direction into the wording,
+    so a GPT analysis 3x the length was described as "the shorter GPT analysis names 1.0x
+    the signals for 3.03x the length": both labels inverted.
+    """
+    gap = sc.length_gap(_pair_rows(claude_chars=1000, gpt_chars=3000, claude_signals=4, gpt_signals=4))
+    pooled = [c for c in gap["comparisons"] if c["scope"] == "ALL AGENTS POOLED"][0]
+    assert pooled["claude_is_longer"] is False
+    assert "shorter GPT" not in pooled["finding"], pooled["finding"]
+    assert "GPT IS THE LONGER ONE" in pooled["finding"], pooled["finding"]
+
+
+def test_the_comparison_names_each_model_by_family_not_by_length() -> None:
+    gap = sc.length_gap(_pair_rows(claude_chars=4000, gpt_chars=1000, claude_signals=4, gpt_signals=4))
+    pooled = [c for c in gap["comparisons"] if c["scope"] == "ALL AGENTS POOLED"][0]
+    assert pooled["claude_model"] == "opus-5" and pooled["gpt_model"] == "luna"
+    assert pooled["claude_is_longer"] is True
+
+
 def test_the_length_comparison_is_paired_on_the_same_application() -> None:
     """An unpaired length comparison could be an artifact of easier applications."""
     rows = _evaluated(claude_cal=3, gpt_cal=3)

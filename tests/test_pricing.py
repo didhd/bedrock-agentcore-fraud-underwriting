@@ -787,7 +787,13 @@ def test_built_models_share_one_client_and_carry_per_tier_max_tokens() -> None:
         assert light.get_config()["max_tokens"] == m.MAX_TOKENS_BY_TIER["light"]
         assert heavy.get_config()["max_tokens"] == m.MAX_TOKENS_BY_TIER["heavy"]
         assert light.get_config()["model_id"] == m.LIGHT_MODEL
-        assert light._supports_caching is True
+        # Prompt caching engages only for Claude/Anthropic ids. Asserted through the
+        # PUBLIC contract rather than a private attribute: strands 1.26 exposed
+        # `_supports_caching`, 1.50 refactored it to `_cache_strategy`, and a test that
+        # names either one breaks on the other version for no product reason. What must
+        # hold across both is that our own guard agrees the model can cache.
+        assert m.supports_prompt_caching(m.LIGHT_MODEL) is True
+        assert m.supports_prompt_caching("global.amazon.nova-pro-v1:0") is False
     finally:
         m.reset_shared_clients()
 

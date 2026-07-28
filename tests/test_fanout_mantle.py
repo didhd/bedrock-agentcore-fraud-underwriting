@@ -89,6 +89,22 @@ def _mantle_response(**overrides: Any) -> dict[str, Any]:
     return response
 
 
+@pytest.fixture(autouse=True)
+def prefer_the_complete_fallback(monkeypatch):
+    """Every test in this module pins the ``mantle.complete`` FALLBACK path.
+
+    Both paths ship. ``agents.fanout`` prefers the native Strands Responses provider
+    when the installed strands carries it (>=1.35, absent in 1.26.x) and falls back to
+    ``mantle.complete`` otherwise, so which one a test exercises would otherwise depend
+    on the machine's SDK version -- and these assertions (the to_thread hop, the
+    single-input prompt shape, the absent stop_reason) are properties of the FALLBACK.
+
+    The native path is covered separately by ``test_the_native_provider_is_preferred*``
+    and by the live smoke test, which opt back in explicitly.
+    """
+    monkeypatch.setattr(mantle, "responses_provider_available", lambda: False)
+
+
 @pytest.fixture
 def gpt_calls(monkeypatch) -> list[dict[str, Any]]:
     """Patch ``mantle.complete`` to record its arguments and answer instantly.
@@ -854,3 +870,102 @@ def test_live_a_single_gpt_specialist_runs_end_to_end(monkeypatch):
         f"{result.usage['outputTokens']} out tok, ${result.cost_usd:.5f}, "
         f"{len(result.analysis)} chars"
     )
+
+# ---------------------------------------------------------------------------
+# The native Strands Responses provider (preferred path, strands >= 1.35)
+# ---------------------------------------------------------------------------
+
+
+def test_the_native_provider_is_preferred_when_available(monkeypatch):
+    """When strands has the provider, a GPT specialist must NOT go through complete().
+
+    The native path is preferred for a reason that matters to fidelity: the customer's
+    verbatim prompt is passed as a real ``system_prompt`` rather than concatenated into
+    one Responses input string, so the GPT specialist receives it in the same position
+    the seven Claude ones do.
+    """
+    monkeypatch.setattr(mantle, "responses_provider_available", lambda: True)
+    monkeypatch.setattr(mantle, "is_mantle_model", lambda model_id: model_id.startswith("openai."))
+
+    def must_not_be_called(*args, **kwargs):
+        raise AssertionError("complete() was called although the native provider is available")
+
+    monkeypatch.setattr(mantle, "complete", must_not_be_called)
+
+    seen: dict[str, Any] = {}
+
+    class _FakeResult:
+        def __init__(self):
+            self.stop_reason = "end_turn"
+            self.metrics = type(
+                "M", (), {"accumulated_usage": {"inputTokens": 11, "outputTokens": 7}, "accumulated_metrics": {"latencyMs": 0}}
+            )()
+
+        def __str__(self):
+            return "Native provider analysis prose."
+
+    class _FakeAgent:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+        async def invoke_async(self, prompt, **kwargs):
+            seen["prompt"] = prompt
+            return _FakeResult()
+
+    import strands
+
+    monkeypatch.setattr(strands, "Agent", _FakeAgent)
+    monkeypatch.setattr(mantle, "build_responses_model", lambda model_id, **kw: f"MODEL:{model_id}")
+
+    result = asyncio.run(
+        fanout._invoke_specialist_mantle("rings", "openai.gpt-5.6-luna", "PAYLOAD")
+    )
+    assert "Native provider analysis prose." in str(result)
+    # The prompt is the system prompt, not a concatenation.
+    assert seen["system_prompt"] == SPECIALIST_PROMPTS["rings"]
+    assert SPECIALIST_PROMPTS["rings"] not in seen["prompt"]
+    assert "PAYLOAD" in seen["prompt"]
+    # Same guards as the Claude path.
+    assert seen["tools"] == []
+    assert seen["callback_handler"] is None
+
+
+def test_the_native_provider_falls_back_to_complete_when_it_cannot_build(monkeypatch):
+    """An SDK or dependency gap must not cost a fraud dimension."""
+    monkeypatch.setattr(mantle, "responses_provider_available", lambda: True)
+    monkeypatch.setattr(mantle, "is_mantle_model", lambda model_id: True)
+
+    def cannot_build(*args, **kwargs):
+        raise mantle.MantleUnavailable("no openai>=2.0.0")
+
+    monkeypatch.setattr(mantle, "build_responses_model", cannot_build)
+
+    called: list[str] = []
+
+    def fake_complete(model_id, prompt, **kwargs):
+        called.append(model_id)
+        return _mantle_response(model_id=model_id)
+
+    monkeypatch.setattr(mantle, "complete", fake_complete)
+    result = asyncio.run(
+        fanout._invoke_specialist_mantle("rings", "openai.gpt-5.6-luna", "PAYLOAD")
+    )
+    assert called == ["openai.gpt-5.6-luna"]
+    assert result is not None
+
+
+def test_the_provider_availability_probe_matches_the_installed_sdk(monkeypatch):
+    """Documents which path this machine actually takes, rather than assuming.
+
+    Undoes the module's autouse fixture: this is the one test that must see the REAL
+    installed SDK rather than the pinned fallback.
+    """
+    monkeypatch.undo()
+    available = mantle.responses_provider_available()
+    try:
+        import strands.models.openai_responses  # noqa: F401
+
+        present = True
+    except Exception:
+        present = False
+    assert available is present

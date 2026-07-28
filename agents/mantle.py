@@ -1239,8 +1239,92 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Strands-native model provider (strands-agents >= 1.35)
+# ---------------------------------------------------------------------------
+
+#: Minimum strands release carrying ``strands.models.openai_responses``.
+STRANDS_RESPONSES_PROVIDER: Final[str] = "strands.models.openai_responses"
+
+
+def responses_provider_available() -> bool:
+    """Whether the installed strands exposes the native Responses provider.
+
+    False on strands 1.26.x, True from the release that adds
+    ``strands.models.openai_responses``. Callers use this to choose between the native
+    provider and :func:`complete`; both reach the same endpoint, so the difference is
+    ergonomics (a real ``strands.Agent``, with tool use, hooks and streaming) rather
+    than capability.
+    """
+    try:
+        __import__(STRANDS_RESPONSES_PROVIDER)
+    except Exception:
+        return False
+    return True
+
+
+def build_responses_model(
+    model_id: str,
+    *,
+    max_tokens: int,
+    effort: str | None = None,
+    region: str | None = None,
+) -> Any:
+    """A Strands model object for a GPT-5.x id, usable anywhere ``BedrockModel`` is.
+
+    This is what lets a GPT specialist be an ordinary ``strands.Agent`` alongside the
+    Claude ones -- same fan-out, same hooks, same ``result.metrics.accumulated_usage``
+    -- instead of a second bespoke code path.
+
+    Two details are load-bearing and both were verified live:
+
+    * ``base_url`` must end in ``/openai/v1``. The Strands documentation for this
+      provider shows ``/v1``, which serves only the open-weight ``gpt-oss`` family and
+      returns 400 for every ``gpt-5.6`` id. See the module docstring for the full
+      four-way measurement.
+    * ``api_key`` is a SHORT-LIVED bearer token from
+      ``aws_bedrock_token_generator.provide_token``, not a static secret. It is minted
+      per model construction here; a long-running runtime that holds one model object
+      for hours must rebuild it rather than assume the token survives.
+
+    Raises :class:`MantleUnavailable` when the provider or its dependencies are absent,
+    so a caller can fall back to :func:`complete` deliberately.
+    """
+    resolved_region = resolve_mantle_region(model_id, region)
+    resolved_effort = (
+        effort or os.environ.get("BEDROCK_MANTLE_REASONING_EFFORT") or DEFAULT_EFFORT
+    )
+    if resolved_effort not in MANTLE_EFFORTS:
+        raise MantleUnavailable(
+            f"reasoning effort {resolved_effort!r} is not one of {list(MANTLE_EFFORTS)}"
+        )
+    try:
+        from aws_bedrock_token_generator import provide_token
+        from strands.models.openai_responses import OpenAIResponsesModel
+    except ImportError as exc:
+        raise MantleUnavailable(
+            "the native Strands Responses provider needs strands-agents with "
+            f"{STRANDS_RESPONSES_PROVIDER} (absent in 1.26.x), openai>=2.0.0 and "
+            f"aws-bedrock-token-generator. Use agents.mantle.complete() instead ({exc})."
+        ) from exc
+
+    return OpenAIResponsesModel(
+        model_id=model_id,
+        client_args={
+            "api_key": provide_token(region=resolved_region),
+            "base_url": base_url_for(resolved_region),
+        },
+        params={
+            "max_output_tokens": max_tokens,
+            "reasoning": {"effort": resolved_effort},
+            "store": False,
+        },
+    )
+
+
 __all__ = [
     "DEFAULT_EFFORT",
+    "STRANDS_RESPONSES_PROVIDER",
     "DEFAULT_MANTLE_REGION",
     "DRIFT_TOLERANCE",
     "MANTLE_EFFORTS",
@@ -1259,8 +1343,10 @@ __all__ = [
     "LatencySample",
     "MantleUnavailable",
     "build_probe_prompt",
+    "build_responses_model",
     "complete",
     "cost_usd",
+    "responses_provider_available",
     "diff_against_recorded",
     "estimate_measure_spend",
     "is_mantle_model",
