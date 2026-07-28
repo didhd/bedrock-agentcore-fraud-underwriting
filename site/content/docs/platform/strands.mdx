@@ -1,0 +1,241 @@
+---
+title: Strands Agents SDK
+description: ConcurrencyException and fresh-Agent-per-invocation, why the fan-out is asyncio.gather and not GraphBuilder, the two invisible concurrency ceilings, retry tuning, structured output, and where usage really lives.
+---
+
+<Callout type="info" title="Audience">
+For the customer's engineer. Every constraint here was hit in this repository and is now
+asserted by a test. Verified on `strands-agents` **1.26.0** and re-verified on **1.50.2**
+(see [the SDK upgrade](/docs/platform/sdk-upgrade)). Source: `agents/fanout.py`,
+`agents/models.py`, `agents/synthesize.py`.
+</Callout>
+
+## An `Agent` instance cannot be invoked concurrently
+
+<Callout type="error" title="Symptom first">
+**What you see.** `ConcurrencyException`, thrown from what looks like perfectly ordinary
+code, the moment two requests overlap. Or — worse, if you never overlap in testing — the
+token counts on the second call are larger than the second call's actual prompt.
+
+**Cause.** `Agent.stream_async` takes a `threading.Lock`. A single `Agent` instance is a
+stateful conversational object, not a stateless client, and reusing one across concurrent
+invocations raises. Separately, `result.metrics.accumulated_usage` is **cumulative** on a
+reused Agent, so a module-level Agent silently inflates every measurement after the first.
+</Callout>
+
+**The rule: build a fresh `Agent` per specialist per invocation. Nothing at module level.**
+
+That is not a workaround; it is what makes per-request telemetry correct at the same time.
+`agents/fanout.py` constructs eight fresh Agents on every application, which is also why
+each one's `accumulated_usage` is exactly that request's usage.
+
+## `asyncio.gather`, not a thread pool
+
+The previous revision here ran the eight specialists through
+`concurrent.futures.ThreadPoolExecutor` over synchronous `Agent.__call__`. That is redundant:
+`BedrockModel.stream` **already** offloads its blocking boto3 call through
+`asyncio.to_thread`. A thread pool wrapping a coroutine runner adds a layer of threads that
+buys nothing.
+
+```python
+results = await asyncio.gather(*(run(domain) for domain in DOMAINS), return_exceptions=True)
+```
+
+`return_exceptions=True` plus a per-agent `try/except` is what makes 7-of-8 graceful
+degradation real: a failed dimension records an `error` on its result and the adjudication
+proceeds with a documented gap.
+
+## `strands.multiagent.GraphBuilder` is the wrong primitive here
+
+It is the obvious-looking choice and it was rejected on four verified grounds. Any one of
+them would be enough:
+
+| Constraint | Why it disqualifies this pipeline |
+|---|---|
+| **Fail-fast on any node error** | This pipeline needs 7-of-8 graceful degradation. A single transient 5xx would lose the whole adjudication. The benchmark contains a run where two specialists died and the adjudication still validated its 21 keys. |
+| **Forbids shared `Agent` instances** | Which is correct in itself (see above), but combined with the next row it means the graph cannot be assembled the way it looks like it can. |
+| **Forbids `session_manager` on nodes** | Rules out the interactive path's memory-backed agents outright. |
+| **Stringifies typed results between nodes** | The eight specialist results are typed objects carrying `usage`, `latency_ms`, `wall_ms`, `cost_usd` and `source`. Stringifying them destroys exactly the telemetry this engagement exists to produce. |
+
+And one more, specific to measurement: `GraphResult.execution_time` comes back **zeroed**.
+A benchmark cannot be built on it.
+
+## Two concurrency ceilings, both invisible until you hit them
+
+<Callout type="warn" title="Symptom: an eight-way fan-out that behaves like a four-way one">
+**What you see.** Adding concurrency stops helping. Wall clock per application rises with
+load in a way that does not match any single model's latency. No error, no warning.
+
+**Cause: there are two queues you did not configure.**
+
+**1. `BedrockModel` defaults to `max_pool_connections=10`.** That is botocore's default and
+it is a hard ceiling for an eight-way fan-out — eight specialists × N concurrent
+applications all queue on the HTTP pool. `agents.models.shared_bedrock_client` raises it to
+**32** and shares one client across every model.
+
+**2. `asyncio.to_thread` dispatches onto the loop's *default executor*,** sized
+`min(32, cpu_count + 4)`. On an 11-core box that is 15 threads — which caps throughput at
+roughly two applications in flight *regardless of the pool size you just fixed*.
+`agents/fanout.py` widens that executor once per loop
+(`widen_default_executor`, `EXECUTOR_MAX_WORKERS=64`) and gates admission with an
+`asyncio.Semaphore`, deliberately sized **above** the pool so the pool stays the binding
+constraint and the queue forms in Python where it is observable, not inside botocore where
+it is not.
+</Callout>
+
+## The `read_timeout` trap
+
+<Callout type="error" title="Symptom: reads time out at 60s after you tuned the client">
+**What you see.** You supply a `boto_client_config` to set the connection pool — and reads
+start failing at 60 seconds on calls that used to survive to 120.
+
+**Cause.** Strands sets `read_timeout=120` on the client it builds for you. Supplying your
+own `boto_client_config` **silently replaces** that, dropping the timeout back to botocore's
+default of 60. Nothing warns you.
+
+Set it explicitly whenever you pass a config:
+
+```python
+Config(
+    max_pool_connections=32,     # MAX_POOL_CONNECTIONS
+    read_timeout=120,            # READ_TIMEOUT_S — must be restated, not inherited
+    connect_timeout=10,          # CONNECT_TIMEOUT_S
+    retries={"mode": "adaptive"},
+)
+```
+
+This matters concretely here: the benchmark's slowest single specialist call was **69.78 s**
+(`bustout`, `evals/results/pipeline_14x3_us-east-1.json`). At a 60 s read timeout that call
+does not return at all.
+</Callout>
+
+## Unknown config keys are accepted with only a `UserWarning`
+
+<Callout type="error" title="Symptom: a setting that has no effect and no error">
+`BedrockConfig` accepts unknown `**model_config` keys with **only a `UserWarning`**. A kwarg
+renamed between releases, or simply mistyped, does not raise — it just stops taking effect.
+
+Run CI with `-W error::UserWarning` or a typo becomes permanent silence. This is also why
+`requirements.txt` pins the three libraries whose API surface this repo reads directly to
+**exact** versions rather than floors, with the reasoning written in the file:
+
+> *"Loose floors are the failure mode we guard against: BedrockModel silently accepts unknown \*\*model_config keys with only a UserWarning, so a kwarg that moved between releases does not raise -- it just stops taking effect."*
+</Callout>
+
+## Retry tuning: the SDK default costs 4 s on the first throttle
+
+```python
+from strands.agent import ModelRetryStrategy      # note the import path
+
+ModelRetryStrategy(max_attempts=4, initial_delay=1, max_delay=8)
+```
+
+Read against `strands.event_loop._retry`, that is a ladder of **[1, 2, 4] s** — 7 s worst
+case. The SDK's default is `[4, 8, 16, 32, 64, 128] s`, so **one throttle costs 4 s against
+a sub-60-second SLA**, and a second costs 12.
+
+Two things about this strategy are worth stating precisely because they bound what a retry
+can explain:
+
+- It fires on **`ModelThrottledException` and nothing else.** A 5xx is not retried by it,
+  which is why the one degraded run in the benchmark failed *fast* (21.2 s end to end)
+  rather than slowly.
+- A retry sleeps **inside** the call, so it shows up as wall clock exceeding the model's own
+  reported `latencyMs`. That gap is computable per call, which is what made the "is the tail
+  retries?" question falsifiable rather than assumed. The measured answer:
+  **0 `ModelThrottledException` in 336 specialist calls**, and the wall-clock-minus-SDK-latency
+  gap is 0.73 s p50 / 1.69 s p95 over n=334 (`evals/results/tail_analysis.json`). The tail is
+  inside the model's own reported latency. See [the tail](/docs/performance/the-tail).
+
+## Structured output is a kwarg, and `Optional` fields are a trap
+
+```python
+Agent(..., structured_output_model=Adjudication)   # correct
+agent.structured_output(...)                        # DEPRECATED
+```
+
+<Callout type="warn" title="Avoid `Optional` fields on the output model">
+An `Optional` field drops out of the generated JSON Schema's `required` array. On a contract
+whose entire point is that it has **exactly 21 keys in the customer's order**, a field the
+model is not required to emit is a contract violation waiting to happen. `agents/contracts.py`
+declares all 21 as required, in order, with no `Optional`.
+
+Across the 42 benchmark runs, `repair_attempts` totalled **0** and every run validated all
+21 keys.
+</Callout>
+
+## Two settings that are wrong by default for a stateless call
+
+```python
+Agent(
+    ...,
+    callback_handler=None,                        # the default PRINTS EVERY TOKEN to stdout
+    conversation_manager=NullConversationManager(),
+)
+```
+
+The `callback_handler` default is the one that surprises people: a production runtime with
+the default handler streams every token of every specialist to stdout, and therefore into
+CloudWatch Logs.
+
+## Where usage and latency actually live
+
+Everything the benchmark reports comes from these paths and nowhere else:
+
+| Field | Path | Note |
+|---|---|---|
+| Token usage | `result.metrics.accumulated_usage` | **Cumulative on a reused Agent** — fresh Agent per invocation is what makes it per-request. |
+| Cache tokens | `…accumulated_usage.get("cacheReadInputTokens")` / `…("cacheWriteInputTokens")` | **Optional keys** in the TypedDict. Use `.get()`; direct indexing raises. |
+| Non-cached input | `…["inputTokens"]` | Bedrock Converse counts **only non-cached** tokens here. The Responses API's `input_tokens` is the *total* including cached — `agents/mantle.py` normalises to the Converse convention so one rate table prices both families. |
+| Model latency | `result.metrics.accumulated_metrics["latencyMs"]` | The model's own reported latency, narrower than wall clock. |
+| Wall clock | this process's own `time.perf_counter()` | The two are reported separately, never merged. |
+
+<Callout type="info" title="Offline means None, never zero">
+In `MOCK_MODE` there is no usage, so `usage` is `None` and `cost_usd` is `None` — never a
+plausible-looking guess and never `0`. The `source` field records which transport produced a
+row (`bedrock` / `bedrock-mantle` / `mock`) so a report can separate them rather than pooling
+a Converse call, a Responses call and a mock under one label.
+</Callout>
+
+## Two transports, chosen by the model id alone
+
+`openai.gpt-5.*` ids are **not on Bedrock Converse** — `converse` rejects them with
+`ValidationException: The provided model identifier is invalid` — and are reachable only
+through the `bedrock-mantle` Responses endpoint. So the specialist's model assignment alone
+decides its transport:
+
+```python
+transport_for(model_id)   # reads agents.models.SPECIALIST_MODELS; mantle.is_mantle_model() routes
+```
+
+There is no flag and no second switch. `agents.models.SPECIALIST_MODELS` is the only place
+the decision is expressed. The mantle result is wrapped in an adapter carrying the same
+surface the Converse path returns (`message`, `usage`, `latency_ms`, `stop_reason`) so the
+result-assembly path is **shared** rather than duplicated per family.
+
+Three things the mantle path cannot honestly report, and does not:
+
+- **`stop_reason`** — `mantle.complete` does not surface the Responses `status`, so it is
+  `None` (unknown), never a plausible `"end_turn"`.
+- **A Converse cache verdict** — `cachePoint` and per-model minimum cacheable prefixes are
+  Converse concepts. A mantle specialist's `will_cache` is `None` by construction, because
+  reporting `False` would be a Converse verdict about a request that never contained a cache
+  point.
+- **A free call** — cost comes from `agents.mantle.cost_usd`, which prices cache-**write**
+  tokens at 1.25× input. An unpriced GPT id *raises*, surfacing as a recorded error rather
+  than as a call reported at $0.
+
+See [bedrock-mantle](/docs/platform/bedrock-mantle) for the endpoint itself.
+
+<Cards>
+  <Card
+    title="bedrock-mantle"
+    href="/docs/platform/bedrock-mantle"
+    description="/openai/v1 vs /v1, bearer-token auth, and the four measured combinations."
+  />
+  <Card
+    title="The SDK upgrade"
+    href="/docs/platform/sdk-upgrade"
+    description="1.26.0 → 1.50.2, verified by running the suite on both, and the one real incompatibility."
+  />
+</Cards>

@@ -1,0 +1,322 @@
+---
+title: The signal layer
+description: The 60-signal registry, the per-domain projection that bounds what an agent can see, the payload schema, the score bands — and what is reconstructed from the prompts rather than received from the customer.
+---
+
+<Callout type="info" title="Audience">
+For the customer's engineer. Everything here was read from the modules at import, not
+transcribed. Source: `signal_layer/registry.py`, `signal_layer/schema.py`,
+`signal_layer/bands.py`, `signal_layer/alert_categories.py`.
+</Callout>
+
+## What this layer is for
+
+**Agents interpret; they never query.** The signal layer produces governed, deterministic
+signal values with no LLM involved; the analysis layer receives them and reasons. The same
+agent never both queries and investigates.
+
+That split is the customer's own finding, not a design preference imported from AWS — their
+process guide (§2.2) states signals exist *"to allow for ease of review and optimize
+processing time by preventing the agents from making the same SQL queries for each app."*
+It is also what keeps text-to-SQL out of the per-application hot path
+([the latency argument](/docs/platform/semantic-layer#the-latency-argument-for-precomputing-signals)).
+
+```
+signal_layer/
+  registry.py          60 signals: owner domain(s), the customer's verbatim interpretation
+  schema.py            SignalPayload / DomainView / AlertFinding / render_for_agent
+  alert_categories.py  the ten alert-ID categories
+  bands.py             fraud-score and dealer-score bands, PRODUCT decode, credit validity
+  rules/               one module per numbered General Rule + catalog.py coverage table
+```
+
+## The registry
+
+`signal_layer/registry.py` is the contract every other layer resolves names through. Read
+from the module:
+
+| | Count |
+|---|---|
+| Signals in `SIGNAL_OWNER` / `SIGNAL_SPEC` | **60** |
+| Owned by exactly one domain | 55 |
+| Legitimately shared by two domains (`SHARED_SIGNALS`) | **5** |
+
+Per-domain, distinguishing *owned* from *visible* (owned + shared):
+
+| Domain | Owned | Visible in its view |
+|---|---:|---:|
+| `dealer` | 14 | 14 |
+| `synthetic` | 10 | 10 |
+| `straw` | 8 | 8 |
+| `employment` | 8 | 8 |
+| `identity` | 7 | 7 |
+| `income` | 7 | 7 |
+| `bustout` | 5 | **7** |
+| `rings` | 1 | **4** |
+
+The five shared names and who shares them:
+
+| Signal | Shared by |
+|---|---|
+| `phone_reuse_distinct_ssn_count` | identity, rings |
+| `address_reuse_distinct_ssn_count` | identity, rings |
+| `email_reuse_distinct_ssn_count` | identity, rings |
+| `rapid_app_velocity` | synthetic, bustout |
+| `ssn_income_high_variance_inconsistent_reporting` | income, bustout |
+
+`rings` owns exactly **one** name of its own because most of what it reasons over is shared
+with identity. That is not a gap in the registry; it is what the rings prompt names.
+
+### Each entry carries the customer's own sentence
+
+`SignalSpec` has five fields and none of them is a paraphrase:
+
+```python
+SignalSpec(
+  name            = "ssn_days_in_system",
+  owners          = ("identity",),
+  context_key     = "ssn_days_in_system_context",
+  interpretation  = "ssn_days_in_system = 0 (new to system): common for first-time "
+                    "buyers. Only concerning with other velocity signals.",
+  source_doc      = "prompts/verbatim/identity_agent_prompt.txt",
+)
+```
+
+`interpretation` is read out of `prompts/verbatim/` **at import**, so no threshold in this
+module can drift from the customer's text. `source_doc` names which of her nine prompts it
+came from.
+
+<Callout type="warn" title="Near-duplicate names are BOTH materialised, never aliased">
+The customer spells the same *concept* differently in different domains. Collapsing those
+spellings would silently degrade whichever agent uses the other name, so these are separate
+keys on purpose:
+
+| Concept | One prompt's name | Another prompt's name |
+|---|---|---|
+| other SSNs at the employer | `employer_other_ssns_count` (rings) | `employer_distinct_other_ssns_count` (employment) |
+| SSNs on the phone | `phone_ssn_count` (synthetic) | `phone_reuse_distinct_ssn_count` (identity, rings) |
+| 20% income jump | `ssn_income_increase_20_percent_or_more` (income) | `ssn_income_increased_20_percent_last_30d_rapid_growth` (bustout) |
+
+**A specialist handed a signal its prompt never mentions is being invited to reason about
+something it has no interpretation for.** That is the failure mode de-duplication would
+introduce, and it would be invisible — the agent would still produce fluent prose.
+</Callout>
+
+## The per-domain projection
+
+`signal_layer/schema.py::project_view` filters by `registry.signals_for(domain)` and
+`alert_categories.alerts_for_domain(domain)`. The result is a `DomainView`:
+
+```python
+@dataclass(frozen=True, slots=True)
+class DomainView:
+    domain: str
+    signals: Mapping[str, Any]
+    context: Mapping[str, Any]
+    alerts_fired: tuple[AlertFinding, ...] = ()
+```
+
+Its docstring states the property plainly: *"There is no data tool on the agent side, so this
+object is the complete universe the specialist reasons over."*
+
+<Callout type="info" title="'The agent only saw its own signals' is structural, not a prompt instruction">
+The previous version of this repo fetched the full record **nine times per application** and
+gave every specialist every signal, with the split existing only inside a CLI display
+function. Now the boundary is in the data path: a specialist is constructed with no tools and
+receives one `DomainView`. Nothing it could be told to ignore is present to ignore.
+</Callout>
+
+### `AlertFinding` carries the finding text, not just the number
+
+```python
+@dataclass(frozen=True, slots=True)
+class AlertFinding:
+    alert_id: int
+    categories: tuple[str, ...]
+    finding_text: str
+```
+
+Every specialist prompt forbids citing alert numbers — *"Reference specific findings from
+alerts, not alert numbers"* — which is only **satisfiable** if the payload describes what the
+alert found. `alert_id` and `categories` are retained for routing and audit, not for the agent
+to quote.
+
+### `render_for_agent` is deterministic, and why that matters
+
+Fixed headings, registry-ordered keys, sorted stable JSON:
+
+```
+=== APPLICATION CORE FIELDS ===
+=== PRECOMPUTED FRAUD SIGNALS ===
+=== CONTEXT FIELDS (validate signals against these) ===
+=== ALERTS FIRED ===
+```
+
+The application block comes **first** because it is the part most likely to be identical
+across domains for one record, and the signal block last because it is the most
+domain-specific. That is the ordering a cache point wants.
+
+Rendered sizes for APP-1004, read from the module — note how far apart the domains are:
+
+| Domain | Rendered characters |
+|---|---:|
+| `dealer` | 8,602 |
+| `synthetic` | 7,463 |
+| `identity` | 5,856 |
+| `employment` | 5,699 |
+| `straw` | 5,056 |
+| `income` | 4,981 |
+| `bustout` | 4,218 |
+| `rings` | 3,949 |
+
+<Callout type="warn" title="Determinism is necessary for caching but is not sufficient">
+`render_for_agent` being deterministic is what *could* make a cacheable prefix identical
+across applications. It does not, today, produce a cache hit — the specialist prompts are
+547–956 tokens against per-model minimums of 512 / 1024 / **4096**, and the
+per-application payload differs every time, so no entry is reused. Every specialist call in
+the 42-run benchmark measured a **miss**. See
+[what does not work](/docs/cost/what-does-not-work).
+</Callout>
+
+## `SignalPayload`: the whole-application object
+
+```python
+@dataclass(frozen=True, slots=True)
+class SignalPayload:
+    record_id: str
+    hash_lender_id: str
+    application: Mapping[str, Any]
+    views: Mapping[str, DomainView]      # one per domain, eight of them
+    guardrails_applied: tuple[str, ...]  # General Rule IDs
+    semantic_layer_rev: str
+    computed_at: str
+    notes: ...
+```
+
+Two fields exist for the customer's benefit specifically:
+
+- **`guardrails_applied`** carries rule **IDs**, not prose — e.g. for APP-1004:
+  `['23', '2', '4', '5', '10', '15', '17', '3']`. That is what lets a demo show *which
+  governance rules the layer actually enforced for this record* instead of asserting that
+  governance was preserved.
+- **`semantic_layer_rev`** (`pp-semantic-layer-2026-06`) pins which revision of the semantic
+  layer produced the values, so a signal set can be traced to its source version.
+
+<Callout type="error" title="Raw SSNs never enter a payload">
+`application` is expected to carry `hash_ssn` only, and
+`signal_layer/rules/r23_no_raw_ssn.py` is the gate that enforces it before anything leaves the
+layer — General Rule 23, in the customer's own capitals: *"NEVER INCLUDE RAW SSN VALUES"*.
+
+`assert_no_raw_ssn` / `find_raw_ssn` are tested functions, not a convention. A Bedrock
+Guardrail enforcing the same thing server-side is still
+[open for production](/docs/platform/deployment#production-hardening-still-open).
+</Callout>
+
+## The bands
+
+`signal_layer/bands.py` holds the customer's numeric bands, each read from her text rather
+than retyped as a magic number.
+
+**Fraud score** (General Rule 0.5, restated as Rule 6):
+
+| Band | Range |
+|---|---|
+| low | 0–299 |
+| medium | 300–699 |
+| high | 700–998 |
+| **very high** | **999** |
+
+999 is not just the top of the range — it means *at least one fraud accelerator fired*. Two
+associated rules are carried as data because they constrain analysis rather than classify a
+score: fraud scores must **not be averaged** (they are standard-scaled — Rule 22), and
+investigation must **not** be pre-filtered to scores above 700 (`FRAUD_SCORE_NO_PREFILTER_RULE`).
+
+**Dealer score** (Rule 21): `low 0 / moderate 500 / elevated 700 / high 900`.
+
+<Callout type="warn" title="The dealer bands share their endpoints — and the resolution is flagged">
+The customer's text reads *"0-500 low, 500-700 moderate, 700-900 elevated, 900+ high"*, so
+exactly **500, 700 and 900 are ambiguous** in the source.
+
+`dealer_score_band()` resolves each boundary **upward** (500 → moderate, 700 → elevated,
+900 → high), matching the dealer orchestration document's own phrasing for the top band
+(*"900 and above"*). `DEALER_BAND_BOUNDARY_NOTE` says so in the module and adds:
+*"Flag this to the customer if their SQL rounds the other way."* That is the correct handling
+of an ambiguity — resolve it, record the resolution, and tell them.
+</Callout>
+
+Also in `bands.py`, all sourced the same way:
+
+| Constant / function | What it encodes |
+|---|---|
+| `DEALER_SCORE_IS_PORTFOLIO_RISK` | High dealer default / EPD / consortium scores are **credit risk context, not fraud evidence**. This is the rule APP-1007 exists to test. |
+| `DEALER_SCORE_BINDING` | `dealer_risk_score` → (`dealer_id`, `lender_id`); `dealer_consortium_score` → (`ppi_dealer_id`,). Two different grains (Rule 21). |
+| `is_valid_time_in_file` / `TIME_IN_FILE_ERROR_SENTINELS` | Rule 25: time in file is invalid at `<= 0` or `9999`. **Only those two are rejected** — the note states it deliberately does not invent an upper bound, because any other sentinel must come from the customer's data dictionary rather than a guess. |
+| `decode_product` / `PRODUCTS` | Six product acronyms, decoded by **substring containment**, which is exactly what Rule 24 prescribes. The note is honest that containment cannot distinguish an intended acronym from one straddling two concatenated codes — *"that imprecision is the customer's, and is preserved rather than second-guessed."* |
+| `ACTIVE_DEALER_RULE` | Rule 10: only dealers with `consortium_number_of_apps_last_1_year > 0`. |
+| `INCOMEPASS_SEMANTICS` | Rule 20: `income_misrep_score` is IncomePass, distinct from fraud score; overstatement in isolation is not correlated to EPD. |
+| `OS15_DEFINITION` | The customer's own `CASE` expression for the 15% overstatement flag, carried as SQL. |
+
+## The alert categories
+
+Ten categories, keyed by the customer's own names, from General Rule 3:
+
+| Category | IDs |
+|---|---:|
+| Identity | 60 |
+| Default | 33 |
+| Employment | 21 |
+| Income | 12 |
+| Employment Deviation | 10 |
+| Straw Borrower | 10 |
+| Dealer Risk | 9 |
+| Collateral | 6 |
+| Vehicle Risk | 3 |
+| Bust Out Risk | 2 |
+
+**166 entries, 148 distinct IDs, 18 IDs in more than one category.** The overlap is the
+customer's, not a data error — every one of the ten Employment Deviation ids also appears
+under Employment, for instance. Full treatment on
+[alert categories](/docs/fidelity/alert-categories).
+
+## What is reconstructed rather than received
+
+<Callout type="error" title="The registry is a reconstruction, and must be described as one">
+**`full_underwriting_signal_dictionary.xlsx` — the authoritative signal contract — was never
+received.** It appears only as an embedded thumbnail on page 3 of the process-guide PDF, which
+has zero extractable attachments. `CLEAN_MAIN_STREAM_FILE.sql` was likewise never received.
+
+So the 60-signal registry is **reconstructed from the nine prompts**. Every name in it is a
+name one of her prompts uses, and every `interpretation` is her sentence — but the *set* is
+inferred from what the prompts mention, which cannot be the same thing as the set her SQL
+produces.
+
+Concretely, what the missing files would settle at once: the full signal set, the output DDL
+for `UNDERWRITING_REPORT_OUTPUT`, and
+[every enum conflict](/docs/open-questions#the-enum-conflict). Requesting them is the highest-value
+single ask on [open questions](/docs/open-questions).
+</Callout>
+
+What **is** received and verified, so the distinction is clear:
+
+| Element | Provenance |
+|---|---|
+| The nine prompts | Byte-identical, sha256-verified at import. [Prompt fidelity](/docs/fidelity/prompt-fidelity). |
+| Every signal `interpretation` | Read out of those prompts at import. |
+| The 29 General Rules' text | Extracted from the verbatim orchestration documents, not retyped. |
+| The ten alert categories and their 166 IDs | From General Rule 3's own list. |
+| The bands | From Rules 0.5 / 6 / 21 / 24 / 25. |
+| **The signal set itself** | **Inferred.** ← the gap |
+| **The output DDL** | **Never received.** |
+
+<Cards>
+  <Card
+    title="The fixtures"
+    href="/docs/reference/fixtures"
+    description="The 14 applications that exercise this registry, and the nine anti-false-positive scenarios."
+  />
+  <Card
+    title="General rules as code"
+    href="/docs/fidelity/general-rules"
+    description="27 of 29 rules enforced deterministically; the two that are prompt-enforced and why."
+  />
+</Cards>

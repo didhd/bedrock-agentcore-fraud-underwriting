@@ -1,0 +1,224 @@
+---
+title: Output-contract defects
+description: All 24 bustout and rings analyses invented a title their prompt never defines, in 15 spellings, across every Claude tier. GPT invents none. And the rules are derived from prompt text, which corrected a wrong assumption.
+---
+
+<Callout type="info" title="Audience">
+This page is for the customer's engineer. It reports a divergence between what two of her
+prompts ask for and what models actually do, and it deliberately does **not** repair the prose.
+Rewriting would hide the divergence, and the divergence is a decision for the prompt's author.
+</Callout>
+
+## The finding
+
+`bustout_agent_prompt.txt` and `rings_agent_prompt.txt` define **no title**. They end with
+*"Return only the final analysis."* and *"Return only final analysis."* respectively — one word
+apart — and that is the entire output specification. No title, no character cap, no emoji ban,
+no ban on citing alert numbers, no ban on risk labels in headers. The other six prompts define
+all five.
+
+Every single analysis those two agents produced in the tier study opened with a title anyway.
+
+| | Value | Source |
+|---|---:|---|
+| bustout + rings analyses in the tier study | **24** | `evals/results/tier_quality.json:per_analysis` |
+| That invented a title | **24 (100%)** | same, `contract_findings` |
+| Distinct title strings observed | **15** | same, derived from the finding details |
+| Distinct after normalising case, markdown level and suffix | **6** | same |
+| Models this held across | **3 of 3** — Haiku 4.5, Sonnet 5, Opus 5 | `run.candidate_models` |
+
+The per-cell split: rings 15 analyses (5 per model), bustout 9 (3 per model). Zero clean.
+
+## The 15 spellings
+
+Every string below is the real opening line of a measured analysis, extracted from the
+`invented_title` findings in `evals/results/tier_quality.json`. None is an example.
+
+| Count | Opening line |
+|---:|---|
+| 4 | `# Fraud Ring Risk Analysis` |
+| 3 | `# BUSTOUT FRAUD RISK ANALYSIS` |
+| 2 | `# FRAUD RING DETECTION ANALYSIS` |
+| 2 | `# Bustout Fraud Risk Analysis` |
+| 2 | `# BUST-OUT FRAUD RISK ANALYSIS` |
+| 2 | `# Fraud Ring Detection Analysis` |
+| 1 | `# Bust-Out Fraud Risk Analysis` |
+| 1 | `# RINGS FRAUD RISK ANALYSIS` |
+| 1 | `# FRAUD RINGS RISK ANALYSIS` |
+| 1 | `## Fraud Ring Risk Analysis: HIGH RISK` |
+| 1 | `## Fraud Ring Risk Analysis — POSSIBLE RISK` |
+| 1 | `## Bustout Fraud Risk Analysis — Nadia Kowalski` |
+| 1 | `# Fraud Ring Risk Analysis — Application (Devon Cross / hash_ssn_ff02aa)` |
+| 1 | `# Fraud Ring Risk Analysis — Application (Callum Reyes / hash_ssn_9e4a26)` |
+| 1 | `## Fraud Ring Risk Analysis — Application (hash_ssn_5c8b17)` |
+
+Eleven of the fifteen are generic; **four embed application-specific data** — a borrower name,
+a hashed SSN, or both.
+
+<Callout type="info" title="Where the 'eleven spellings' figure in the code comes from">
+`agents/output_contract.py`'s docstring says *"eleven different spellings"*. That is the count
+of the **generic** strings, i.e. the fifteen distinct opening lines minus the four that vary
+only because they embed an application's own name or hashed SSN. Both numbers are correct
+readings of the same 24 analyses; **15 is the number of distinct opening lines** and 11 is the
+number of distinct title *forms*. If a slide needs one number, use 15 and say what it counts.
+</Callout>
+
+<Callout type="warn" title="Why the spread matters more than the count">
+A consistent invented title would be a cosmetic problem: strip one string in the display layer
+and move on. Fifteen strings, at three markdown levels (`#` on 20 of 24, `##` on 4), with
+inconsistent hyphenation of "Bust-Out" and three different nouns for the same domain ("Fraud
+Ring", "Fraud Rings", "Rings"), is not something a fixed-string filter removes.
+
+It is also a **contract divergence in the persisted output**: whatever consumes
+`rings_summary` downstream is receiving a heading its schema never specified, in a shape that
+changes between runs.
+</Callout>
+
+## Two of these titles break rules their own prompt does not state
+
+Two carry a **risk label** — `Fraud Ring Risk Analysis: HIGH RISK` and
+`Fraud Ring Risk Analysis — POSSIBLE RISK`. Three embed a **hashed SSN**, and one a borrower's
+full name.
+
+<Callout type="info" title="Neither is a rule violation for these two agents, and that is the awkward part">
+`agents/output_contract.py` reports the risk-label rule only for the four agents whose prompts
+state it — identity, dealer, straw, employment. rings and bustout are unconstrained, so a risk
+label in a rings heading is **not** a violation of anything she wrote.
+
+What it is, is a divergence from the intent of the other four prompts, applied to an agent
+whose prompt happens to be silent. Reporting it as a violation would fabricate a rule; not
+mentioning it would hide a real inconsistency in the output. So the module records the
+identifier-in-heading case explicitly as *"(observation, not a stated prompt rule)"* and notes
+that it is **not** a Rule 23 breach — the SSN value is hashed, never raw — but that it does put
+an identifier in a title.
+</Callout>
+
+## GPT invents none
+
+The cross-family study swept the same two agents across five models and re-ran the same
+contract checker. Source: `evals/results/set_comparison.json:per_analysis`, 120 analyses of
+which 60 are bustout or rings.
+
+| Model | Set | bustout+rings analyses | Invented a title |
+|---|---|---:|---:|
+| Claude Opus 5 | claude | 12 | **12** |
+| Claude Sonnet 5 | claude | 12 | **11** |
+| GPT-5.6 Luna | gpt | 12 | **0** |
+| GPT-5.6 Terra | gpt | 12 | **0** |
+| GPT-5.6 Sol | gpt | 12 | **0** |
+
+Across all four swept domains and all 120 analyses, output-contract cleanliness was
+**Claude 17 of 48, GPT 72 of 72**. All 23 invented titles in that study belong to the two Claude
+models.
+
+<Callout type="error" title="Model-sensitive, and the fix is still the prompt">
+This is one of the few findings in the engagement that a model swap genuinely does fix. It is
+still not a reason to swap, and the reason is on the
+[cross-family study page](/docs/model-selection/cross-family-study): the specialists are held
+on Claude on `_context` grounding — GPT 0.357 against Claude 0.642, lower on 4 of 4 agents,
+deterministic, no judge involved.
+
+So the recommended fix remains a sentence in the customer's two prompts, not a family change.
+It is the counterpart to the missing character cap, and both are
+[hers to decide](/docs/open-questions#5-two-of-her-prompts-carry-no-character-cap).
+</Callout>
+
+## The correction: the rules are derived, not declared
+
+The most useful thing this sweep produced was not the title count. It was catching a wrong
+assumption in the checker itself.
+
+<Callout type="warn" title="The 'no risk labels in headers' rule is in FOUR prompts, not six">
+An earlier revision of `agents/output_contract.py` declared the rule set as a hard-coded table
+and assumed the risk-label rule applied to the same **six** agents as the title, the character
+cap, the emoji ban and the alert-number ban.
+
+It does not. Reading the prompt text found the sentence in **four** — identity, dealer, straw,
+employment. `income` and `synthetic` never received it.
+
+Confirmed independently from a second artifact: `evals/results/tier_quality.json:contract_scope`
+records `no_risk_label_in_headers` with `count: 4` and lists exactly those four, while every
+other shared rule carries `count: 6`.
+
+Enforcing the six-agent contract on all eight would have reported violations **the customer
+never asked for** — two agents flagged for something their prompts permit. On a fidelity review
+that is the same class of error as missing a rule: it means the checker is not reading her
+document.
+</Callout>
+
+The fix was structural rather than a corrected constant. `_derive_rules(domain)` reads each
+rule out of that domain's own verbatim prompt text at import:
+
+| Rule | Derived by looking for |
+|---|---|
+| `title` | whether `TITLES[domain]` is not `None` |
+| `char_cap` | `"max 4000 characters"` |
+| `no_emoji` | `"no emojis"` |
+| `no_alert_numbers` | `"not alert numbers"` |
+| `no_risk_labels_in_headers` | `"risk classification labels"` |
+
+So a customer prompt update changes the contract automatically instead of leaving the table
+stale, and the same mechanism is what makes the four-versus-six question answerable at all.
+`tests/test_output_contract.py` collects **25 tests**, including one asserting that
+`RULES["bustout"]` and `RULES["rings"]` have **every** value false, and one asserting that
+`output_contract.TITLES` and `fanout.ANALYSIS_TITLES` agree.
+
+## What is model-sensitive and what is not
+
+The engagement produced two defects on these two agents. They look similar and they are not.
+
+| | Invented titles | The calibration failures |
+|---|---|---|
+| Affects | bustout, rings | APP-1014 rings, APP-1004 bustout |
+| Rate | 24 of 24 Claude analyses; 23 of 23 in the cross-family study | 0 of 5 models correct, each |
+| Model-sensitive? | **Yes** — GPT-5.6 invents none, on 36 of 36 analyses | **No** — wrong on all five models across both families |
+| Same mistake each time? | No — 15 spellings | **Yes** — every model wrong the same way |
+| Fix | a title line in the prompt, or accept and strip in display | an operational counting rule in the prompt |
+| Measured to work? | The GPT result is measured; the prompt fix is **unmeasured** | **Unmeasured** |
+
+Detail on the second column: [Open
+questions](/docs/open-questions#3-the-calibration-failures-no-model-choice-fixes). Both
+prompts already state the principle in the exact terms of the failure, which is why the
+recommendation is to state it as a counting rule rather than as guidance.
+
+## The two prompts with no character cap
+
+The same two agents, the same root cause — an output specification consisting of one sentence.
+Measured over n=334 specialist calls in `evals/results/tail_analysis.json`:
+
+| | Domains | n calls | Output tokens p50 | Analysis chars p50 | Over 4,000 chars |
+|---|---|---:|---:|---:|---:|
+| Prompt caps at 4,000 chars | identity, dealer, straw, employment, income, synthetic | 251 | **381** | 1,224 | 9 (3.6%) |
+| **No cap in prompt** | **bustout, rings** | 83 | **1,331** | **3,519** | **25 (30.1%)** |
+
+3.5x the output tokens and 2.9x the characters. Since wall clock is linear in output tokens at
+r²=0.9531 over n=332 calls, these two agents are the structural owner of the fan-out floor, and
+`rings` alone was the slowest specialist in **25 of 42** pipeline runs.
+
+They are also the **only** two agents ever measured to truncate:
+`evals/results/tail_analysis.json:live_cap_sweep` records `MaxTokensReachedException` on both at
+caps of 1024, 1536 and 2048, non-monotonically.
+
+<Callout type="error" title="Do not reach for max_tokens instead of the prompt">
+Measured, 30 live calls: no latency gain (5 of 10 comparable cells faster than control, 5
+slower, mean delta −0.23 s), **14 of 30 cells truncated**, and only **13 of 30** kept the same
+band. A truncated call spends the full wall clock, is fully billed, and returns no analysis —
+so the fraud dimension is lost. [The measurement](/docs/performance/the-tail#the-max-tokens-fix-was-measured-and-it-failed).
+</Callout>
+
+## How to reproduce the check
+
+```bash
+MOCK_MODE=1 python3 -m pytest tests/test_output_contract.py -q     # 25 tests
+
+python3 -c "
+from agents.output_contract import RULES, TITLES, check
+print(RULES['rings'])                       # every value False
+print(TITLES['bustout'], TITLES['rings'])   # None None
+print(check('rings', '# Fraud Ring Risk Analysis\n\nBody.').violations)
+"
+```
+
+`check()` reports; it never repairs. `strip_invented_title()` exists for a display surface that
+wants to honour the contract the prompt states, and the violation must still be recorded —
+because what the customer is owed here is the finding, not a tidied output.

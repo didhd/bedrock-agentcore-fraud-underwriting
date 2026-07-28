@@ -1,0 +1,251 @@
+---
+title: Output contracts
+description: The 21-key adjudication object in the customer's order, its exact enums and cross-field rules, the six per-agent titles, and the two agents whose prompts define no title at all.
+---
+
+<Callout type="info" title="Audience">
+This page is for the customer's engineer. It is the wire contract: every key, every enum,
+every length rule, and where each one is asserted in code. Rule ids in the form `MSTR-0xx`
+are this port's identifiers for lines in `master_agent_prompt.txt`, carried so a review can
+be conducted line by line.
+</Callout>
+
+## The master adjudication: exactly 21 keys, in her order
+
+`master_agent_prompt.txt` ends in a `REQUIRED JSON FORMAT` block. That block is a wire
+contract, not a suggestion: downstream, these keys become columns in
+`SNOWFLAKE_INTELLIGENCE.PUBLIC.UNDERWRITING_REPORT_OUTPUT`.
+
+Source for this table: `agents/contracts.py:ADJUDICATION_FIELD_ORDER`, read from the module.
+
+| # | Key | Type | Rule |
+|---:|---|---|---|
+| 1 | `master_summary` | string, < 1200 chars | MSTR-011 |
+| 2 | `overall_risk_decision` | `LOW RISK` / `MEDIUM RISK` / `HIGH RISK` | MSTR-014 |
+| 3 | `recommendation_decision` | `APPROVE` / `REVIEW AND APPLY STIPULATIONS` / `DECLINE` | MSTR-015 |
+| 4 | `recommended_stipulations` | string, populated for exactly one outcome | MSTR-036 |
+| 5 | `top_risk_factors` | string, band-conditional | MSTR-037 / MSTR-038 |
+| 6 | `identity_summary` | string, < 1200 chars | MSTR-011 |
+| 7 | `identity_flag` | integer `0` or `1` | MSTR-016 |
+| 8 | `dealer_summary` | string, < 1200 chars | |
+| 9 | `dealer_flag` | integer `0` or `1` | |
+| 10 | `straw_summary` | string, < 1200 chars | |
+| 11 | `straw_flag` | integer `0` or `1` | |
+| 12 | `employment_summary` | string, < 1200 chars | |
+| 13 | `employment_flag` | integer `0` or `1` | |
+| 14 | `income_summary` | string, < 1200 chars | |
+| 15 | `income_flag` | integer `0` or `1` | |
+| 16 | `synthetic_summary` | string, < 1200 chars | |
+| 17 | `synthetic_flag` | integer `0` or `1` | |
+| 18 | `bustout_summary` | string, < 1200 chars | |
+| 19 | `bustout_flag` | integer `0` or `1` | |
+| 20 | `rings_summary` | string, < 1200 chars | |
+| 21 | `rings_flag` | integer `0` or `1` | |
+
+<Callout type="error" title="There is no application_id key — and that is a correction, not an omission">
+The prior revision emitted **22 keys with `application_id` first**. It is not in the
+customer's contract. It belongs to the transport envelope that carries the adjudication
+(`agents.synthesize.SynthesisResult` and the AgentCore entrypoint), so the model sets
+`extra="forbid"` and an explicit import-time guard raises if `application_id` ever appears in
+`Adjudication.model_fields`.
+
+Two further import-time guards sit beside it: one asserting the **declared field order** is
+`ADJUDICATION_FIELD_ORDER`, and one asserting the length is exactly 21. Both raise
+`AdjudicationContractError` at import rather than emitting a silently wrong report row.
+</Callout>
+
+## Why the key order is load-bearing, and how it is guaranteed
+
+MSTR-013 fixes the order, `master_summary` first. Pydantic emits fields in **declaration
+order** from both `model_dump()` and `model_dump_json()`, so the class body *is* the wire
+order.
+
+Keys 6 to 21 are not typed out by hand. They are generated from `prompts.loader.DOMAINS` —
+the customer's master-prompt input order, `IDENTITY, DEALER, STRAW, EMPLOYMENT, INCOME,
+SYNTHETIC, BUSTOUT, RINGS`, which is deliberately **not alphabetical**. One definition of that
+order serves the prompt substitution and the key order, so the two cannot drift apart.
+
+<Callout type="warn" title="No field is Optional, and that is a structured-output requirement">
+The JSON schema generated from this model is what constrains the model at inference time via
+Strands' `structured_output_model=` kwarg. A non-required field drops out of the schema's
+`required` array — so **one `Optional` would silently make one of the 21 keys omissible.**
+</Callout>
+
+## The cross-field rules, all enforced
+
+These are the rules a plain schema cannot express. Each is a validator in
+`agents/contracts.py:Adjudication` and each raises `AdjudicationContractError` naming the rule.
+
+| Rule | What it enforces |
+|---|---|
+| MSTR-010 | **No nulls anywhere.** Empty strings instead. Runs `mode="before"`, so a `null` reads as a contract breach rather than a generic type error. |
+| MSTR-016 | The eight flags are **integers**, not booleans. Also `mode="before"`, because `Literal[0, 1]` would otherwise accept JSON `true`/`false` as 1/0. |
+| MSTR-020 | No emojis, in any field. |
+| MSTR-036 | `recommended_stipulations` is populated **only** for `REVIEW AND APPLY STIPULATIONS`, and must be non-empty for it. Both directions checked. |
+| MSTR-033 | `REVIEW AND APPLY STIPULATIONS` applies **only** to `MEDIUM RISK`. |
+| MSTR-037 | `MEDIUM`/`HIGH RISK` carries a numbered list of **3 to 4** factors, each matching `^\d+\.\s+\S`. |
+| MSTR-038 | `LOW RISK` carries an **empty** `top_risk_factors`. |
+| MSTR-011 | Every one of the nine summary fields is **strictly under** 1200 characters, so the declarative ceiling is 1199. |
+
+The emoji regex is deliberately narrow — pictograph and dingbat blocks only — so it catches an
+emoji but never an en dash, ellipsis or arrow, all of which appear in ordinary underwriting
+prose.
+
+**Measured result:** all **42 of 42** benchmark runs produced a validated 21-key adjudication,
+including the one degraded run that lost two specialists. `repair_attempts` totalled **0**.
+Source: `evals/results/pipeline_14x3_us-east-1.json`.
+
+## The enum conflict, surfaced rather than resolved
+
+Three vocabularies exist across the customer's artifacts, and this port does not pick quietly.
+
+<Tabs items={['Implemented', 'The PDF', 'The specialists']}>
+
+<Tab value="Implemented">
+
+**`docs/master_agent_prompt.txt`** — the executable artifact, the string the production agent
+runs today. It wins here.
+
+- `overall_risk_decision` ∈ `LOW RISK` | `MEDIUM RISK` | `HIGH RISK`
+- `recommendation_decision` ∈ `APPROVE` | `REVIEW AND APPLY STIPULATIONS` | `DECLINE` — three
+  values
+
+</Tab>
+
+<Tab value="The PDF">
+
+**`docs/Agent_Underwriting_Process_Guide (1).pdf`** sections 5.1 and 5.2 — narrative
+documentation, and it conflicts.
+
+- `overall_risk_decision` ∈ `LOW RISK` | `POSSIBLE RISK` | `HIGH RISK`
+- `recommendation_decision` ∈ `APPROVE` | `APPROVE WITH STIPULATIONS` | `MANUAL REVIEW` |
+  `DECLINE` — **four** values
+
+It also shows **no** `top_risk_factors` column and **no** `*_flag` columns, both of which the
+prompt file requires.
+
+</Tab>
+
+<Tab value="The specialists">
+
+**The eight `<domain>_agent_prompt.txt` CALIBRATION blocks** — `LOW RISK` | `POSSIBLE RISK` |
+`HIGH RISK`.
+
+The specialists agree with the **PDF**, not with the master prompt. A band rename therefore
+happens between the analysis layer and the adjudication layer, by design or by drift.
+
+</Tab>
+
+</Tabs>
+
+`agents/contracts.py:PDF_TO_PROMPT_ENUM_MAP` handles the mechanical part —
+`POSSIBLE RISK` → `MEDIUM RISK`, `APPROVE WITH STIPULATIONS` → `REVIEW AND APPLY
+STIPULATIONS`. **`MANUAL REVIEW` is deliberately absent** and `map_pdf_enum` raises
+`EnumConflictError` for it, because it is not a rename of any prompt value — it is a fourth
+outcome that does not exist in the executable artifact. Inventing a mapping there would be a
+business decision disguised as a default.
+
+Full ask: [Open questions](/docs/open-questions#2-which-artifact-defines-the-authoritative-enums).
+
+<Callout type="info" title="One vocabulary recorded and not enforced">
+PDF section 5.3 lists a controlled stipulation vocabulary (proof of income, employment
+verification, proof of residence, driver's licence validation, …). It is captured as
+`contracts.STIPULATION_VOCABULARY` and **not** enforced, because the executable prompt places
+no constraint on that string. If downstream routing keys off those exact phrases, that is a
+separate thing to settle.
+</Callout>
+
+## The eight specialist output contracts
+
+Specialist output is **titled prose**, not key/value. This is where the paraphrase-era
+`RISK:` / `FINDINGS:` format did the most damage — see
+[prompt fidelity](/docs/fidelity/prompt-fidelity).
+
+Every cell below is derived from the verbatim prompt text at import by
+`agents/output_contract.py:_derive_rules`, not hard-coded, so a customer prompt update changes
+the contract automatically rather than leaving a stale table.
+
+| Agent | Exact title | Char cap | No emoji | No alert numbers | No risk labels in headers |
+|---|---|---|---|---|---|
+| identity | `Identity Fraud Risk Analysis` | 4000 | yes | yes | **yes** |
+| dealer | `Dealer Fraud Risk Analysis` | 4000 | yes | yes | **yes** |
+| straw | `Straw Borrower Fraud Risk Analysis` | 4000 | yes | yes | **yes** |
+| employment | `Employment Fraud Risk Analysis` | 4000 | yes | yes | **yes** |
+| income | `Income Fraud Risk Analysis` | 4000 | yes | yes | **no** |
+| synthetic | `Synthetic Identity Fraud Risk Analysis` | 4000 | yes | yes | **no** |
+| **bustout** | **NONE** | none | no | no | no |
+| **rings** | **NONE** | none | no | no | no |
+
+Cross-checked against `evals/results/tier_quality.json:contract_scope`, which records the same
+scope with the customer's own example prompt line for each rule and was produced by an
+independent sweep: `no_alert_numbers` 6 agents, `no_emoji` 6, `no_risk_label_in_headers` **4**,
+`exact_title` 6, `max_4000_chars` 6, `low_risk_3_to_5_sentences` 6,
+`no_coborrower_2_to_3_sentences` **1** (straw only).
+
+<Callout type="error" title="bustout and rings define NO title, and no title is invented for them">
+Their prompts say only *"Return only the final analysis."* (bustout) and *"Return only final
+analysis."* (rings) — one word apart. So `agents/fanout.py:ANALYSIS_TITLES` and
+`agents/output_contract.py:TITLES` both map them to `None`, a test asserts the two tables
+agree, and `test_bustout_and_rings_are_unconstrained_on_every_rule` asserts that **none** of
+the five rules applies to either.
+
+Every model tested invents one anyway. That is a measured defect with its own page:
+[output-contract defects](/docs/fidelity/output-contract-defects).
+</Callout>
+
+## The length rules
+
+| Case | Rule | Applies to |
+|---|---|---|
+| LOW RISK | 3–5 sentences max; state the clearing conclusion and the key mitigating factor | the six capped agents |
+| POSSIBLE / HIGH RISK | detailed analysis proportional to severity, **max 4000 characters** | the six capped agents |
+| straw with no co-borrower | 2–3 sentences — straw risk is inherently minimal | straw only |
+| bustout, rings | **no length rule of any kind** | bustout, rings |
+
+<Callout type="warn" title="The measured cost of the two missing caps">
+From `evals/results/tail_analysis.json` over n=334 specialist calls:
+
+| | Domains | n calls | Output tokens p50 | Analyses over 4,000 chars |
+|---|---|---:|---:|---:|
+| Prompt caps at 4,000 chars | identity, dealer, straw, employment, income, synthetic | 251 | **381** | 9 (3.6%) |
+| **No cap in prompt** | **bustout, rings** | 83 | **1,331** | **25 (30.1%)** |
+
+3.5x the output tokens. Since wall clock is linear in output tokens at r²=0.9531 (n=332),
+those two agents are the structural owner of the fan-out floor. Detail:
+[the tail](/docs/performance/the-tail).
+</Callout>
+
+<Callout type="info" title="A character cap and a max_tokens cap are not the same constraint">
+Measured chars-per-output-token medians differ 2.9-fold across agents — `dealer` 4.51,
+`identity` 1.55, with an observed minimum of 0.33 on one identity call that spent 3,582 output
+tokens to produce 1,191 characters. So a `max_tokens` value chosen from the 4,000-character
+contract truncates far earlier than the contract implies. Source:
+`evals/results/tail_analysis.json`. The measured attempt to use `max_tokens` as the
+instrument failed all three of its criteria:
+[what does not work](/docs/cost/what-does-not-work).
+</Callout>
+
+## Francis: the interactive-path contract
+
+`master_agent_orchestration_062026` is a **different artifact** from
+`master_agent_prompt.txt`. The former is the interactive router; the latter is the batch
+synthesizer. Francis's rules are hers, and each is pinned by a test in
+`tests/test_prompt_fidelity.py`.
+
+| Rule | Where it comes from |
+|---|---|
+| Never identify as Claude; always Francis | The prompt's opening lines |
+| Deflect RETRO questions to `RETRO_FRANCIS` | Named explicitly in the prompt |
+| Call a **maximum of 2 tools per query**, picking the 2 most relevant | The `SPEED OPTIMIZATION` clause |
+| Response shaped `## EXECUTIVE SUMMARY` / `## ANALYSIS` / conditional `###RECOMMENDATIONS` | The same document's `response` block |
+| No unsolicited loan recommendations | The prompt's closing line, and separately General Rule 12 |
+
+## Where each rule is asserted
+
+| Layer | File | Tests collected |
+|---|---|---:|
+| The 21-key model, enums, cross-field rules | `agents/contracts.py` | `tests/test_contracts.py` — **199** |
+| Per-agent output rules, derived from prompt text | `agents/output_contract.py` | `tests/test_output_contract.py` — **25** |
+| The contract strings surviving the loader | `prompts/loader.py` | `tests/test_prompt_fidelity.py` — **215** |
+
+Counts from `MOCK_MODE=1 python3 -m pytest tests/<file> -q --collect-only`.

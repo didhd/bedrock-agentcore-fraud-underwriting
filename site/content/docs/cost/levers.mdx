@@ -1,0 +1,238 @@
+---
+title: What actually reduces cost
+description: The levers that survive arithmetic — the global.* inference profile at exactly −9.09%, batch inference at −50% with its exclusion list, and removing per-application Cortex Analyst calls.
+---
+
+<Callout type="info" title="Audience">
+Both audiences, but the exclusions are the part that matters. Three things reduce cost here and
+[three more look like levers and are not](/docs/cost/what-does-not-work). Every figure comes
+from `agents/pricing.py` on the published rate card, or from a measured usage record, and the
+arithmetic is reproducible from the commands shown.
+</Callout>
+
+## The rate card these figures come from
+
+`agents/pricing.py:BASE_RATES_PER_MTOK`, `global.*` on-demand, $ per 1M tokens:
+
+| Model | Input | Output | Batch offered? |
+|---|---:|---:|---|
+| Claude Haiku 4.5 | $1.00 | $5.00 | **Yes** |
+| Claude Sonnet 5 | **$2.00** | **$10.00** | **No** |
+| Claude Sonnet 4.6 | $3.00 | $15.00 | **Yes** |
+| Claude Opus 5 | $5.00 | $25.00 | **Yes** |
+| Claude Opus 4.8 | $5.00 | $25.00 | No |
+| GPT-5.6 Luna (`bedrock-mantle`) | $1.10 | $6.60 | No |
+| GPT-5.6 Terra | $2.75 | $16.50 | No |
+| GPT-5.6 Sol | $5.50 | $33.00 | No |
+
+Cache rates are multipliers on the model's own **input** rate: read **0.10x**, 5-minute write
+**1.25x**, 1-hour write **2.00x**.
+
+Two ids appear in `BATCH_SUPPORTED` but **not** in the rate table — `anthropic.claude-opus-4-7`
+and `anthropic.fable-5` — because their Bedrock rates were not verified for this port. Pricing
+either raises `UnknownModelRateError` rather than guessing.
+
+<Callout type="error" title="Sonnet 5's $2/$10 is introductory and reverts to $3/$15 on 2026-09-01">
+Six of the eight specialists sit on Sonnet 5, so this date moves the whole bill. Repricing the
+current assignment at both dates (`agents/models.py:projected_cost_per_adjudication`):
+
+| Priced as of | Projected $/adjudication |
+|---|---:|
+| 2026-07-28 | **$0.12475** |
+| 2026-09-01 | **$0.17734** |
+
+A **42% increase** on the same tokens, from a calendar date and nothing else. Any TCO slide with
+a horizon past September needs the second row. `SONNET_5_STANDARD_RATES` and
+`SONNET_5_INTRO_EXPIRY` are in the code so the second figure is computable rather than
+remembered.
+</Callout>
+
+## Lever 1: `global.*` instead of `us.*` — exactly −9.09%
+
+`us.*` and `global.*` cross-region inference profiles address the **same weights** through the
+**same API** with the same behaviour. `us.*` bills at exactly **1.10x** `global.*` on **every**
+rate category — input, output, cache read, cache write.
+
+| | Rate ratio | Saving from choosing `global.*` |
+|---|---:|---:|
+| Per category, all models | **1.10x** | **9.0909…%** = 1 − 1/1.10 |
+
+Verified on the projected per-adjudication cost, both prefixes, same tokens, same date:
+
+| Prefix | Specialists (8 Claude calls) | Synthesizer | Total |
+|---|---:|---:|---:|
+| `global.*` | **$0.11412** | $0.01063 | **$0.12475** |
+| `us.*` | $0.12553 | $0.01063 | $0.13616 |
+| Saving | **−9.09% exactly** | — (no prefix exists on mantle) | −8.38% blended |
+
+<Callout type="warn" title="Note which figure is 9.09% and which is 8.38%">
+**The 9.09% applies to the Claude specialist calls only.** The synthesizer is on
+`bedrock-mantle`, which has **no `global.*` / `us.*` prefix and no cross-region inference** — the
+model id is bare and the call is in-region. So the *blended* per-adjudication saving on this
+nine-call pipeline is **8.38%**, and quoting 9.09% as the end-to-end figure would be slightly
+wrong. Both are computable from the code; neither is rounded here.
+</Callout>
+
+`REGIONAL_MULTIPLIER = 1.10` lives next to the prefix in `agents/models.py`, and
+`agents/pricing.py` reads the multiplier from the **prefix carried by the model id** —
+`prefix_of(model_id)` — rather than from the process-wide default. So a model id built with an
+explicit prefix, or read back from a live response, is still priced correctly. Pricing a `us.*`
+call at global rates would under-report by 9.09% silently.
+
+The prefix is env-overridable (`BEDROCK_MODEL_PREFIX`), because a customer with a data-residency
+requirement needs `us.*`. An unknown value **raises**: a silently-accepted typo would route every
+agent to a model id that does not exist and produce cost math that cannot be trusted.
+
+## Lever 2: batch inference — −50%, with a real exclusion list
+
+Batch inference is half price where Bedrock offers it. It does **not** offer it everywhere, and
+the exclusions are exactly the models this pipeline uses most.
+
+| Model | Batch offered | Consequence for this pipeline |
+|---|---|---|
+| Claude Opus 5 | **Yes** | No agent runs on Opus any more |
+| Claude Sonnet 4.6 | **Yes** | The source system's model, not ours |
+| Claude Haiku 4.5 | **Yes** | `dealer` and `straw` — the two cheapest agents |
+| **Claude Sonnet 5** | **No** | **Six of eight specialists** |
+| Claude Opus 4.8 | No | |
+| Claude Opus 4.7 / Fable 5 | No | |
+| GPT-5.6 (any variant) | No | The synthesizer |
+
+<Callout type="error" title="Batch is worth 3.58% on the current assignment, not 50%">
+Priced on the recorded per-agent tokens, taking batch wherever it is offered and on-demand
+everywhere else:
+
+| | Projected $/adjudication |
+|---|---:|
+| All on-demand | **$0.12475** |
+| Batch where offered (`dealer` + `straw` only) | **$0.12028** |
+| **Saving** | **−3.58%** |
+
+Because the two batch-eligible agents are also the two cheapest, a −50% discount on them is
+worth 3.58% of the bill. **A bulk-underwriting plan that assumes −50% end-to-end is wrong by an
+order of magnitude on this assignment.** `rates_for(..., batch=True)` raises
+`UnsupportedBatchError` for a model with no batch price rather than silently applying the
+discount.
+</Callout>
+
+Two further constraints:
+
+- **Batch and prompt caching are mutually exclusive** on the same request
+  (`BATCH_AND_CACHING_ARE_EXCLUSIVE = True`). That costs nothing here, because
+  [prompt caching does not engage anyway](/docs/cost/what-does-not-work#prompt-caching-does-not-engage).
+- **Batch is not real-time.** It is an offline queue, so it does not apply to the
+  forward-flow underwriting path the customer's sub-minute target describes. It applies to a
+  **backfill**, and the customer has a very specific backfill: their own reported figure is
+  **4,500 applications taking over 48 hours**. That is where batch is worth having, and it is a
+  different workload from the demo.
+
+If the September rate change forces a re-look, note the shape it creates: **Sonnet 4.6 at $3/$15
+with batch is $1.50/$7.50, which is cheaper than post-promotional Sonnet 5 at $3/$15 on-demand.**
+For a backfill, the *older* model becomes the cheaper choice. That is arithmetic on the rate
+card, not a measurement, and no quality comparison of Sonnet 4.6 against Sonnet 5 exists in this
+repo.
+
+## Lever 3: precomputed signals remove per-application Cortex Analyst calls
+
+The largest structural saving, and the one that is not a Bedrock rate at all.
+
+The port keeps the customer's own two-layer separation: governed signals are generated
+**first** (`signal_layer/`), then handed to the agents for interpretation (`agents/`). The same
+agent never both queries and investigates.
+
+| Per application, on the incumbent path | Per application, here |
+|---|---|
+| 8 Cortex Analyst messages | **0** |
+| 8 warehouse executions | **0** |
+| 9 LLM calls | 9 LLM calls |
+
+<Callout type="warn" title="This is a structural claim, not a priced one">
+**This site does not put a dollar figure on the removed Cortex Analyst calls or warehouse
+executions.** Doing so would require the customer's Snowflake credit rate, their warehouse size,
+and their Cortex Analyst message pricing — none of which we have. What is claimable is the
+**count**: eight Analyst messages and eight warehouse executions per application disappear when
+signals are precomputed.
+
+Their leadership often finds the count more persuasive than a latency number, precisely because
+they know what a warehouse-second costs and we do not.
+</Callout>
+
+There is also a **latency** argument for the same change, and it is the reason the architecture
+looks like this at all: a published production decomposition of a Cortex Agent call attributes
+**~27 s of a 55 s total** to Cortex Analyst SQL generation alone. For a fixed set of fraud
+signal groups the queries are known at design time, so regenerating them per application buys
+nothing. That figure is **not our measurement** — it is a published third-party decomposition,
+and it is labelled as such wherever it appears. See `docs/semantic-layer-mcp.md` and
+[the semantic layer](/docs/platform/semantic-layer).
+
+## GPT-5.6 cache-write tokens bill at 1.25x input
+
+Not a lever — a **correction**, and the largest single mis-pricing found in this engagement.
+
+GPT-5.6 turns implicit caching on by default. A first call against a large prompt reports most of
+its input as `cacheWriteInputTokens`, and **cache-write bills at 1.25x the uncached input rate**
+(a 30-minute cache).
+
+| Measured Luna synthesis call | Value |
+|---|---:|
+| `cacheWriteInputTokens` | **6,740** |
+| Cost of that term alone | **$0.00927** |
+| Total cost of the call | **$0.01499** |
+| **Share of the bill the term represents** | **62%** |
+
+Dropping the term under-reported that call by 62%. `agents/mantle.py:CACHE_WRITE_MULTIPLIER`
+prices it, with a regression test.
+
+Note the variant asymmetry: **GPT-5.4 and GPT-5.5 cache automatically with NO write charge**, so
+their multiplier is **0.0**. A single hard-coded 1.25x across the GPT family would over-report
+those two.
+
+The pipeline's own synthesis rows show why this is not an edge case:
+
+| Synthesizer token class, mean per call over 42 runs | Value |
+|---|---:|
+| Input | **2.0** |
+| Output | 715.9 |
+| Cache read | 0.0 |
+| **Cache write** | **4,300.2** |
+
+**Two** input tokens and **4,300** cache-write tokens. Essentially the entire ~31K-character
+prompt lands in the cache-write class on every application, because every application's prompt
+is new. Pricing the synthesizer without the cache-write term would report it as almost free.
+
+## Where a cost figure is allowed to come from
+
+| Source | What it may publish |
+|---|---|
+| `evals/bench.py` on a live run | Measured cost per adjudication, with n |
+| `agents/pricing.py:cost_usd` on a real usage dict | The cost of one measured call |
+| `agents/models.py:projected_cost_per_adjudication` | A **PROJECTION**, labelled as one in every return value |
+| `agents/pricing.py:compare_tiered_vs_uniform` | A saving, **decomposed** into `structural_saving_usd` + `model_saving_usd` |
+| Anything else | Nothing |
+
+`cost_usd_or_none` exists so a caller with unknown usage renders an em dash rather than a
+fabricated figure. `agents/mantle.py:cost_usd` returns `None` for a missing usage dict for the
+same reason, and `rates_for` **raises** for an unpriced model id, with the message
+`no verified rate card for {model_id}; refusing to price it.`
+
+## The measured cost this all sits under
+
+For the avoidance of doubt about which number is a measurement:
+
+| | Value | Status |
+|---|---|---|
+| Cost per adjudication, prior assignment | **$0.1177 min / $0.1440 p50 / $0.2536 max** (n=41 priced runs) | **MEASURED** |
+| Cost per adjudication, current assignment | $0.12475 | **PROJECTION** |
+| Total measured Bedrock spend for the benchmark | **$6.46592** (42 runs, 336 specialist calls) | MEASURED |
+
+The spread is **$0.1359** across 41 runs, and because rates are fixed per model, **token volume
+is the only driver**. Between the cheapest and the most expensive run, specialist *input* tokens
+differ by 7% and specialist *output* tokens differ by **3.35x** (4,098 vs 13,735). Cost variance
+on this workload is an output-length story. [Measured results](/docs/measured-results#cost-per-adjudication).
+
+## What none of this answers
+
+**Whether any of it is cheaper than the incumbent.** That is not a measurement gap on our side —
+it needs one number from the customer, and at the two ends of a plausible range the same
+architecture gives opposite answers.
+[The Snowflake comparison](/docs/cost/snowflake-comparison).

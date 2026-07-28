@@ -1,0 +1,301 @@
+---
+title: Deployment
+description: The real deploy path end to end — the CI gate, IAM for both the runtime execution role and the deploying principal, the one-time CloudWatch Transaction Search setup, and what is still open before production.
+---
+
+<Callout type="info" title="Audience">
+For the customer's engineer and their platform team. This page summarises the committed
+runbook at `deploy/deploy.md`, the gate at `deploy/ci.sh`, and the two IAM documents at
+`deploy/iam_policy.json`. Verified against `@aws/agentcore` 1.0.0-preview.22.
+
+Read [the CLI page](/docs/platform/agentcore-cli) first if you have not — the two dead
+commands are the reason this runbook exists.
+</Callout>
+
+## The path
+
+<Steps>
+
+<Step>
+**Install the toolchain, remove the colliding binary, install the CDK deps.**
+
+```bash
+npm install -g @aws/agentcore
+agentcore --version                                  # 1.0.0-preview.22
+pip uninstall -y bedrock-agentcore-starter-toolkit   # not optional — see the CLI page
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+(cd agentcore/cdk && npm install)                    # MANDATORY
+```
+</Step>
+
+<Step>
+**Author the deployment target.** `agentcore/aws-targets.json` ships as `[]`; region and
+account come from **this file only** and `deploy` has no `--region`/`--profile`/`--agent`.
+
+```bash
+export AWS_REGION=us-east-1            # explicitly. AWS_DEFAULT_REGION is IGNORED
+export AWS_PROFILE=your-bedrock-profile
+```
+</Step>
+
+<Step>
+**Enable Bedrock model access in that region — for the `global.*` prefix.**
+
+The configuration targets `global.*` inference profiles because `us.*` costs exactly
+**1.10×** on every rate category. A policy allowing only `us.anthropic.*` **silently forbids
+the cheaper prefix**, which presents as an access-denied error rather than as a cost decision.
+See [cost levers](/docs/cost/levers).
+</Step>
+
+<Step>
+**Run the gate.**
+
+```bash
+bash deploy/ci.sh
+```
+</Step>
+
+<Step>
+**Deploy.**
+
+```bash
+agentcore deploy --target default --yes
+# --verbose for resource-level CloudFormation events; --json for machine-readable output
+```
+
+What it does, in order: resolve the target → validate the project spec → `npm run build` in
+`agentcore/cdk/` → **create credential providers out of band** → synthesize CloudFormation →
+bootstrap the environment if needed (**only with `--yes`**; otherwise it stops and tells you)
+→ check stack deployability → deploy stack `AgentCore-ppFraud-default` → persist deployed
+state → enable Transaction Search.
+
+Exit **2 means deployed with post-deploy warnings — a pass.** `ci.sh` treats it as one.
+</Step>
+
+<Step>
+**Invoke.**
+
+```bash
+agentcore invoke --runtime underwriter --target default --stream \
+  "Run a full underwriting review of APP-1004"
+
+SESSION_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"   # 36 chars, not .hex's 32
+agentcore invoke --runtime francis --session-id "$SESSION_ID" --user-id analyst-42 "…"
+```
+
+`--user-id` becomes the memory `actorId`, so it must be stable per analyst for long-term
+memory to accumulate against the right namespace.
+</Step>
+
+</Steps>
+
+## The CI gate
+
+`deploy/ci.sh` is non-interactive and **creates no AWS resources**. Five steps:
+
+| # | Step | Needs AWS? |
+|---|---|---|
+| 0 | **Dead-command guard** — fail if `agentcore configure` / `agentcore launch` appear anywhere in tracked-or-untracked-not-ignored files; fail if the pip starter toolkit is installed | no |
+| 1 | `agentcore validate --json` — Zod-validate `agentcore/*.json` (root spec is `.strict()`) | no |
+| 2 | `pytest -q --ignore=agentcore` | no |
+| 3 | `agentcore package` — build each runtime's CodeZip closure | no AWS, but hits PyPI |
+| 4 | `agentcore deploy --dry-run --target <target> --json` | **read-only** credentials |
+
+Step 4 is skipped automatically while `aws-targets.json` is still `[]` (a dry run could then
+only fail with `Target "default" not found`, which is not a code defect), or on
+`CI_SKIP_DRY_RUN=1`. It also asserts `AWS_REGION` is set:
+
+```bash
+: "${AWS_REGION:?AWS_REGION must be set explicitly before a dry-run deploy}"
+```
+
+<Callout type="warn" title="Three details in this script exist because of a real failure">
+- **`--ignore=agentcore`** on pytest. A previous `agentcore package` leaves
+  `agentcore/<runtime>/staging/`, the full dependency closure. Several third-party wheels in
+  there ship test modules with colliding basenames (two copies of
+  `annotated_types/test_cases.py`), so a bare `pytest` aborts during collection with
+  `import file mismatch` **before reaching a single project test**.
+- **Exit code 2 treated as success.** Otherwise the gate fails a successful deploy.
+- **The dead-command guard's four exemptions** — `deploy/ci.sh`, `deploy/deploy.md`,
+  `evals/README.md`, `tests/test_bench.py` — are the files whose *purpose* is to warn about
+  the commands. `tests/test_bench.py` additionally asserts that the warning is present and is
+  not inside a code block.
+</Callout>
+
+## IAM: two documents, two principals, do not merge them
+
+`deploy/iam_policy.json` holds **two** policy documents with `_purpose` annotations on every
+statement. IAM ignores unknown keys, but some tooling rejects them, so strip them:
+
+```bash
+ACCOUNT_ID=123456789012
+
+jq --arg a "$ACCOUNT_ID" '
+  .deployingPrincipal
+  | {Version, Statement: [.Statement[] | del(._purpose)]}
+  | walk(if type == "string" then gsub("<ACCOUNT_ID>"; $a) else . end)
+' deploy/iam_policy.json > /tmp/deployer.json
+
+aws iam put-role-policy --role-name <your-deploy-role> \
+  --policy-name AgentCorePpFraudDeploy \
+  --policy-document file:///tmp/deployer.json
+```
+
+<Tabs items={['runtimeExecutionRole', 'deployingPrincipal']}>
+<Tab value="runtimeExecutionRole">
+
+Assumed by `bedrock-agentcore.amazonaws.com`; this is what the `underwriter` and `francis`
+containers run as. **It can create no infrastructure.** `agentcore deploy` synthesizes one
+execution role per runtime via CDK; attach this document to those roles, or supply a
+pre-made role per runtime through `agentcore.json`'s `executionRoleArn`. The trust policy is
+`bedrock-agentcore.amazonaws.com` with `aws:SourceAccount` / `aws:SourceArn` conditions, which
+CDK writes for you.
+
+| Statement | What it is for |
+|---|---|
+| `InvokeClaudeFoundationModels` | On-demand model invocation. Kept **alongside** the profile statement because an inference profile fans out to the underlying foundation-model ARN in each member region, and that ARN must also be allowed. |
+| `InvokeClaudeInferenceProfiles` | Both `global.*` **and** `us.*`. `global.*` MUST be listed — a policy allowing only `us.anthropic.*` silently forbids the cheapest profile. |
+| `InferenceProfileDiscovery` | Resolve a profile to its member regions and let a healthcheck assert the model is `ACTIVE` before serving traffic. Read-only; these actions are not resource-scopable. |
+| `AgentCoreMemoryDataPlane` / `AgentCoreMemoryDescribe` | Francis's session manager. Both AgentCore planes sign as `bedrock-agentcore`, so the **resource scope** is what separates control from data. |
+| `AgentCoreWorkloadIdentity` | The runtime exchanges its execution identity for a workload access token before fetching any outbound credential. Required as soon as a credential provider exists. |
+| `AgentCoreOutboundCredentials` + `ReadCredentialProviderSecret` | Fetch the Snowflake PAT / OAuth token through the provider instead of baking a secret into the image. AgentCore Identity keeps the material in a Secrets Manager secret under the `bedrock-agentcore-identity!` prefix — **without `GetSecretValue` on that prefix the token fetch fails.** |
+| `InvokeSemanticLayerGateway` | SigV4-signed outbound call to the Gateway fronting the signal layer. Only needed once `agentCoreGateways` is non-empty. See [the semantic layer](/docs/platform/semantic-layer). |
+| `RuntimeLogs` | Its own log group. Runtime — **and only Runtime** — gets its log destination wired automatically; the role still needs write access. |
+| `SpanAndTraceExport` + `WriteSpansToLogs` | `aws-opentelemetry-distro`'s exporters, plus the Transaction Search destination. Neither X-Ray write action supports resource-level scoping. |
+| `PerAgentSpendMetrics` | Namespace-scoped `cloudwatch:PutMetricData`. Needed because **the AgentCore SDK publishes no token or cost span attributes and Strands records its token histograms without attributes** — per-agent spend telemetry is this repo's own code. |
+
+**Note `bedrock-mantle` is a separate prefix.** The synthesizer runs on GPT-5.6 Luna, which
+needs `bedrock-mantle:CreateInference` (managed policy
+`AmazonBedrockMantleInferenceAccess`) — not covered by any `bedrock:*` grant. See
+[bedrock-mantle](/docs/platform/bedrock-mantle).
+
+</Tab>
+<Tab value="deployingPrincipal">
+
+The human or CI identity that runs `agentcore deploy`. Deploy is a CDK CloudFormation
+deploy: it synthesizes IAM roles, stages assets in the bootstrap bucket, runs an out-of-band
+identity pre-step, and (first deploy, with `--yes`) bootstraps the environment.
+
+| Statement | Note |
+|---|---|
+| `CloudFormationStackLifecycle` | Change-sets stack `AgentCore-ppFraud-<target>`, and reads stack status first to decide deployability. |
+| `CdkBootstrapAssetBucket` | CDK stages both CodeZip bundles and the template as assets **before** CloudFormation reads them. |
+| `CdkBootstrapSsmVersion` | CDK reads `/cdk-bootstrap/<qualifier>/version` to decide whether the environment is bootstrapped; `--yes` auto-bootstraps, which writes it. |
+| `CdkBootstrapRoleAssumption` | CDK's default synthesizer **assumes** the bootstrap deploy / file-publishing / lookup / cfn-exec roles rather than acting as the caller. *Symptom of omitting this:* deploy fails at asset publish with a misleading "needs bootstrapping" message. |
+| `SynthesizeExecutionRoles` | The one statement that **cannot be avoided** for a multi-runtime project — the stack creates one execution role per runtime plus inline policies. Name-prefix-scoped, not `*`. |
+| `PassExecutionRoleToAgentCore` | `CreateAgentRuntime` hands the role to the service, so `iam:PassRole` is required. Condition-locked to that one service. |
+| `AgentCoreControlPlane` | Create/update/**delete** the runtimes, endpoints and memory. The Delete actions are there because [renaming a resource is Delete+Create](/docs/platform/agentcore-cli#renaming-a-resource-destroys-it). |
+| `AgentCoreCredentialProviders` | The out-of-band identity pre-step. **This is why `agentcore/.cli/deployed-state.json` must be committed** — the provider ARNs are recorded only there. |
+| `CreateCredentialProviderSecret` | Only needed once `credentials[]` is non-empty. |
+| `ObservabilityDeliveryWiring` | Memory and Gateway receive **no** log or trace destination automatically. Skip this and `francisMemory` is silently trace-free. |
+| `EnableTransactionSearchOnce` | The account-level setup below. |
+| `InvokeDeployedRuntime` / `ReadLogsAndTraces` / `SpendDashboard` / `CallerIdentity` | `invoke`, `logs`, `traces`, `status`, the dashboard, and the pre-flight account check deploy makes against `aws-targets.json`. |
+
+</Tab>
+</Tabs>
+
+<Callout type="info" title="Region scope">
+Both documents keep `region: *` so one policy covers a us-east-1 and a us-west-2 target.
+Narrow it if the customer settles on a single region.
+</Callout>
+
+## One-time: CloudWatch Transaction Search
+
+<Callout type="warn" title="Symptom: AgentCore service metrics and ZERO spans">
+Without this you get service-level metrics and no spans at all — **no per-agent latency and
+no token attribution to look at**, which is precisely the thing this engagement needs to
+show.
+</Callout>
+
+`agentcore deploy` attempts it for you whenever the project has a Python runtime (both of
+ours do), and reports:
+
+> *Transaction search enabled. It takes ~10 minutes for transaction search to be fully active
+> and for traces from invocations to be indexed.*
+
+It makes four idempotent account-level calls, which is exactly what the
+`EnableTransactionSearchOnce` statement grants:
+
+1. `application-signals:StartDiscovery`
+2. a CloudWatch Logs resource policy named **`TransactionSearchXRayAccess`** granting
+   `logs:PutLogEvents` to principal `xray.amazonaws.com` on log groups `aws/spans` and
+   `/aws/application-signals/data`, conditioned on `aws:SourceAccount` and an `aws:SourceArn`
+   `ArnLike` of `arn:aws:xray:<region>:<account>:*`
+3. `xray:UpdateTraceSegmentDestination` → `CloudWatchLogs`
+4. `xray:UpdateIndexingRule` — rule `Default`, probabilistic, 100% sampling
+
+If the customer will not grant those actions to the deploy role, have an admin run the
+equivalent once and then stop the CLI trying:
+
+```bash
+agentcore config disableTransactionSearch true
+# or keep it on and sample less:
+agentcore config transactionSearchIndexPercentage 10
+```
+
+An empty `agentcore traces list` right after the first deploy is expected, not a bug — the
+~10 minute indexing delay is real.
+
+## Operating
+
+```bash
+agentcore status --json                          # all resources and their state
+agentcore logs   --runtime underwriter --since 30m --level error
+agentcore logs   --runtime francis --query "ConcurrencyException" --json
+agentcore traces list --runtime underwriter --limit 20 --since 1h
+agentcore traces get <traceId>                   # downloads to a JSON file
+agentcore exec   --runtime underwriter --it      # shell into a running container
+```
+
+## Local development
+
+```bash
+agentcore dev --runtime underwriter --logs
+agentcore dev --runtime francis --logs           # index 1 → port 8081
+```
+
+- `--runtime` is **required in non-interactive mode** with more than one runtime.
+- The local server exposes `POST /invocations` and `GET /ping`, and — like the deployed
+  runtime — replies `text/event-stream` **always**.
+- **Memory is not available under `agentcore dev`.** The Francis session manager no-ops when
+  `MEMORY_FRANCISMEMORY_ID` is unset, so local runs are stateless by design.
+- Local-dev identity writes `.agentcore.json` into the **current working directory**. It is
+  gitignored; do not commit it.
+
+## Production hardening still open
+
+<Callout type="error" title="This list is the honest gap between the demo and production">
+- **Data layer** — replace the fixture backend with the Lambda Gateway target fronting
+  Snowflake or Aurora. Nothing above the signal layer changes.
+  [Semantic layer](/docs/platform/semantic-layer).
+- **Guardrails** — attach a Bedrock Guardrail so SSN redaction is enforced *server-side* and
+  no prompt can bypass it. Today General Rule 23 is enforced in the signal layer, which is
+  the right place but not the only place it should be.
+  [General rules](/docs/fidelity/general-rules).
+- **Identity** — put the endpoints behind `authorizerType: CUSTOM_JWT` so each underwriter's
+  calls are attributable. Requires an `authorizerConfiguration.customJwtAuthorizer` block;
+  validate rejects one without the other, in both directions.
+- **Evaluation in-platform** — `agentcore add evaluator` / `add dataset` / `run eval` /
+  `add online-eval` for the calibration distribution check. The evaluator configs and the
+  golden dataset are written and schema-validated; they are not yet registered against a
+  deployed runtime. [Eval harness](/docs/reference/eval-harness).
+- **Model pinning** — pin model ids to an exact version so adjudications are reproducible.
+  Two of the current ids (`claude-sonnet-5`, `claude-opus-5`) carry no date suffix.
+- **Throughput** — the benchmark ran **one application at a time**. Nothing measured says
+  what happens to p95 or to the throttle rate when adjudications overlap, and the one
+  `server_5xx` pair observed at concurrency 1 is a reason to expect the question to matter.
+</Callout>
+
+<Cards>
+  <Card
+    title="The CLI"
+    href="/docs/platform/agentcore-cli"
+    description="The verb set, the project layout, and the commands that exit 0 without doing anything."
+  />
+  <Card
+    title="The eval harness"
+    href="/docs/reference/eval-harness"
+    description="What each measurement script does, how to re-run it, and its spend gate."
+  />
+</Cards>

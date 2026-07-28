@@ -76,6 +76,12 @@ _CITED_PATH: Final = re.compile(
 #: prompts are git-ignored on purpose, and pages must be free to name them.
 _CITED_PATH_EXEMPT: Final[tuple[str, ...]] = ("prompts/verbatim/",)
 
+#: A page may cite a DELETED file when the deletion is the point being made -- the
+#: paraphrasing module that was removed, for instance. That is legitimate history,
+#: but a reader must not be left looking for a file that is not there, so the
+#: citation only passes if the same paragraph says it is gone.
+_DELETED_MARKERS: Final[tuple[str, ...]] = ("delet", "removed", "retired", "no longer", "prior revision")
+
 
 def _pages() -> list[Path]:
     if not SITE_CONTENT.is_dir():
@@ -105,7 +111,13 @@ _WORD: Final = re.compile(r"[a-z0-9]+")
 #: comparing her prompt's `LOW RISK | MEDIUM RISK | HIGH RISK` against her PDF's
 #: four-value list, which is the enum conflict being escalated to her. Every word
 #: of that match was inside backticks. Prose lifted from a prompt would not be.
-_CODE_SPAN: Final = re.compile(r"```.*?```|`[^`\n]*`", re.DOTALL)
+#:
+#: Inline spans deliberately do NOT match across a blank line. Markdown allows an
+#: inline span to wrap one newline, and both are stripped here, but a span that
+#: appears to swallow two paragraphs is far more likely an unclosed backtick than
+#: a real span -- and treating it as a span would hide everything inside it from
+#: every guard in this file.
+_CODE_SPAN: Final = re.compile(r"```.*?```|`[^`]*?`", re.DOTALL)
 
 
 def _shingles(text: str, n: int = _LEAK_NGRAM) -> set[tuple[str, ...]]:
@@ -240,6 +252,51 @@ def test_no_page_repeats_a_fabricated_figure() -> None:
     assert not offences, "fabricated figures quoted as fact:\n" + "\n".join(offences)
 
 
+def test_quoted_refusal_strings_match_the_artifact() -> None:
+    """A quoted ``refused: N sample(s)`` string must be one the harness really emitted.
+
+    The pipeline artifact contains **two different** refusals: the latency blocks
+    have n=42, and the cost block has n=41, because one degraded run stays in the
+    latency distribution and drops out of the priced one. Both are correct in their
+    own place and quoting the wrong one is a small, extremely plausible error --
+    it happened on the cost table of the Snowflake page.
+
+    It also matters more than its size: the refusal is the site's evidence that the
+    harness declines to publish an unsupported percentile. Misquoting it undermines
+    exactly the claim it is there to make.
+    """
+    pages = _require_pages()
+    artifact = REPO_ROOT / "evals" / "results" / "pipeline_14x3_us-east-1.json"
+    if not artifact.is_file():
+        pytest.skip("pipeline artifact is not present in this checkout")
+
+    import json
+
+    data = json.loads(artifact.read_text(encoding="utf-8"))
+    real: set[str] = set()
+    for block in data.values():
+        if isinstance(block, dict):
+            for value in (block.get("suppressed") or {}).values():
+                if isinstance(value, str):
+                    real.add(value)
+    assert real, "artifact records no refusal strings -- guard is inert"
+
+    #: The n asserted inside a quoted refusal, however the page abbreviates the rest.
+    quoted = re.compile(r"refused:\s*(\d+)\s*sample")
+    allowed = {re.search(r"refused:\s*(\d+)", s).group(1) for s in real}
+
+    offences: list[str] = []
+    for page in pages:
+        for n in set(quoted.findall(page.read_text(encoding="utf-8"))):
+            if n not in allowed:
+                offences.append(
+                    f"{page.relative_to(REPO_ROOT)} quotes 'refused: {n} sample(s)' but the "
+                    f"artifact only recorded n in {sorted(allowed)}"
+                )
+
+    assert not offences, "misquoted refusal strings:\n" + "\n".join(offences)
+
+
 def test_every_cited_artifact_path_exists() -> None:
     """A page that names its source must name a real file.
 
@@ -252,12 +309,25 @@ def test_every_cited_artifact_path_exists() -> None:
     checked = 0
 
     for page in pages:
-        for cited in sorted(set(_CITED_PATH.findall(page.read_text(encoding="utf-8")))):
+        text = page.read_text(encoding="utf-8")
+        paragraphs = re.split(r"\n\s*\n", text)
+        for cited in sorted(set(_CITED_PATH.findall(text))):
             if any(cited.startswith(prefix) for prefix in _CITED_PATH_EXEMPT):
                 continue
             checked += 1
-            if not (REPO_ROOT / cited).exists():
-                missing.append(f"{page.relative_to(REPO_ROOT)} cites missing {cited}")
+            if (REPO_ROOT / cited).exists():
+                continue
+            # Absent from the tree. Allowed only where the page says so, in the
+            # same paragraph, so a reader is never sent after a deleted file.
+            disclosed = any(
+                cited in para and any(m in para.lower() for m in _DELETED_MARKERS)
+                for para in paragraphs
+            )
+            if not disclosed:
+                missing.append(
+                    f"{page.relative_to(REPO_ROOT)} cites missing {cited} "
+                    f"without saying it was removed"
+                )
 
     assert checked, "no artifact citations found on the site -- the guard is inert"
     assert not missing, "documentation cites artifacts that do not exist:\n" + "\n".join(missing)
@@ -272,6 +342,65 @@ def test_the_site_has_at_least_twenty_pages() -> None:
     """The deliverable is a documentation site, not a README in a folder."""
     pages = _require_pages()
     assert len(pages) >= 20, f"only {len(pages)} pages: {[p.name for p in pages]}"
+
+
+def test_the_navigation_and_the_pages_correspond_exactly() -> None:
+    """Every page is in the sidebar and every sidebar entry is a real page.
+
+    Both directions matter and they fail differently. A page missing from
+    ``meta.json`` still builds and is still reachable by URL -- it is simply
+    invisible, which is the worse failure because nothing reports it. A
+    ``meta.json`` entry with no page is a **dead sidebar link**: Fumadocs drops it
+    silently, but any page that hand-links the same path renders a link to a 404.
+    That happened here: the planned page ``reference/artifact-index`` was in the
+    tree and linked from the landing page, and no writer had been assigned it.
+    """
+    pages = _require_pages()
+    meta_path = SITE_CONTENT / "meta.json"
+    if not meta_path.is_file():
+        pytest.skip("no root meta.json")
+
+    import json
+
+    listed = [
+        entry
+        for entry in json.loads(meta_path.read_text(encoding="utf-8")).get("pages", [])
+        if not entry.startswith("---")  # separators, not pages
+    ]
+    actual = {str(p.relative_to(SITE_CONTENT)).removesuffix(".mdx") for p in pages}
+
+    dead_links = [entry for entry in listed if entry not in actual]
+    unlisted = sorted(actual - set(listed))
+
+    assert not dead_links, f"meta.json points at pages that do not exist: {dead_links}"
+    assert not unlisted, f"pages exist but appear nowhere in the sidebar: {unlisted}"
+
+
+def test_every_internal_docs_link_resolves() -> None:
+    """A cross-page link must point at a page that exists.
+
+    Fumadocs does not validate these and ``next build`` does not either -- a bad
+    ``/docs/...`` href compiles, renders, and 404s only when a reader clicks it.
+    The realistic cause is a page landing at a slightly different slug than the
+    one another page linked: here ``/docs/platform/strands-concurrency`` was
+    linked while the file landed as ``platform/strands``.
+    """
+    pages = _require_pages()
+    slugs = {"/docs"} | {
+        "/docs/" + str(p.relative_to(SITE_CONTENT)).removesuffix(".mdx").removesuffix("/index")
+        for p in pages
+    }
+
+    link = re.compile(r'href="(/docs[^"#]*)"|\]\((/docs[^)#\s]*)\)')
+    broken: list[str] = []
+    for page in pages:
+        text = page.read_text(encoding="utf-8")
+        for attr_href, md_href in link.findall(text):
+            target = (attr_href or md_href).rstrip("/")
+            if target not in slugs:
+                broken.append(f"{page.relative_to(REPO_ROOT)} links to {target}, which is not a page")
+
+    assert not broken, "broken internal links:\n" + "\n".join(sorted(set(broken)))
 
 
 def test_every_page_declares_frontmatter_title_and_description() -> None:
@@ -291,6 +420,74 @@ def test_every_page_declares_frontmatter_title_and_description() -> None:
     assert not bad, "\n".join(bad)
 
 
+def test_every_page_has_parseable_yaml_frontmatter() -> None:
+    """Frontmatter must be valid YAML, or the page does not build at all.
+
+    A ``description`` that opens with a double quote is the specific trap: YAML
+    reads it as a quoted scalar, hits the closing quote mid-sentence, and fails
+    with ``Unexpected scalar at node end`` -- a message that names a column, not a
+    cause. It happened on a page whose description quoted the objection it was
+    answering. The fix is a block scalar (``>-``), and the reason this test exists
+    is that ``next build`` is the only other thing that catches it, minutes later
+    and with a worse error.
+    """
+    pages = _require_pages()
+    yaml = pytest.importorskip("yaml", reason="PyYAML not installed")
+
+    broken: list[str] = []
+    for page in pages:
+        text = page.read_text(encoding="utf-8")
+        if not text.startswith("---"):
+            broken.append(f"{page.relative_to(REPO_ROOT)} has no frontmatter block")
+            continue
+        head = text.split("---", 2)[1]
+        try:
+            parsed = yaml.safe_load(head)
+        except yaml.YAMLError as exc:
+            first = str(exc).splitlines()[0]
+            broken.append(f"{page.relative_to(REPO_ROOT)} frontmatter is not valid YAML: {first}")
+            continue
+        if not isinstance(parsed, dict):
+            broken.append(f"{page.relative_to(REPO_ROOT)} frontmatter is not a mapping")
+
+    assert not broken, "\n".join(broken)
+
+
+#: A brace-wrapped bare identifier or dotted path: `{region}`, `{app.id}`. In MDX
+#: this is not text, it is a JavaScript expression, and an undefined name fails
+#: the build. Braces holding JSX-ish content (`{['a','b']}`, `{true}`, `{/* */}`)
+#: are legitimate and excluded by requiring an identifier and nothing else.
+_MDX_EXPRESSION: Final = re.compile(r"\{[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)*\}", re.IGNORECASE)
+
+
+def test_no_prose_contains_an_unescaped_mdx_expression() -> None:
+    """A placeholder like ``{region}`` in prose is a JS expression to MDX.
+
+    Symptom: ``next build`` prerenders 20 pages, then dies with
+    ``ReferenceError: region is not defined`` and a stack inside a minified chunk.
+    Nothing names the page or the line. It happened here on a blockquote that
+    reproduced a runtime error message containing ``{region}`` -- the same string
+    appears three times on the same page inside backticks, where it is perfectly
+    safe, which is what makes the failure confusing.
+
+    Inside code spans, braces are text. Outside them, they are code.
+    """
+    pages = _require_pages()
+    offences: list[str] = []
+
+    for page in pages:
+        prose = _CODE_SPAN.sub("\n", page.read_text(encoding="utf-8"))
+        # JSX attributes are legitimately braced: items={['a']}, type={x}.
+        prose = re.sub(r"<[^>]*>", "", prose, flags=re.DOTALL)
+        for found in sorted(set(_MDX_EXPRESSION.findall(prose))):
+            offences.append(
+                f"{page.relative_to(REPO_ROOT)} has unescaped {found} in prose "
+                f"-- wrap it in backticks or a fenced block"
+            )
+
+    assert not offences, "MDX will evaluate these as JavaScript:\n" + "\n".join(offences)
+
+
 def test_no_page_claims_a_percentile_without_a_sample_count() -> None:
     """``p95`` with no ``n`` anywhere on the page is the laundering the harness refuses.
 
@@ -307,7 +504,16 @@ def test_no_page_claims_a_percentile_without_a_sample_count() -> None:
     a percentile with no sample count anywhere in it.
     """
     pages = _require_pages()
-    percentile = re.compile(r"\bp(?:50|95|99)\b")
+    #: A percentile is only "published" when a VALUE sits next to it. A page that
+    #: says "nothing measured says what happens to p95 under concurrency" is
+    #: naming an open question, not quoting a figure, and demanding an n from it
+    #: would be demanding the sample size of a measurement that was never taken.
+    published = re.compile(
+        r"\bp(?:50|95|99)\b[^|\n]{0,24}?\d"      # p50 31.45 s
+        r"|\d[^|\n]{0,24}?\bp(?:50|95|99)\b"     # 31.45 s at p50
+        r"|\|\s*p(?:50|95|99)\s*\|",             # a markdown percentile column
+        re.IGNORECASE,
+    )
     count = re.compile(
         r"\bn\s*=\s*\d+"                                        # n=42
         r"|\|\s*n\s*(?:ok|failed)?\s*\|"                        # a markdown `n` column
@@ -318,7 +524,7 @@ def test_no_page_claims_a_percentile_without_a_sample_count() -> None:
     offences: list[str] = []
     for page in pages:
         text = page.read_text(encoding="utf-8")
-        if percentile.search(text) and not count.search(text):
-            offences.append(f"{page.relative_to(REPO_ROOT)} quotes a percentile and states no n anywhere")
+        if published.search(text) and not count.search(text):
+            offences.append(f"{page.relative_to(REPO_ROOT)} publishes a percentile and states no n anywhere")
 
     assert not offences, "percentiles published without their n:\n" + "\n".join(offences)

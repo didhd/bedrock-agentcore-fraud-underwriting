@@ -1,0 +1,335 @@
+---
+title: Benchmark method
+description: How evals/bench.py measures — the three modes and why the distinction is load-bearing, the nearest-rank percentile policy, the sample-count refusals, and the anti-fabrication guards.
+---
+
+<Callout type="info" title="Audience">
+This page is for the customer's engineer, and for anyone who has to defend a figure in a
+meeting. It describes the instrument. The readings are on
+[pipeline results](/docs/performance/pipeline-results).
+</Callout>
+
+## Why the harness exists in the form it does
+
+`evals/bench.py` is the **only** code in this repository permitted to produce a latency or cost
+figure. That is a rule with a specific history, which the module states in its own docstring:
+
+<Callout type="error" title="What the harness replaced">
+The pre-port demo computed its headline claim — *"26 s sequential → 8.5 s parallel"* — from a
+hand-written `NOMINAL_LATENCY_S` dictionary, and then printed `time.sleep(nominal * 0.05)`
+beside it labelled as *"measured wall-clock"*. Per-agent cost came from a hard-coded
+`NOMINAL_TOKENS` table. Every one of those numbers was invented.
+
+Quoting the module: *"Point Predictive's own engineer will ask where a number came from, so the
+answer has to be 'this run measured it, here is the sample count, the git sha, the region and
+the model id' — or 'we did not measure that'."* All of the nominal tables are deleted.
+</Callout>
+
+## The three modes, and why mixing them would be fraud
+
+<Tabs items={['--pipeline (authoritative)', '--offline', '--live (legacy)']}>
+
+<Tab value="--pipeline (authoritative)">
+
+**This is the mode that produced every headline figure on this site.**
+
+It calls `agents.fanout.fan_out` and `agents.synthesize.synthesize` **directly** — the same
+functions the AgentCore Runtime entrypoint calls. So what it times is the shipped code path,
+including the fan-out semaphore, the widened executor, the shared botocore pool, the mantle
+synthesizer, the bounded repair loop and the 21-key validation.
+
+```bash
+python -m evals.bench --pipeline --mock --repetitions 1              # no spend, shape only
+AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.bench --pipeline --repetitions 3
+```
+
+Default is 3 repetitions per application, and that default is chosen from **cost, not
+statistics**: 14 applications × 3 × roughly $0.245 is about $10 of inference, and 42 samples is
+the smallest set that clears the p95 minimum of 20 for the **pooled** figure. It does **not**
+clear p95 per application (3 samples each), and the report suppresses those rather than printing
+them.
+
+</Tab>
+
+<Tab value="--offline">
+
+Measures **only this repository's orchestration overhead**: signal-layer payload projection,
+verbatim prompt assembly, `asyncio.gather` fan-out scheduling, and synthesis-prompt
+substitution. **No model is called, so no model latency is measured.**
+
+```bash
+python -m evals.bench --offline --concurrency 1,4,16 --iterations 40
+```
+
+Three things it does deliberately:
+
+- Every cost field comes back **`None`, never `0.0`** — nothing was tokenized, so a zero would
+  be a claim. `test_offline_report_has_no_cost_figures_anywhere` asserts this.
+- The warning appears in the JSON `not_measured` array, in the human table header, and in the
+  per-row label — three places, because one is skippable.
+- It uses `asyncio.gather` over the real domains, so the scheduling cost measured is the
+  production one.
+
+Its own caveat, quoted from the report it emits: *"Do not present any offline number to the
+customer as an application-processing time."*
+
+</Tab>
+
+<Tab value="--live (legacy)">
+
+Real Bedrock calls, but it **re-implements the fan-out inside `bench.py`**. The module states
+why that disqualifies it from publishing a headline: it does not go through `agents.fanout`'s
+semaphore, widened executor or shared botocore pool; it does not go through
+`agents.synthesize`'s structured-output validation or bounded repair; and it cannot reach the
+mantle synthesizer at all, because GPT-5.x is not on Converse.
+
+Quoting the module: *"A latency published from it would be a latency for a different program."*
+
+```bash
+AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.bench --live --iterations 3
+AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.bench --live --dry-run   # price only, no calls
+```
+
+</Tab>
+
+</Tabs>
+
+## The percentile policy
+
+Two constants, both recorded in every report so a figure is reproducible.
+
+```python
+PERCENTILE_MIN_SAMPLES = {"p50": 5, "p95": 20, "p99": 100}
+PERCENTILE_METHOD = "nearest-rank, inclusive (no interpolation); ceil(p*n)-th of the sorted samples"
+```
+
+<Callout type="warn" title="Where the minimums come from">
+The rule is **1/(1−p)** — the smallest sample in which the requested tail can actually be
+observed. You cannot see a 1-in-100 event in 20 samples, so a "p99" over 20 samples is
+*the maximum wearing a percentile's name*.
+
+p50 keeps a practical floor of **5** rather than the arithmetic 2, because a three-sample median
+is not a number worth showing a customer either.
+</Callout>
+
+**Nearest-rank, no interpolation.** The reported value is always a value the run actually
+observed. `test_percentile_values_are_observed_samples_not_interpolated` asserts it. That
+matters most at exactly the small sample sizes this harness runs at, where an interpolated p95
+can sit between two real measurements and belong to neither.
+
+## The refusal, and what it looks like in the artifact
+
+When a sample cannot support a percentile, the field is `None` and the reason is written into a
+`suppressed` map as a sentence. Callers render the sentence, not a number. This string is in
+`evals/results/pipeline_14x3_us-east-1.json` on all four headline rows:
+
+> `"p99": "refused: 42 sample(s), need >= 100. A p99 over 42 sample(s) is not a p99."`
+
+<Callout type="error" title="No p99 appears anywhere on this site, at any n reached in this engagement">
+The largest pooled sample in the engagement is n=42 adjudications / n=336 specialist calls.
+Some *per-call* distributions do clear 100 — the healthy output-tokens-per-second sample in
+`evals/results/tail_analysis.json` is n=332 and does carry a p99 of 89.78 tok/s — but no
+end-to-end, cost or per-specialist p99 exists, and none is inferred.
+
+A separate site guard makes this mechanical:
+`tests/test_docs_site.py::test_no_page_claims_a_percentile_without_a_sample_count` fails the
+build if any page quotes a `p50`/`p95`/`p99` and states no `n` anywhere in it.
+</Callout>
+
+Thirteen collected tests in `tests/test_bench.py` cover the percentile policy alone, including
+`test_single_sample_yields_no_percentiles_at_all` — described in its own docstring as *"the exact
+failure the old demo shipped: a p99 from one measurement"* —
+`test_percentiles_appear_exactly_at_their_minimum_sample_count`,
+`test_markdown_summary_refuses_a_suppressed_percentile_out_loud`, and two that re-read the
+**committed** artifact and assert its percentiles obey the minimums.
+
+## What is timed, and what is deliberately outside the window
+
+For each `(application, repetition)`:
+
+<Steps>
+
+<Step>
+
+### Payload built — OUTSIDE the timed window
+
+`build_payload(application_id)` runs before the clock starts. The customer's architecture
+precomputes signals (her process guide §2.2), so signal projection is not part of the model
+latency being measured, and including it would make the end-to-end figure incomparable with the
+per-call figures it is built from.
+
+**Consequence, stated in the artifact's own caveats:** the end-to-end figure is **agent
+latency, not pipeline-including-ETL latency.**
+
+</Step>
+
+<Step>
+
+### Fan-out timed
+
+`await fan_out(payload, mock=mock)` — one `perf_counter` span. Each specialist additionally
+reports its own wall clock and, where the transport provides it, the model's own `latencyMs`.
+Both are recorded, which is what makes the [tail analysis](/docs/performance/the-tail) able to
+separate client time from server time.
+
+</Step>
+
+<Step>
+
+### Synthesis timed
+
+`await synthesize(results, ...)`. A failed synthesis is captured as **data**, not as a crashed
+benchmark: the exception type and message are recorded and the run continues.
+
+</Step>
+
+<Step>
+
+### Validation
+
+The key count is re-checked against `ADJUDICATION_FIELD_ORDER` even though `synthesize` never
+returns an unvalidated object — because, in the harness's own words, it is *"the one assertion
+the customer's engineer will make first."*
+
+</Step>
+
+</Steps>
+
+## The derived quantities, and their stated limits
+
+| Quantity | Definition | Stated limit |
+|---|---|---|
+| `sum_of_eight_ms` | Sum of the eight specialists' own measured wall clocks in this run | **Sequential counterfactual.** *"The terms are measured, the arrangement is hypothetical."* |
+| `parallel_speedup` | fan-out ÷ sum-of-eight, one ratio per run | Reported as a **distribution**, never one number: a fan-out is bounded by its slowest member, so the ratio moves with which specialist ran long |
+| `runs_under_target` | Count of runs under 60.0 s | *"A count of runs under a threshold is not a percentile and not an SLA. It is the only form of a 'sub-minute per application' claim this sample size can support."* |
+| `cost_usd` | Priced from each call's **own reported token usage** | A run with any failed call is **excluded** — otherwise a 7-of-8 adjudication deflates the per-application cost |
+
+<Callout type="info" title="Three questions are asked about the 60-second target, not one">
+`_under_target_accounting` reports `runs_under_target`, `applications_all_reps_under_target`
+(the strict reading, and the one to quote) and `applications_any_rep_under_target` separately.
+The gap between the last two **is** the set of applications that straddle the line, and naming
+it is the point: a p50 under 60 s is not a promise of 60 s.
+</Callout>
+
+## The live gate
+
+Live mode is **double-gated**: the `--live` (or `--pipeline` without `--mock`) flag *and*
+`AGENTCORE_BENCH_ALLOW_LIVE=1` in the environment. The refusal message states the reason:
+*"two gates, deliberately: `--live` alone is one keystroke away from a billed run in someone's
+account."*
+
+Before it calls anything, live mode prints every model id, its rate card with the profile
+(`global.*` vs `us.*`), any rate note, and an **upper-bound** spend estimate.
+
+<Callout type="warn" title="The spend estimate is partial on purpose, and says which parts">
+The estimate uses Bedrock `CountTokens`, which is a free metering call. Two measured
+behaviours shape it:
+
+- **`CountTokens` rejects an inference-profile prefix.** Both `global.anthropic.claude-haiku-4-5-...`
+  and `us.anthropic....` fail with `ValidationException: The provided model doesn't support
+  counting tokens`; the bare `anthropic.claude-haiku-4-5-...` succeeds. The prefix is stripped
+  before the call — a token count is a property of the model, not the routing profile.
+- **Not every model offers it.** Measured in us-east-1 on 2026-07-28:
+  `anthropic.claude-haiku-4-5-20251001-v1:0` returns a count, while `anthropic.claude-sonnet-5`
+  and `anthropic.claude-opus-5` both raise the same `ValidationException`.
+
+So the pre-run estimate is exact for the Haiku specialists and comes back **`None` — explicitly
+unknown** — for the rest. Quoting the module: *"a partial estimate that says which parts are
+missing beats a complete-looking one built on a char/4 guess."*
+</Callout>
+
+## Provenance recorded in every report
+
+`run_environment()` writes, into every JSON artifact:
+
+| Field | Example from the headline run |
+|---|---|
+| `mode` | `pipeline-live` |
+| `timestamp_utc` | `2026-07-28T07:42:42+00:00` |
+| `git_sha` / `git_branch` / `git_dirty` | `9bb569bac801884f9c7c5f379520cf3ddbf4a270`, `feat/1to1-agentcore-replacement`, **`true`** |
+| `aws_region`, `synthesizer_region` | `us-east-1`, `us-east-1` |
+| `model_ids` | all nine, by role |
+| `host` | Python 3.12.9, `macOS-26.5.2-arm64`, 11 CPUs |
+| `packages` | `strands-agents 1.26.0`, `bedrock-agentcore 1.14.0`, `boto3 1.43.54`, `pydantic 2.13.4` |
+| `target_e2e_seconds` | `60.0` |
+
+`git_dirty: true` is recorded rather than hidden. A dirty tree at measurement time is a real
+caveat about reproducibility and the reader is entitled to see it.
+
+## The anti-fabrication guards
+
+Four, and each one has been checked by mutation — i.e. by breaking the thing it guards and
+confirming the test fails.
+
+<Accordions type="single">
+
+<Accordion title="1. A missing usage report yields None, never 0.0">
+
+`test_missing_usage_yields_none_not_a_fabricated_figure`. If a call reported no token usage —
+which is what happens when it truncates or 5xxs — its cost is unknown, and unknown is not zero.
+This is the guard that keeps the one degraded run out of the cost distribution instead of
+letting it pull the mean down.
+
+</Accordion>
+
+<Accordion title="2. An unpriced model yields None, never a borrowed price">
+
+`test_unknown_model_yields_none_rather_than_borrowing_another_price` and
+`test_a_model_agents_pricing_refuses_to_price_yields_no_cost`. Opus 4.7 has no verified Bedrock
+rate in this repository, so it prices as `None` rather than inheriting Opus 5's card.
+
+</Accordion>
+
+<Accordion title="3. The rate card cannot fork">
+
+`test_rate_card_delegates_to_agents_pricing_and_matches_it`. `agents/pricing.py` owns the
+published rates; `bench.py` binds to it and records **which source it used** in the report, so a
+stale fallback cannot masquerade as the real table. The same pattern applies to the cache
+minimums: `test_cache_minimums_defer_to_agents_models_and_cannot_diverge`.
+
+</Accordion>
+
+<Accordion title="4. A temporary rate is flagged as temporary">
+
+`test_sonnet_5_introductory_rate_is_flagged_as_temporary`. Sonnet 5's $2/$10 per MTok is
+introductory and reverts to $3/$15 on **2026-09-01**. Both pairs are carried, so the reverted
+figure cannot be silently baked in and a cost slide cannot present a promotional rate as
+permanent. See [cost levers](/docs/cost/levers).
+
+</Accordion>
+
+</Accordions>
+
+`tests/test_bench.py` collects **133 tests**
+(`MOCK_MODE=1 python3 -m pytest tests/test_bench.py -q --collect-only`).
+
+## Re-aggregation without re-measuring
+
+`reaggregate_pipeline_report` rebuilds every derived statistic from `raw_runs` without calling a
+model. The headline artifact records that it was used, at `2026-07-28T07:46:30+00:00`, with the
+caveat: *"The measurements are unchanged and still belong to the run recorded in `run`; only the
+derived statistics were rebuilt. No model was called to produce this file."*
+
+```bash
+python -m evals.bench --reaggregate evals/results/pipeline_14x3_us-east-1.json \
+  --markdown evals/results/pipeline_14x3_us-east-1.md
+```
+
+That separation is what allows a statistics bug to be fixed without spending $6.47 again, and
+what allows the fix to be audited: `raw_runs` is the measurement, everything above it is
+derivation.
+
+## The four sibling harnesses
+
+Same policy, same refusal behaviour, different questions. All four import
+`evals.bench.summarize_values` rather than computing their own percentiles.
+
+| Harness | Question | Artifact |
+|---|---|---|
+| `evals/bench.py --pipeline` | End-to-end latency and cost of the shipped path | `evals/results/pipeline_14x3_us-east-1.json` |
+| `evals/tier_quality.py` | Does the cheaper Claude tier analyse as well? | `evals/results/tier_quality.json` |
+| `evals/set_comparison.py` | Should the specialists move to GPT-5.6? | `evals/results/set_comparison.json` |
+| `evals/tail_analysis.py` | Where does the 75-second run come from? | `evals/results/tail_analysis.json` |
+| `evals/judge_sol.py` | The GPT-side judge for the cross-family study | (feeds `set_comparison`) |
+
+Full index with schema, n and spend per file: [artifact index](/docs/reference/artifact-index).
