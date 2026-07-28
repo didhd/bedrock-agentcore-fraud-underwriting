@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.agentcore.aws.dev/v1/agentcore.json",
+  "name": "ppFraud",
+  "version": 1,
+  "managedBy": "CDK",
+  "tags": {
+    "agentcore:created-by": "agentcore-cli",
+    "agentcore:project-name": "ppFraud"
+  },
+  "runtimes": [
+    {
+      "name": "underwriter",
+      "description": "Batch underwriting path: 8-way specialist fan-out + master synthesis, one adjudication per application.",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": "app/underwriter/",
+      "runtimeVersion": "PYTHON_3_12",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP",
+      "instrumentation": {
+        "enableOtel": true
+      }
+    },
+    {
+      "name": "francis",
+      "description": "Interactive path: Francis routes an analyst question to at most 2 specialist agents and answers in markdown.",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": "app/francis/",
+      "runtimeVersion": "PYTHON_3_12",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP",
+      "instrumentation": {
+        "enableOtel": true
+      }
+    }
+  ],
+  "memories": [
+    {
+      "name": "francisMemory",
+      "eventExpiryDuration": 7,
+      "strategies": []
+    }
+  ],
+  "knowledgeBases": [],
+  "credentials": [],
+  "evaluators": [],
+  "onlineEvalConfigs": [],
+  "agentCoreGateways": [],
+  "policyEngines": [],
+  "configBundles": [],
+  "abTests": [],
+  "harnesses": [],
+  "datasets": [],
+  "payments": []
+}

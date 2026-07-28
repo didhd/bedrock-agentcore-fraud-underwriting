@@ -1,0 +1,95 @@
+{
+  "_comment": "sha256 of every byte-for-byte copy of a Point Predictive production prompt. prompts/loader.py refuses to load a file whose hash drifted; tests/test_prompt_fidelity.py additionally diffs each copy against the 'source' path so a customer prompt update fails CI instead of diverging silently. Regenerate only when the customer's own document changes.",
+  "files": {
+    "bustout_agent_prompt.txt": {
+      "source": "docs/bustout_agent_prompt.txt",
+      "bytes": 4048,
+      "sha256": "bb5529846426f76ccc6fb8e3dbcf2398f33e80d899bd5a2b97e31f922da7d1cb"
+    },
+    "bustout_fraudbot_orchestration_062026.txt": {
+      "source": "docs/.converted/bustout_fraudbot_orchestration_062026.txt",
+      "bytes": 15166,
+      "sha256": "f94fd7c7f7c82a8c42f27c3ba36a62294971e9d6512e97b404ff6267124dec07"
+    },
+    "dealer_agent_prompt.txt": {
+      "source": "docs/dealer_agent_prompt.txt",
+      "bytes": 3591,
+      "sha256": "ccd1176b350fb7e7c5fa989c20551c7f137d2b15afe6716201e46a0e0c8f5ce4"
+    },
+    "dealer_orchestration_instructions_062026.txt": {
+      "source": "docs/.converted/dealer_orchestration_instructions_062026.txt",
+      "bytes": 12058,
+      "sha256": "c5a459251dd51c441d5df03e878544aaf871a29e185af8c14908526efd34c5bf"
+    },
+    "employment_agent_prompt.txt": {
+      "source": "docs/employment_agent_prompt.txt",
+      "bytes": 3226,
+      "sha256": "2eac95be28d393a42ea6a9e12b4824a5e34868c0c0b7d4b451fc4662b6134108"
+    },
+    "employment_orchestration_062026.txt": {
+      "source": "docs/.converted/employment_orchestration_062026.txt",
+      "bytes": 15286,
+      "sha256": "a7c0e76fba02a314349c24fa5348f7f4209b752406d0fe15a163fe2f1d3edc93"
+    },
+    "identity_agent_prompt.txt": {
+      "source": "docs/identity_agent_prompt.txt",
+      "bytes": 2412,
+      "sha256": "6632fa8f5c1283b9c40bef9e234fb9cb0b75387d7698e502f96080bb8da9ce38"
+    },
+    "identity_orchestration_062026.txt": {
+      "source": "docs/.converted/identity_orchestration_062026.txt",
+      "bytes": 17929,
+      "sha256": "981b8bab5147d54a9339a15bbc612e03dc913117c8904e24a5ab07d7ca3d62e7"
+    },
+    "income_agent_prompt.txt": {
+      "source": "docs/income_agent_prompt.txt",
+      "bytes": 2750,
+      "sha256": "f376538da5f5cb69b6166047db5a8192f45fefc8af326fc7efa5366405a84ee8"
+    },
+    "income_orchestration_instructions_062026.txt": {
+      "source": "docs/.converted/income_orchestration_instructions_062026.txt",
+      "bytes": 12357,
+      "sha256": "422373cb98e909d3cf9feb9ec05b6de35d962606ef9240ec58ea0f5565539ebf"
+    },
+    "master_agent_orchestration_062026.txt": {
+      "source": "docs/.converted/master_agent_orchestration_062026.txt",
+      "bytes": 2638,
+      "sha256": "8c01ad6aad82c180786a2f708e4a17ac25c01baf430e175ecf17a19d619fb2a4"
+    },
+    "master_agent_prompt.txt": {
+      "source": "docs/master_agent_prompt.txt",
+      "bytes": 5067,
+      "sha256": "8786cffc130c2294d6b8954961149a14eae3cf5dce456a78a5dd091fad157b27"
+    },
+    "rings_agent_prompt.txt": {
+      "source": "docs/rings_agent_prompt.txt",
+      "bytes": 3758,
+      "sha256": "fc7658b820884004f8ef5031c45b22905c24f3dde515374bb6b1e6d980a1597a"
+    },
+    "rings_orchestration_instructions_062026.txt": {
+      "source": "docs/.converted/rings_orchestration_instructions_062026.txt",
+      "bytes": 15158,
+      "sha256": "4d839f92489cf3c5e50e42c3622ef060b3806752dbe2fd9d21e1461f7f4fc6eb"
+    },
+    "straw_agent_prompt.txt": {
+      "source": "docs/straw_agent_prompt.txt",
+      "bytes": 2598,
+      "sha256": "461acb71adeed8b5a5b9f898599bd6e4aad6677d07813617e769258bc8940af0"
+    },
+    "straw_orchestration_instructions_062026.txt": {
+      "source": "docs/.converted/straw_orchestration_instructions_062026.txt",
+      "bytes": 17072,
+      "sha256": "578a10c732b597ee270ddbbba0a5d1f554363fc657cd820a43361f86c490eb68"
+    },
+    "synthetic_agent_prompt.txt": {
+      "source": "docs/synthetic_agent_prompt.txt",
+      "bytes": 2923,
+      "sha256": "0d2dd85c962a72d8863b2a8583a3c43161ec20d0a796511557528723ca000968"
+    },
+    "synthetic_orchestration_instructions_062026.txt": {
+      "source": "docs/.converted/synthetic_orchestration_instructions_062026.txt",
+      "bytes": 17606,
+      "sha256": "922f8ebe93b6bea066bceb20323e5d938d5706bc265b8c7ed5612e704175d0f1"
+    }
+  }
+}

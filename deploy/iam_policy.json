@@ -1,59 +1,473 @@
 {
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "InvokeClaudeOnBedrock",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream"
-      ],
-      "Resource": [
-        "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
-        "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-*"
-      ]
-    },
-    {
-      "Sid": "InferenceProfileDiscovery",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock:GetInferenceProfile",
-        "bedrock:ListInferenceProfiles",
-        "bedrock:ListFoundationModels"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "AgentCoreObservabilityLogs",
-      "Effect": "Allow",
-      "Action": [
-        "logs:CreateLogGroup",
-        "logs:CreateLogStream",
-        "logs:PutLogEvents",
-        "logs:DescribeLogGroups",
-        "logs:DescribeLogStreams"
-      ],
-      "Resource": "arn:aws:logs:*:*:log-group:/aws/bedrock-agentcore/*"
-    },
-    {
-      "Sid": "AgentCoreObservabilityXRay",
-      "Effect": "Allow",
-      "Action": [
-        "xray:PutTraceSegments",
-        "xray:PutTelemetryRecords",
-        "cloudwatch:PutMetricData"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "FraudDemoDashboard",
-      "Effect": "Allow",
-      "Action": [
-        "cloudwatch:PutDashboard",
-        "cloudwatch:GetDashboard",
-        "cloudwatch:ListDashboards"
-      ],
-      "Resource": "*"
-    }
-  ]
+  "_README": [
+    "TWO policies, for two different principals. Do not merge them.",
+    "",
+    "  runtimeExecutionRole - assumed by bedrock-agentcore.amazonaws.com; this is what the",
+    "      `underwriter` and `francis` containers run as. It invokes Bedrock and writes its own",
+    "      telemetry. It can create no infrastructure. `agentcore deploy` synthesizes one",
+    "      execution role per runtime via CDK; attach this document to those roles, or supply a",
+    "      pre-made role per runtime through agentcore.json's `executionRoleArn`.",
+    "",
+    "  deployingPrincipal - the human or CI identity that runs `agentcore deploy`. Deploy is a CDK",
+    "      CloudFormation deploy: it synthesizes IAM roles, stages assets in the CDK bootstrap",
+    "      bucket, runs an out-of-band identity pre-step, and (first deploy, with --yes)",
+    "      bootstraps the environment. A 2-runtime + 1-memory project synthesizes several roles,",
+    "      so iam:CreateRole/AttachRolePolicy are unavoidable here; they are scoped by name",
+    "      prefix rather than granted on `*`.",
+    "",
+    "Replace every <ACCOUNT_ID> with the 12-digit account from agentcore/aws-targets.json.",
+    "Region stays `*` so one document covers both the us-east-1 and us-west-2 targets; narrow it",
+    "if the customer settles on a single region. Statements are annotated with `_purpose`, which",
+    "IAM ignores; strip the `_README`/`_purpose` keys before `aws iam put-role-policy` if your",
+    "tooling rejects unknown keys (see deploy/deploy.md for the jq one-liner)."
+  ],
+
+  "runtimeExecutionRole": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "InvokeClaudeFoundationModels",
+        "_purpose": "On-demand model invocation. Kept alongside the inference-profile statement because an inference profile fans out to the underlying foundation-model ARN in each member region, and that ARN must be allowed too.",
+        "Effect": "Allow",
+        "Action": [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream"
+        ],
+        "Resource": [
+          "arn:aws:bedrock:*::foundation-model/anthropic.claude-*"
+        ]
+      },
+      {
+        "Sid": "InvokeClaudeInferenceProfiles",
+        "_purpose": "Both the global.* and us.* profile families. global.* MUST be listed: us.* costs exactly 1.10x global.* on every rate category, so a policy allowing only us.anthropic.* silently forbids the cheapest configuration (this was the previous version of this file). us.* stays allowed so a region-pinned fallback needs no policy change.",
+        "Effect": "Allow",
+        "Action": [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream"
+        ],
+        "Resource": [
+          "arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-*",
+          "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-*"
+        ]
+      },
+      {
+        "Sid": "InferenceProfileDiscovery",
+        "_purpose": "Resolve a profile id to its member regions, and let a healthcheck assert the configured model id is ACTIVE before serving traffic. Read-only; these actions are not resource-scopable.",
+        "Effect": "Allow",
+        "Action": [
+          "bedrock:GetInferenceProfile",
+          "bedrock:ListInferenceProfiles",
+          "bedrock:GetFoundationModel",
+          "bedrock:ListFoundationModels"
+        ],
+        "Resource": "*"
+      },
+      {
+        "Sid": "AgentCoreMemoryDataPlane",
+        "_purpose": "The francis runtime's AgentCoreMemorySessionManager. Both AgentCore planes sign as `bedrock-agentcore`, so one action prefix covers control and data; the resource scope is what separates them. CreateEvent is capped at 5 TPS per actor+session, which is why the session manager batches.",
+        "Effect": "Allow",
+        "Action": [
+          "bedrock-agentcore:CreateEvent",
+          "bedrock-agentcore:GetEvent",
+          "bedrock-agentcore:ListEvents",
+          "bedrock-agentcore:ListSessions",
+          "bedrock-agentcore:RetrieveMemoryRecords",
+          "bedrock-agentcore:GetMemoryRecord",
+          "bedrock-agentcore:ListMemoryRecords"
+        ],
+        "Resource": [
+          "arn:aws:bedrock-agentcore:*:<ACCOUNT_ID>:memory/*"
+        ]
+      },
+      {
+        "Sid": "AgentCoreMemoryDescribe",
+        "_purpose": "GetMemory is a control-plane read the session manager makes once at construction to learn the memory's strategy set.",
+        "Effect": "Allow",
+        "Action": [
+          "bedrock-agentcore:GetMemory"
+        ],
+        "Resource": [
+          "arn:aws:bedrock-agentcore:*:<ACCOUNT_ID>:memory/*"
+        ]
+      },
+      {
+        "Sid": "AgentCoreWorkloadIdentity",
+        "_purpose": "AgentCore Identity: the runtime exchanges its execution identity for a workload access token before fetching any outbound credential. Required as soon as a credential provider exists in agentcore.json; inert before that.",
+        "Effect": "Allow",
+        "Action": [
+          "bedrock-agentcore:GetWorkloadAccessToken",
+          "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
+          "bedrock-agentcore:GetWorkloadAccessTokenForUserId"
+        ],
+        "Resource": [
+          "arn:aws:bedrock-agentcore:*:<ACCOUNT_ID>:workload-identity-directory/default",
+          "arn:aws:bedrock-agentcore:*:<ACCOUNT_ID>:workload-identity-directory/default/workload-identity/*"
+        ]
+      },
+      {
+        "Sid": "AgentCoreOutboundCredentials",
+        "_purpose": "Fetch the Snowflake PAT / OAuth token for the semantic-layer call through the credential provider instead of baking a secret into the image.",
+        "Effect": "Allow",
+        "Action": [
+          "bedrock-agentcore:GetResourceApiKey",
+          "bedrock-agentcore:GetResourceOauth2Token"
+        ],
+        "Resource": [
+          "arn:aws:bedrock-agentcore:*:<ACCOUNT_ID>:token-vault/default/apikeycredentialprovider/*",
+          "arn:aws:bedrock-agentcore:*:<ACCOUNT_ID>:token-vault/default/oauth2credentialprovider/*"
+        ]
+      },
+      {
+        "Sid": "ReadCredentialProviderSecret",
+        "_purpose": "AgentCore Identity keeps each credential provider's material in a Secrets Manager secret it creates under the `bedrock-agentcore-identity!` prefix. Without GetSecretValue on that prefix the token fetch above fails with AccessDenied at request time, not at deploy time. Prefix-scoped, so this is not a blanket read of the account's secrets.",
+        "Effect": "Allow",
+        "Action": [
+          "secretsmanager:GetSecretValue"
+        ],
+        "Resource": [
+          "arn:aws:secretsmanager:*:<ACCOUNT_ID>:secret:bedrock-agentcore-identity!*"
+        ]
+      },
+      {
+        "Sid": "InvokeSemanticLayerGateway",
+        "_purpose": "SigV4-signed outbound call to the AgentCore Gateway fronting the signal layer. Only needed once agentCoreGateways is non-empty in agentcore.json.",
+        "Effect": "Allow",
+        "Action": [
+          "bedrock-agentcore:InvokeGateway"
+        ],
+        "Resource": [
+          "arn:aws:bedrock-agentcore:*:<ACCOUNT_ID>:gateway/*"
+        ]
+      },
+      {
+        "Sid": "RuntimeLogs",
+        "_purpose": "The runtime's own log group. Runtime (and only Runtime) gets its log destination wired automatically at deploy; the role still needs write access.",
+        "Effect": "Allow",
+        "Action": [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams"
+        ],
+        "Resource": [
+          "arn:aws:logs:*:<ACCOUNT_ID>:log-group:/aws/bedrock-agentcore/*",
+          "arn:aws:logs:*:<ACCOUNT_ID>:log-group:/aws/vendedlogs/bedrock-agentcore/*"
+        ]
+      },
+      {
+        "Sid": "SpanAndTraceExport",
+        "_purpose": "aws-opentelemetry-distro's exporters. Neither X-Ray write action supports resource-level scoping; the sampling reads are what let the distro honour the account's indexing rule.",
+        "Effect": "Allow",
+        "Action": [
+          "xray:PutTraceSegments",
+          "xray:PutTelemetryRecords",
+          "xray:GetSamplingRules",
+          "xray:GetSamplingTargets"
+        ],
+        "Resource": "*"
+      },
+      {
+        "Sid": "WriteSpansToLogs",
+        "_purpose": "Transaction Search destination. With trace segments routed to CloudWatchLogs, spans are written as log events into the aws/spans group, which is where the GenAI Observability console reads them from.",
+        "Effect": "Allow",
+        "Action": [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        "Resource": [
+          "arn:aws:logs:*:<ACCOUNT_ID>:log-group:aws/spans:*"
+        ]
+      },
+      {
+        "Sid": "PerAgentSpendMetrics",
+        "_purpose": "The per-agent token/cost telemetry this repo emits itself. The AgentCore SDK publishes no token or cost span attributes, and Strands records its token histograms without attributes, so PutMetricData is the only route to spend sliced per specialist. PutMetricData has no resource ARN, so it is namespace-scoped by condition instead. Keep this value in sync with observability/metrics.py NAMESPACE (env METRICS_NAMESPACE).",
+        "Effect": "Allow",
+        "Action": [
+          "cloudwatch:PutMetricData"
+        ],
+        "Resource": "*",
+        "Condition": {
+          "StringEquals": {
+            "cloudwatch:namespace": "AgentCoreFraudDemo"
+          }
+        }
+      }
+    ]
+  },
+
+  "deployingPrincipal": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "CloudFormationStackLifecycle",
+        "_purpose": "`agentcore deploy` is a CDK deploy underneath: it synthesizes stack AgentCore-ppFraud-<target> and change-sets it, and it reads stack status first to decide deployability. The Delete actions are the `agentcore remove all` + `agentcore deploy` teardown path.",
+        "Effect": "Allow",
+        "Action": [
+          "cloudformation:CreateStack",
+          "cloudformation:UpdateStack",
+          "cloudformation:DeleteStack",
+          "cloudformation:DescribeStacks",
+          "cloudformation:DescribeStackEvents",
+          "cloudformation:DescribeStackResources",
+          "cloudformation:GetTemplate",
+          "cloudformation:GetTemplateSummary",
+          "cloudformation:CreateChangeSet",
+          "cloudformation:DescribeChangeSet",
+          "cloudformation:ExecuteChangeSet",
+          "cloudformation:DeleteChangeSet",
+          "cloudformation:ListStacks",
+          "cloudformation:TagResource",
+          "cloudformation:UntagResource"
+        ],
+        "Resource": [
+          "arn:aws:cloudformation:*:<ACCOUNT_ID>:stack/AgentCore-ppFraud-*/*",
+          "arn:aws:cloudformation:*:<ACCOUNT_ID>:stack/CDKToolkit/*"
+        ]
+      },
+      {
+        "Sid": "CdkBootstrapAssetBucket",
+        "_purpose": "CDK stages both CodeZip bundles and the synthesized template as assets in the bootstrap bucket before CloudFormation reads them. Bucket name is cdk-<qualifier>-assets-<account>-<region>; the default qualifier is hnb659fds.",
+        "Effect": "Allow",
+        "Action": [
+          "s3:PutObject",
+          "s3:PutObjectTagging",
+          "s3:GetObject",
+          "s3:ListBucket",
+          "s3:GetBucketLocation",
+          "s3:GetEncryptionConfiguration"
+        ],
+        "Resource": [
+          "arn:aws:s3:::cdk-*-assets-<ACCOUNT_ID>-*",
+          "arn:aws:s3:::cdk-*-assets-<ACCOUNT_ID>-*/*"
+        ]
+      },
+      {
+        "Sid": "CdkBootstrapSsmVersion",
+        "_purpose": "CDK reads /cdk-bootstrap/<qualifier>/version to decide whether the environment is bootstrapped. `agentcore deploy --yes` auto-bootstraps when it is not, which writes this parameter.",
+        "Effect": "Allow",
+        "Action": [
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+          "ssm:PutParameter"
+        ],
+        "Resource": [
+          "arn:aws:ssm:*:<ACCOUNT_ID>:parameter/cdk-bootstrap/*"
+        ]
+      },
+      {
+        "Sid": "CdkBootstrapRoleAssumption",
+        "_purpose": "CDK's default synthesizer assumes the bootstrap deploy / file-publishing / lookup / cfn-exec roles rather than acting as the caller. Without this, deploy fails at asset publish with a misleading 'needs bootstrapping' message even though the environment is bootstrapped.",
+        "Effect": "Allow",
+        "Action": [
+          "sts:AssumeRole"
+        ],
+        "Resource": [
+          "arn:aws:iam::<ACCOUNT_ID>:role/cdk-*-deploy-role-*",
+          "arn:aws:iam::<ACCOUNT_ID>:role/cdk-*-file-publishing-role-*",
+          "arn:aws:iam::<ACCOUNT_ID>:role/cdk-*-lookup-role-*",
+          "arn:aws:iam::<ACCOUNT_ID>:role/cdk-*-cfn-exec-role-*"
+        ]
+      },
+      {
+        "Sid": "SynthesizeExecutionRoles",
+        "_purpose": "The stack creates one execution role per runtime plus their inline policies. This is the statement that cannot be avoided for a multi-runtime project. Name-prefix-scoped so the deployer cannot mint arbitrary roles.",
+        "Effect": "Allow",
+        "Action": [
+          "iam:CreateRole",
+          "iam:DeleteRole",
+          "iam:GetRole",
+          "iam:UpdateRole",
+          "iam:UpdateAssumeRolePolicy",
+          "iam:AttachRolePolicy",
+          "iam:DetachRolePolicy",
+          "iam:PutRolePolicy",
+          "iam:DeleteRolePolicy",
+          "iam:GetRolePolicy",
+          "iam:ListRolePolicies",
+          "iam:ListAttachedRolePolicies",
+          "iam:TagRole",
+          "iam:UntagRole"
+        ],
+        "Resource": [
+          "arn:aws:iam::<ACCOUNT_ID>:role/AgentCore-ppFraud-*",
+          "arn:aws:iam::<ACCOUNT_ID>:role/cdk-*"
+        ]
+      },
+      {
+        "Sid": "PassExecutionRoleToAgentCore",
+        "_purpose": "CreateAgentRuntime hands the execution role to the AgentCore service, which requires iam:PassRole. Condition-locked to that one service so the role cannot be passed anywhere else.",
+        "Effect": "Allow",
+        "Action": [
+          "iam:PassRole"
+        ],
+        "Resource": [
+          "arn:aws:iam::<ACCOUNT_ID>:role/AgentCore-ppFraud-*"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "iam:PassedToService": "bedrock-agentcore.amazonaws.com"
+          }
+        }
+      },
+      {
+        "Sid": "AgentCoreControlPlane",
+        "_purpose": "Create/update/delete the two runtimes, their endpoints, and the memory. Renaming a resource in agentcore.json changes its CloudFormation logical id, which means Delete+Create rather than Update - hence the Delete actions must be present before anyone renames anything.",
+        "Effect": "Allow",
+        "Action": [
+          "bedrock-agentcore:CreateAgentRuntime",
+          "bedrock-agentcore:UpdateAgentRuntime",
+          "bedrock-agentcore:DeleteAgentRuntime",
+          "bedrock-agentcore:GetAgentRuntime",
+          "bedrock-agentcore:ListAgentRuntimes",
+          "bedrock-agentcore:ListAgentRuntimeVersions",
+          "bedrock-agentcore:CreateAgentRuntimeEndpoint",
+          "bedrock-agentcore:UpdateAgentRuntimeEndpoint",
+          "bedrock-agentcore:DeleteAgentRuntimeEndpoint",
+          "bedrock-agentcore:GetAgentRuntimeEndpoint",
+          "bedrock-agentcore:ListAgentRuntimeEndpoints",
+          "bedrock-agentcore:CreateMemory",
+          "bedrock-agentcore:UpdateMemory",
+          "bedrock-agentcore:DeleteMemory",
+          "bedrock-agentcore:GetMemory",
+          "bedrock-agentcore:ListMemories",
+          "bedrock-agentcore:TagResource",
+          "bedrock-agentcore:UntagResource",
+          "bedrock-agentcore:ListTagsForResource"
+        ],
+        "Resource": [
+          "arn:aws:bedrock-agentcore:*:<ACCOUNT_ID>:runtime/*",
+          "arn:aws:bedrock-agentcore:*:<ACCOUNT_ID>:memory/*"
+        ]
+      },
+      {
+        "Sid": "AgentCoreCredentialProviders",
+        "_purpose": "Deploy runs an identity pre-step BEFORE CloudFormation: it creates the API-key / OAuth credential providers out of band and records their ARNs in agentcore/.cli/deployed-state.json. That is exactly why deployed-state.json must be committed - the CDK app reads those ARNs back on the next synth.",
+        "Effect": "Allow",
+        "Action": [
+          "bedrock-agentcore:CreateApiKeyCredentialProvider",
+          "bedrock-agentcore:UpdateApiKeyCredentialProvider",
+          "bedrock-agentcore:DeleteApiKeyCredentialProvider",
+          "bedrock-agentcore:GetApiKeyCredentialProvider",
+          "bedrock-agentcore:ListApiKeyCredentialProviders",
+          "bedrock-agentcore:CreateOauth2CredentialProvider",
+          "bedrock-agentcore:UpdateOauth2CredentialProvider",
+          "bedrock-agentcore:DeleteOauth2CredentialProvider",
+          "bedrock-agentcore:GetOauth2CredentialProvider",
+          "bedrock-agentcore:ListOauth2CredentialProviders",
+          "bedrock-agentcore:CreateWorkloadIdentity",
+          "bedrock-agentcore:GetWorkloadIdentity"
+        ],
+        "Resource": [
+          "arn:aws:bedrock-agentcore:*:<ACCOUNT_ID>:token-vault/default*",
+          "arn:aws:bedrock-agentcore:*:<ACCOUNT_ID>:workload-identity-directory/default*"
+        ]
+      },
+      {
+        "Sid": "CreateCredentialProviderSecret",
+        "_purpose": "The identity pre-step stores the provider's material in a KMS-encrypted Secrets Manager secret under the bedrock-agentcore-identity! prefix. Only needed once credentials[] is non-empty.",
+        "Effect": "Allow",
+        "Action": [
+          "secretsmanager:CreateSecret",
+          "secretsmanager:PutSecretValue",
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:TagResource"
+        ],
+        "Resource": [
+          "arn:aws:secretsmanager:*:<ACCOUNT_ID>:secret:bedrock-agentcore-identity!*"
+        ]
+      },
+      {
+        "Sid": "ObservabilityDeliveryWiring",
+        "_purpose": "Memory and Gateway receive NO log or trace destinations automatically - only Runtime does. Wiring theirs means a delivery source on the resource, a delivery destination on a log group, and a delivery joining the two. Absence of this statement is what produces a silently trace-free Memory. Delivery APIs do not accept resource-level ARNs on the Put calls.",
+        "Effect": "Allow",
+        "Action": [
+          "logs:PutDeliverySource",
+          "logs:PutDeliveryDestination",
+          "logs:PutDeliveryDestinationPolicy",
+          "logs:CreateDelivery",
+          "logs:GetDelivery",
+          "logs:GetDeliverySource",
+          "logs:GetDeliveryDestination",
+          "logs:DescribeDeliverySources",
+          "logs:DescribeDeliveryDestinations",
+          "logs:DeleteDelivery",
+          "logs:DeleteDeliverySource",
+          "logs:DeleteDeliveryDestination",
+          "logs:CreateLogGroup",
+          "logs:PutRetentionPolicy",
+          "logs:DescribeLogGroups",
+          "logs:TagResource"
+        ],
+        "Resource": "*"
+      },
+      {
+        "Sid": "EnableTransactionSearchOnce",
+        "_purpose": "`agentcore deploy` performs this account-level setup itself whenever the project has a Python runtime: application-signals StartDiscovery, a CloudWatch Logs resource policy named TransactionSearchXRayAccess granting xray.amazonaws.com logs:PutLogEvents on aws/spans and /aws/application-signals/data, UpdateTraceSegmentDestination -> CloudWatchLogs, and UpdateIndexingRule (probabilistic, 100% by default). All are idempotent. Without them you get service metrics and zero spans. If the customer will not grant them, have an admin run the equivalent once and set `agentcore config disableTransactionSearch true` so deploy stops attempting it.",
+        "Effect": "Allow",
+        "Action": [
+          "application-signals:StartDiscovery",
+          "logs:PutResourcePolicy",
+          "logs:DescribeResourcePolicies",
+          "xray:UpdateTraceSegmentDestination",
+          "xray:GetTraceSegmentDestination",
+          "xray:UpdateIndexingRule",
+          "xray:GetIndexingRules"
+        ],
+        "Resource": "*"
+      },
+      {
+        "Sid": "InvokeDeployedRuntime",
+        "_purpose": "`agentcore invoke`, and `agentcore dev` when it invokes the deployed resources a local run depends on. Data plane; distinct from the control-plane statement above.",
+        "Effect": "Allow",
+        "Action": [
+          "bedrock-agentcore:InvokeAgentRuntime"
+        ],
+        "Resource": [
+          "arn:aws:bedrock-agentcore:*:<ACCOUNT_ID>:runtime/*"
+        ]
+      },
+      {
+        "Sid": "ReadLogsAndTraces",
+        "_purpose": "`agentcore logs`, `agentcore traces list|get`, `agentcore status`, and reading the spend dashboard's metrics. Read-only.",
+        "Effect": "Allow",
+        "Action": [
+          "logs:FilterLogEvents",
+          "logs:GetLogEvents",
+          "logs:StartLiveTail",
+          "logs:StartQuery",
+          "logs:GetQueryResults",
+          "logs:DescribeLogStreams",
+          "xray:GetTraceSummaries",
+          "xray:BatchGetTraces",
+          "cloudwatch:GetMetricData",
+          "cloudwatch:GetMetricStatistics",
+          "cloudwatch:ListMetrics"
+        ],
+        "Resource": "*"
+      },
+      {
+        "Sid": "SpendDashboard",
+        "_purpose": "observability/create_dashboard.py publishes the per-agent spend dashboard. PutDashboard takes no resource ARN.",
+        "Effect": "Allow",
+        "Action": [
+          "cloudwatch:PutDashboard",
+          "cloudwatch:GetDashboard",
+          "cloudwatch:ListDashboards",
+          "cloudwatch:DeleteDashboards"
+        ],
+        "Resource": "*"
+      },
+      {
+        "Sid": "CallerIdentity",
+        "_purpose": "Deploy resolves the caller's account and compares it against aws-targets.json before doing anything. Not scopable.",
+        "Effect": "Allow",
+        "Action": [
+          "sts:GetCallerIdentity"
+        ],
+        "Resource": "*"
+      }
+    ]
+  }
 }
