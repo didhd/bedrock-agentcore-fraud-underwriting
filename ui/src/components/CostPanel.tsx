@@ -71,6 +71,7 @@ export function CostPanel({
         input: card.input_tokens,
         output: card.output_tokens,
         cacheRead: card.cache_read_tokens,
+        cacheWrite: card.cache_write_tokens,
         cost: card.cost_usd,
       })),
       {
@@ -82,6 +83,7 @@ export function CostPanel({
         input: synthesis.input_tokens,
         output: synthesis.output_tokens,
         cacheRead: synthesis.cache_read_tokens,
+        cacheWrite: synthesis.cache_write_tokens,
         cost: synthesis.cost_usd,
       },
     ],
@@ -99,6 +101,19 @@ export function CostPanel({
   const tokensOut = rows.every((row) => row.output !== null)
     ? rows.reduce((sum, row) => sum + (row.output ?? 0), 0)
     : null
+
+  // Cache-write is part of the prompt and it is billed, so a headline "input" figure
+  // that omits it understates the prompt badly. On GPT-5.6 implicit caching is ON by
+  // default, so a first call reports almost the whole prompt as cache-write: a
+  // measured synthesis showed input=2 against cache-write=3,888 -- i.e. 99.9% of the
+  // prompt, and 56% of the call's cost, sitting outside the "In" column. Hence a
+  // separate total rather than folding it into `tokensIn`, which must keep matching
+  // what the provider labels as input.
+  const tokensCacheWrite = rows.every((row) => row.cacheWrite !== null)
+    ? rows.reduce((sum, row) => sum + (row.cacheWrite ?? 0), 0)
+    : null
+  const promptTokens =
+    tokensIn === null || tokensCacheWrite === null ? tokensIn : tokensIn + tokensCacheWrite
 
   const perDay = perApp === null ? null : perApp * Number(volume)
   const perMonth = perDay === null ? null : perDay * 30
@@ -136,9 +151,13 @@ export function CostPanel({
             }
           />
           <StatTile
-            label="Input tokens"
-            value={integer(tokensIn)}
-            caption="Bedrock counts non-cached input only"
+            label="Prompt tokens"
+            value={integer(promptTokens)}
+            caption={
+              tokensCacheWrite
+                ? `${integer(tokensIn)} uncached + ${integer(tokensCacheWrite)} cache-write`
+                : "uncached input; providers count cached tokens separately"
+            }
           />
           <StatTile label="Output tokens" value={integer(tokensOut)} />
           <StatTile
@@ -158,6 +177,7 @@ export function CostPanel({
               <TableHead className="text-right">In</TableHead>
               <TableHead className="text-right">Out</TableHead>
               <TableHead className="text-right">Cache read</TableHead>
+              <TableHead className="text-right">Cache write</TableHead>
               <TableHead className="text-right">Cost</TableHead>
             </TableRow>
           </TableHeader>
@@ -188,6 +208,9 @@ export function CostPanel({
                   {integer(row.cacheRead)}
                 </TableCell>
                 <TableCell className="text-right font-mono text-xs tabular-nums">
+                  {integer(row.cacheWrite)}
+                </TableCell>
+                <TableCell className="text-right font-mono text-xs tabular-nums">
                   {usd(row.cost)}
                 </TableCell>
               </TableRow>
@@ -195,7 +218,7 @@ export function CostPanel({
           </TableBody>
           <TableFooter>
             <TableRow>
-              <TableCell colSpan={7} className="font-medium">
+              <TableCell colSpan={8} className="font-medium">
                 Total per application
               </TableCell>
               <TableCell className="text-right font-mono tabular-nums">{usd(perApp)}</TableCell>

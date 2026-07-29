@@ -645,7 +645,21 @@ def _model_of(domain: str) -> str | None:
 
 
 def _rate_for(model_id: str | None) -> dict[str, float] | None:
-    """Published $/1M rates read out of agents.pricing. None if it exposes none."""
+    """Published $/1M rates for a model id, from whichever module prices it.
+
+    Both branches call the owning module's **public** ``rates_for``. An earlier
+    version reached for module-level dicts by guessing at names -- ``MODEL_RATES``,
+    ``RATES``, ``RATE_TABLE`` -- none of which exist: the real constant is
+    ``BASE_RATES_PER_MTOK``. So every Claude row returned ``None`` and the UI's
+    "Rate applied" column rendered an em dash for eight of the nine agents while
+    happily showing the GPT row, which took the other branch. Cost was still
+    correct, because ``agents.pricing.cost_usd`` never used this helper -- only the
+    display was wrong, which is the sort of bug a demo audience spots first.
+
+    ``pricing.rates_for`` is prefix-aware (``global.*`` vs ``us.*`` differ by exactly
+    1.10x) and returns the introductory-vs-standard distinction, so the rate shown is
+    the rate that was actually applied rather than a base-table lookup.
+    """
     if not model_id:
         return None
     # GPT-5.x lives on the bedrock-mantle endpoint and is priced by agents.mantle;
@@ -666,33 +680,23 @@ def _rate_for(model_id: str | None) -> dict[str, float] | None:
         pass
     try:
         from agents import pricing
+
+        card = pricing.rates_for(model_id)
     except Exception:
         return None
-    for attr in ("MODEL_RATES", "RATES", "RATE_TABLE"):
-        table = getattr(pricing, attr, None)
-        if not isinstance(table, dict):
-            continue
-        entry = table.get(model_id)
-        if entry is None:
-            stem = model_id.split(".", 1)[-1]
-            entry = next(
-                (v for k, v in table.items() if str(k).split(".", 1)[-1] == stem), None
-            )
-        if entry is None:
-            continue
-        if isinstance(entry, dict):
-            out = {
-                "input_per_mtok": entry.get("input", entry.get("input_per_mtok")),
-                "output_per_mtok": entry.get("output", entry.get("output_per_mtok")),
-                "cache_read_per_mtok": entry.get(
-                    "cache_read", entry.get("cache_read_per_mtok")
-                ),
-            }
-            cleaned = {k: float(v) for k, v in out.items() if isinstance(v, (int, float))}
-            return cleaned or None
-        if isinstance(entry, (tuple, list)) and len(entry) >= 2:
-            return {"input_per_mtok": float(entry[0]), "output_per_mtok": float(entry[1])}
-    return None
+    if not isinstance(card, dict):
+        return None
+    out: dict[str, float] = {}
+    for target, source in (
+        ("input_per_mtok", "input"),
+        ("output_per_mtok", "output"),
+        ("cache_read_per_mtok", "cache_read"),
+        ("cache_write_per_mtok", "cache_write_applied"),
+    ):
+        value = card.get(source)
+        if isinstance(value, (int, float)):
+            out[target] = float(value)
+    return out or None
 
 
 def _tier_of(model_id: str | None) -> str | None:
