@@ -1,7 +1,13 @@
 /**
  * Theme: the standard shadcn CSS-variable approach (a `.dark` class on <html>),
- * defaulting to dark because this is presented on a projector in a meeting room.
- * The choice persists to localStorage so a reload does not flip mid-demo.
+ * defaulting to **system** so a first-time visitor sees whatever their OS already
+ * chose. An explicit pick still persists to localStorage, so a presenter who forces
+ * dark before a meeting does not get flipped back by a reload.
+ *
+ * Default was previously hard-dark, on the reasoning that this is shown on a
+ * projector. That is the wrong place to make the decision: a projector is one
+ * viewing context out of several, the OS already knows the user's preference, and
+ * the toggle is right there for the meeting-room case.
  */
 
 import * as React from "react"
@@ -26,9 +32,9 @@ function readStored(): Theme {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (stored === "dark" || stored === "light" || stored === "system") return stored
   } catch {
-    // localStorage can throw in a hardened browser profile; dark is the default.
+    // localStorage can throw in a hardened browser profile; fall through to system.
   }
-  return "dark"
+  return "system"
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {

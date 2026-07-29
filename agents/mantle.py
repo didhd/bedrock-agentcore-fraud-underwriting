@@ -1276,16 +1276,26 @@ def build_responses_model(
     Claude ones -- same fan-out, same hooks, same ``result.metrics.accumulated_usage``
     -- instead of a second bespoke code path.
 
-    Two details are load-bearing and both were verified live:
+    Routing goes through the provider's own ``bedrock_mantle_config`` rather than a
+    hand-built ``client_args``, and that is the whole point of this function now:
 
-    * ``base_url`` must end in ``/openai/v1``. The Strands documentation for this
-      provider shows ``/v1``, which serves only the open-weight ``gpt-oss`` family and
-      returns 400 for every ``gpt-5.6`` id. See the module docstring for the full
-      four-way measurement.
-    * ``api_key`` is a SHORT-LIVED bearer token from
-      ``aws_bedrock_token_generator.provide_token``, not a static secret. It is minted
-      per model construction here; a long-running runtime that holds one model object
-      for hours must rebuild it rather than assume the token survives.
+    * **The token is minted per REQUEST, not per construction.** Bedrock Mantle bearer
+      tokens are short-lived. Passing ``api_key`` in ``client_args`` bakes one token
+      into the model object, so a long-running runtime that holds a model for hours
+      eventually fails on an expired credential. ``bedrock_mantle_config`` calls
+      ``provide_token`` inside ``_resolve_client_args`` on every request instead. That
+      removes the failure mode rather than documenting it.
+    * **The provider derives the base path itself**, and it derives the same split this
+      module measured independently: ``strands.models._openai_bedrock`` carries
+      ``_OPENAI_PATH_MODEL_PREFIXES = ("openai.gpt-5.",)`` and routes those to
+      ``/openai/v1`` while everything else (``gpt-oss-*``) gets ``/v1``. So the
+      four-way measurement in the module docstring is now corroborated by the SDK
+      rather than only by us. :func:`base_url_for` is kept for
+      :func:`complete`, which talks to the endpoint directly and has no provider to
+      derive anything for it.
+
+    ``client_args`` must therefore NOT carry ``api_key`` or ``base_url`` -- the
+    provider raises ``ValueError`` if it does, which is the correct fail-fast.
 
     Raises :class:`MantleUnavailable` when the provider or its dependencies are absent,
     so a caller can fall back to :func:`complete` deliberately.
@@ -1299,7 +1309,6 @@ def build_responses_model(
             f"reasoning effort {resolved_effort!r} is not one of {list(MANTLE_EFFORTS)}"
         )
     try:
-        from aws_bedrock_token_generator import provide_token
         from strands.models.openai_responses import OpenAIResponsesModel
     except ImportError as exc:
         raise MantleUnavailable(
@@ -1310,10 +1319,7 @@ def build_responses_model(
 
     return OpenAIResponsesModel(
         model_id=model_id,
-        client_args={
-            "api_key": provide_token(region=resolved_region),
-            "base_url": base_url_for(resolved_region),
-        },
+        bedrock_mantle_config={"region": resolved_region},
         params={
             "max_output_tokens": max_tokens,
             "reasoning": {"effort": resolved_effort},

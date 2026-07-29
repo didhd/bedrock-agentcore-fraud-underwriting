@@ -1,11 +1,46 @@
 <!doctype html>
-<html lang="en" class="dark" data-theme="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- Dark is the default surface; ThemeProvider re-applies the stored choice on mount. -->
-    <meta name="color-scheme" content="dark light" />
+    <!--
+      Both schemes are supported, so the browser paints native form controls and
+      scrollbars to match whichever one resolves.
+    -->
+    <meta name="color-scheme" content="light dark" />
     <title>Fraud underwriting on Amazon Bedrock AgentCore</title>
+    <!--
+      Resolve the theme BEFORE first paint.
+
+      Without this the document would paint in light, then ThemeProvider would mount
+      and switch to dark, producing a white flash on every load for a dark-mode user.
+      React cannot prevent that: it runs after the first paint by definition. So the
+      same two inputs the provider uses -- the stored choice, else the OS preference --
+      are read here in a blocking inline script, and the provider re-applies the same
+      result on mount (idempotent, no second flash).
+
+      Keep the storage key and the class/attribute names in sync with
+      src/components/theme-provider.tsx.
+    -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("agentcore-demo-theme");
+          var choice = stored === "dark" || stored === "light" || stored === "system" ? stored : "system";
+          var dark =
+            choice === "system"
+              ? window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+              : choice === "dark";
+          var root = document.documentElement;
+          root.classList.toggle("dark", !!dark);
+          root.dataset.theme = dark ? "dark" : "light";
+          root.style.colorScheme = dark ? "dark" : "light";
+        } catch (e) {
+          /* A hardened profile can throw on localStorage or matchMedia. Leaving the
+             document unclassed yields the light surface, which is a valid default. */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
