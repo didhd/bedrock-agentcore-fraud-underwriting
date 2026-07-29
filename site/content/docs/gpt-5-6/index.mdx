@@ -48,7 +48,7 @@ an instrument.
 | Output-contract compliance | 72 analyses | **0 violations** against Claude's 34 | `agents/output_contract.py` |
 | Cache-write pricing | 1 measured call | `cacheWriteInputTokens=6740` = **62% of a $0.01499 call** | `agents/mantle.py::CACHE_WRITE_MULTIPLIER` |
 
-Detail per variant, including which one is worst on quality despite costing most:
+Detail per variant, including why price does not predict quality on this task:
 [GPT-5.6 variants](/docs/gpt-5-6/variants).
 
 ## What GPT-5.6 won on, undisputed
@@ -101,7 +101,7 @@ prompts, and that four agents were not measured at all.
   <Card
     title="GPT-5.6 variants"
     href="/docs/gpt-5-6/variants"
-    description="Luna, Terra and Sol per agent and per region — including why the most expensive variant is the worst on quality."
+    description="Luna, Terra and Sol per agent and per region — including why the price ordering does not predict the quality ordering here."
   />
   <Card
     title="bedrock-mantle"

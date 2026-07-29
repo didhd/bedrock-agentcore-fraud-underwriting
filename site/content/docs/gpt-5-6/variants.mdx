@@ -1,13 +1,55 @@
 ---
 title: GPT-5.6 variants
-description: Luna, Terra and Sol measured against each other on the same work — per agent, per region, per dollar. The cheapest variant is the best of the three, and the most expensive is the worst.
+description: Luna, Terra and Sol measured against each other on the same work — per agent, per region, per dollar. On this task the price ordering does not predict the quality ordering, and the mechanism is explainable.
 ---
 
-*For whoever has to pick a variant. Every cell is measured; nothing is inferred from the price list.*
+*For whoever has to pick a variant. Every cell is measured; nothing is inferred from the price list. n=6 per cell, which is this repo's floor for a band claim rather than a comfortable margin.*
 
-**Luna is the best of the three on this workload and costs the least. Sol is the worst and costs
-5x more.** Price ordering and quality ordering are inverted here, which is the single most useful
-thing on this page: the rate card would lead you to exactly the wrong choice.
+**On this task, price does not predict quality.** Luna is the cheapest of the three and scored
+highest on band agreement (20 of 24 against Sol's 15); Sol costs 5x Luna's output rate and scored
+lowest. That is a surprising sentence, so the rest of this page is mostly the mechanism and the
+caveats — because "the expensive model is worse" is the kind of claim that is usually a measurement
+error.
+
+## Why that is not as strange as it sounds
+
+Three things explain it, and none of them is "Sol is a weaker model".
+
+**1. Price here is a rate card, not a quality tier.** Sol's premium buys reasoning capacity, and
+this task barely uses it. The specialist prompts are explicit instruction sets — apply these
+numbered rules to this payload, in this format — not open problems. Output volume is nearly
+identical across the three (306 median output tokens for Sol against 348 for Luna), so the 5x cost
+is almost entirely the per-token rate:
+
+| Variant | Output $/MTok | Median output tokens | Output-only cost | Measured median cost/call |
+|---|---:|---:|---:|---:|
+| `luna` | 6.60 | 348 | $0.00230 | **$0.0048** |
+| `terra` | 16.50 | 256 | $0.00423 | **$0.0107** |
+| `sol` | 33.00 | 306 | $0.01010 | **$0.0232** |
+
+Sol writes **fewer** sentences than Luna (7.5 median against 10.0) and charges 5x per token for
+them. There is no volume story here at all.
+
+**2. More reasoning pushes toward escalation on this task, and escalation is usually wrong here.**
+Nine of the fourteen `LOW RISK` fixtures in the study are anti-false-positive cases — records built
+to *look* bad and resolve LOW anyway. A model that reasons harder about suspicious-looking signals
+finds more to say about them. Sol escalated **7 of 24** analyses against Luna's 3, and
+over-escalated **4 of 14** `LOW RISK` fixtures against Luna's 2. Its errors are directional, not
+random.
+
+**3. It is also wrong in the other direction.** On `identity`/APP-1014 (pinned `POSSIBLE RISK`) Sol
+declared `LOW RISK` with grounding **0.0** — it cited none of the seven signals in its view against
+their `_context` evidence. So this is not simple over-caution that a threshold could correct; the
+calibration is loose in both directions.
+
+<Callout type="warn" title="What this does and does not license">
+It licenses: **do not pick a GPT-5.6 variant by price for this workload.** Test it.
+
+It does not license "Sol is a bad model" or "reasoning effort hurts". Sol is the **judge** in
+`evals/judge_sol.py` precisely because it measured the highest reasoning effort of the three, and
+judging is exactly the open-ended task that rewards it. The finding is about *fit*, on 24 analyses
+per variant.
+</Callout>
 
 ## Price versus what it bought
 
@@ -15,17 +57,46 @@ thing on this page: the rate card would lead you to exactly the wrong choice.
 |---|---:|---:|---:|---|---:|---|
 | **`openai.gpt-5.6-luna`** | **1.10** | **6.60** | **4.61 s** | 4/6, 6/6, 5/6, 5/6 | 0.2860–0.5000 | **Shipped** as synthesizer |
 | `openai.gpt-5.6-terra` | 2.75 | 16.50 | 6.72 s | 4/6, 4/5, 5/6, 5/6 | 0.3500–0.6250 | Best grounding of the three, 2.5x Luna's price |
-| `openai.gpt-5.6-sol` | 5.50 | 33.00 | 11.19 s | 4/6, **2/6**, 4/6, 5/6 | **0.1000–0.5000** | **Worst on quality at 5x the price** |
+| `openai.gpt-5.6-sol` | 5.50 | 33.00 | 11.19 s | 4/6, **2/6**, 4/6, 5/6 | **0.1000–0.5000** | Lowest band agreement, highest price |
 
 Rates from `agents/mantle.py::MANTLE_RATES_PER_MTOK`; latency from `MEASURED_SYNTHESIS_LATENCY`;
 band and grounding from `evals/results/set_comparison.json`.
 
-<Callout type="warn" title="Sol was chosen as the second judge, and its own analyses are why it is not a candidate">
-Sol measured the highest reasoning effort of the three, which is what a judge should have — so it
-judges in `evals/judge_sol.py`. As a *specialist* it was the only cell in the study to escalate
-**both** anti-false-positive fixtures on `identity`, dismissed a corroborated application, and
-banded **2 of 6**. Paying 4x Luna's price bought worse calibration, not better.
-</Callout>
+## Band agreement across all five models
+
+Sol being last is only meaningful next to the others, so here is every model in the study over its
+own 24 analyses. Note that **Luna leads the field**, above both Claude incumbents, on band alone:
+
+| Model | Correct band | Escalated | Over-escalated on a `LOW RISK` fixture |
+|---|---:|---:|---:|
+| **`luna`** | **20 / 24** | 3 | 2 / 14 |
+| `opus-5` | 19 / 24 | 4 | 3 / 14 |
+| `terra` | 18 / 24 | 4 | 3 / 14 |
+| `sonnet-5` | 17 / 24 | 4 | 2 / 14 |
+| `sol` | **15 / 24** | **7** | **4 / 14** |
+
+The spread from 15 to 20 over 24 analyses is **five cases**. That is a real ordering on this sample
+and a thin one: one differently-judged application moves any model by a full point. It is reported
+as a ranking on 24 analyses, not as a general capability claim — and it is *not* what the
+specialist decision rests on. That rests on `_context` grounding, where every GPT variant including
+Luna sits below both Claude incumbents.
+[Cross-family study](/docs/model-selection/cross-family-study).
+
+Sol's `identity` cell is the worst single result in the study and worth reading in full, because it
+shows all three failure directions at once over six applications:
+
+| Application | Pinned | Sol declared | Grounding | Reading |
+|---|---|---|---:|---|
+| APP-1004 | `HIGH RISK` | `HIGH RISK` | 0.571 | Correct, and its best-grounded analysis |
+| APP-1009 | `LOW RISK` | `POSSIBLE RISK` | 0.143 | **Over-escalated an anti-FP fixture** |
+| APP-1010 | `LOW RISK` | `POSSIBLE RISK` | 0.143 | **Over-escalated an anti-FP fixture** |
+| APP-1012 | `POSSIBLE RISK` | `HIGH RISK` | 0.429 | Over-escalated |
+| APP-1013 | `LOW RISK` | `LOW RISK` | 0.143 | Correct band, band read from a lead sentence |
+| APP-1014 | `POSSIBLE RISK` | `LOW RISK` | **0.0** | **Under-escalated, citing no `_context` at all** |
+
+Two of six correct, and the two anti-false-positive fixtures both escalated — the only cell in the
+study to do that. APP-1014 is the reason this is not fixable by tightening a threshold: the same
+model that over-escalates two benign records clears a genuinely risky one while grounding nothing.
 
 ## Per agent, all three variants
 
