@@ -1,0 +1,121 @@
+---
+title: GPT-5.6 on this platform
+description: Where OpenAI models are used, where they were tested and declined, and every measurement taken on Luna, Terra and Sol — 72 blind-judged analyses, an 8-cell region matrix, and the one production component running on GPT today.
+---
+
+*For anyone asking "is this a Claude system or a mixed one". It is mixed, and both halves of that were decided by measurement.*
+
+**GPT-5.6 Luna runs the master synthesizer in production. GPT-5.6 was tested for all eight
+specialists and declined.** Those two sentences are the whole summary, and neither was a
+preference: the first replaced a 55.2 s Claude synthesis with a **4.20 s p50 over 42 runs**, and
+the second overruled a projected **47.8% cost reduction** on one deterministic compliance
+measurement.
+
+## Where GPT runs, and where it does not
+
+<Mermaid
+  title="Nine agents: eight on Claude, one on GPT-5.6 Luna"
+  chart={`
+flowchart LR
+  subgraph SPEC["8 specialists — Claude"]
+    direction TB
+    S1["Sonnet 5 x6"]
+    S2["Haiku 4.5 x2"]
+  end
+  SPEC -->|"8 prose analyses"| SY["Master synthesizer<br/>GPT-5.6 Luna<br/>bedrock-mantle"]
+  SY --> ADJ["Adjudication<br/>21 keys, validated"]
+`}
+/>
+
+| Role | Model | Endpoint | Why this model | Evidence |
+|---|---|---|---|---|
+| 8 specialists | Claude Sonnet 5 / Haiku 4.5 | Bedrock Converse | GPT was faster and cheaper and lost on `_context` grounding | [Cross-family study](/docs/model-selection/cross-family-study) |
+| **Master synthesizer** | **GPT-5.6 Luna** | **`bedrock-mantle`** | 55.2 s → 4.20 s p50 for the same verdict | [Synthesizer selection](/docs/model-selection/synthesizer) |
+| Second judge (eval only) | GPT-5.5 | `bedrock-mantle` | A Claude judge cannot referee a Claude-vs-GPT comparison | [Judge methodology](/docs/model-selection/judge-methodology) |
+
+The judge row matters more than it looks. The cross-family comparison is scored by **two judges
+biased in opposite directions**, one of them OpenAI's, so a finding only counts where both agree.
+GPT is therefore in this repo three times: as a shipped component, as a rejected candidate, and as
+an instrument.
+
+## Everything measured on GPT-5.6
+
+| Measurement | Scale | Result | Artifact |
+|---|---|---|---|
+| Blind-judged specialist analyses | **72** (Luna, Terra, Sol x 4 agents x 6 applications) | Band comparable, grounding lower on 4 of 4 agents | `evals/results/set_comparison.json` |
+| Synthesis in production | **42 calls, 0 failed** | **4.20 s p50**, 5.59 s p95, 3.08 s min | `evals/results/pipeline_14x3_us-east-1.json` |
+| Region x variant latency | **8 cells**, n=3 each | Luna `us-east-1` fastest at 4.61 s p50 | `agents/mantle.py::MEASURED_SYNTHESIS_LATENCY` |
+| Output-contract compliance | 72 analyses | **0 violations** against Claude's 34 | `agents/output_contract.py` |
+| Cache-write pricing | 1 measured call | `cacheWriteInputTokens=6740` = **62% of a $0.01499 call** | `agents/mantle.py::CACHE_WRITE_MULTIPLIER` |
+
+Detail per variant, including which one is worst on quality despite costing most:
+[GPT-5.6 variants](/docs/gpt-5-6/variants).
+
+## What GPT-5.6 won on, undisputed
+
+Pooled across the four swept agents, against the Claude incumbents:
+
+| Axis | Claude | GPT-5.6 | Margin |
+|---|---:|---:|---|
+| Wall clock p50 | 18.88 s | **4.73 s** | **4.0x faster** |
+| Cost per call p50 | $0.03125 | **$0.01066** | **2.9x cheaper** |
+| Output-contract violations | 34 | **0** | GPT invents no titles at all |
+| Judged substance | — | **higher on BOTH judges** | +0.398 / +0.684 |
+
+The Claude judge scored GPT higher on substance — that is, **against its own family** — which is
+much harder to dismiss than a single-judge result. And the length difference is padding rather
+than lost evidence: paired on identical payloads, Claude writes 2.95x the characters while naming
+1.08x the payload's signals, agreeing on band in 23 of 24 pairs.
+[Length versus evidence](/docs/model-selection/length-vs-evidence).
+
+## The one axis that decided against it
+
+<Callout type="warn" title="A compliance measurement, not a quality opinion">
+Every specialist prompt requires signals to be validated against their paired `_context` columns.
+`grounded_fraction` counts how often that actually happens, deterministically, with **no judge
+involved**: GPT **0.357** (n=72) against Claude **0.642** (n=48), lower on **4 of 4** agents. On
+`synthetic` it falls to **0.150**.
+
+A model can land the right band without doing the validation her prompt asks for. Band agreement
+cannot see that; this can.
+</Callout>
+
+Declining it has a price, and the site states it rather than hiding it: moving the four swept
+agents to Luna projects **$0.0651 per adjudication against $0.1247 — a 47.8% reduction** — and
+would drop the fan-out floor from 22.05 s to 8.09 s. Both are labelled projections of a rejected
+counterfactual in `agents/models.py`. [Cost levers](/docs/cost/levers).
+
+## What was never tested on GPT
+
+**Four of the eight specialists — `dealer`, `straw`, `employment`, `income` — never ran on GPT at
+all.** Three of the five anti-false-positive fixtures (APP-1006, APP-1007, APP-1008) target
+exactly those domains, so the hardest calibration cases have no GPT evidence in either direction.
+`income` is also the current latency bottleneck, which makes it the first place a further sweep
+would pay.
+
+Nothing here is an argument that GPT-5.6 is worse at fraud analysis. It is an argument that on the
+four agents measured, it complied less often with a specific instruction in the customer's own
+prompts, and that four agents were not measured at all.
+
+<Cards>
+  <Card
+    title="GPT-5.6 variants"
+    href="/docs/gpt-5-6/variants"
+    description="Luna, Terra and Sol per agent and per region — including why the most expensive variant is the worst on quality."
+  />
+  <Card
+    title="bedrock-mantle"
+    href="/docs/platform/bedrock-mantle"
+    description="The endpoint, the base-URL trap that returns a misleading 400, bearer-token auth, and the IAM action."
+  />
+  <Card
+    title="Synthesizer selection"
+    href="/docs/model-selection/synthesizer"
+    description="Why the synthesizer moved to Luna and why the specialists did not follow it."
+  />
+  <Card
+    title="Cross-family study"
+    href="/docs/model-selection/cross-family-study"
+    description="The full 120-analysis design, both judges, and the per-agent verdict grid."
+  />
+</Cards>

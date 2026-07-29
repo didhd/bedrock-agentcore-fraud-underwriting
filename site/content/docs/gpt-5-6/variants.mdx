@@ -1,0 +1,115 @@
+---
+title: GPT-5.6 variants
+description: Luna, Terra and Sol measured against each other on the same work — per agent, per region, per dollar. The cheapest variant is the best of the three, and the most expensive is the worst.
+---
+
+*For whoever has to pick a variant. Every cell is measured; nothing is inferred from the price list.*
+
+**Luna is the best of the three on this workload and costs the least. Sol is the worst and costs
+5x more.** Price ordering and quality ordering are inverted here, which is the single most useful
+thing on this page: the rate card would lead you to exactly the wrong choice.
+
+## Price versus what it bought
+
+| Variant | Input $/MTok | Output $/MTok | Synthesis p50 (us-east-1, n=3) | Band, 4 agents x 6 apps | Grounding median | Verdict |
+|---|---:|---:|---:|---|---:|---|
+| **`openai.gpt-5.6-luna`** | **1.10** | **6.60** | **4.61 s** | 4/6, 6/6, 5/6, 5/6 | 0.2860–0.5000 | **Shipped** as synthesizer |
+| `openai.gpt-5.6-terra` | 2.75 | 16.50 | 6.72 s | 4/6, 4/5, 5/6, 5/6 | 0.3500–0.6250 | Best grounding of the three, 2.5x Luna's price |
+| `openai.gpt-5.6-sol` | 5.50 | 33.00 | 11.19 s | 4/6, **2/6**, 4/6, 5/6 | **0.1000–0.5000** | **Worst on quality at 5x the price** |
+
+Rates from `agents/mantle.py::MANTLE_RATES_PER_MTOK`; latency from `MEASURED_SYNTHESIS_LATENCY`;
+band and grounding from `evals/results/set_comparison.json`.
+
+<Callout type="warn" title="Sol was chosen as the second judge, and its own analyses are why it is not a candidate">
+Sol measured the highest reasoning effort of the three, which is what a judge should have — so it
+judges in `evals/judge_sol.py`. As a *specialist* it was the only cell in the study to escalate
+**both** anti-false-positive fixtures on `identity`, dismissed a corroborated application, and
+banded **2 of 6**. Paying 4x Luna's price bought worse calibration, not better.
+</Callout>
+
+## Per agent, all three variants
+
+Grounding is `grounded_fraction_median` over 6 applications per cell. `DISQ` marks a cell the
+study disqualified on its own recorded rule.
+
+| Agent | Variant | Band | Grounding | Contract violations | Wall p50 | $/call p50 | |
+|---|---|---|---:|---:|---:|---:|---|
+| `bustout` | luna | 4/6 | 0.2860 | 0 | 3.21 s | $0.0053 | |
+| `bustout` | terra | 4/6 | 0.3575 | 0 | 7.90 s | $0.0103 | |
+| `bustout` | sol | 4/6 | 0.2145 | 0 | 6.06 s | $0.0231 | **DISQ** |
+| `identity` | luna | **6/6** | 0.3575 | 0 | **2.60 s** | **$0.0045** | |
+| `identity` | terra | 4/5 | 0.3575 | 0 | 8.92 s | $0.0118 | **DISQ** |
+| `identity` | sol | **2/6** | 0.1430 | 0 | 5.50 s | $0.0269 | **DISQ** |
+| `rings` | luna | 5/6 | 0.5000 | 0 | 3.20 s | $0.0050 | |
+| `rings` | terra | 5/6 | **0.6250** | 0 | 8.04 s | $0.0105 | |
+| `rings` | sol | 4/6 | 0.5000 | 0 | 4.86 s | $0.0206 | **DISQ** |
+| `synthetic` | luna | 5/6 | **0.1500** | 0 | **2.28 s** | $0.0047 | **DISQ** |
+| `synthetic` | terra | 5/6 | 0.3500 | 0 | 7.05 s | $0.0106 | |
+| `synthetic` | sol | 5/6 | 0.1000 | 0 | 2.82 s | $0.0210 | **DISQ** |
+
+Two readings worth taking from that grid.
+
+**Every GPT cell has zero contract violations.** All 72 analyses, across all three variants. The
+Claude incumbents recorded 34. Whatever else the comparison decided, the invented-title defect is
+a Claude-side problem. [Output-contract defects](/docs/fidelity/output-contract-defects).
+
+**Luna's weakness is specific, not general.** It is the strongest variant on three agents and
+collapses on `synthetic` alone — 0.1500 grounding, less than a third of Opus's 0.517 on the same
+payloads. A variant-per-agent assignment is therefore arguable on this data; it is not taken
+because `synthetic`'s incumbent is measured and the alternative's n is 6.
+
+## Region matters more than variant choice
+
+Same prompt (31,343 characters), `effort=low`, n=3 per cell, measured 2026-07-28:
+
+| Variant | Region | Total p50 | TTFT p50 | Output tok/s | Output tokens p50 |
+|---|---|---:|---:|---:|---:|
+| **luna** | **us-east-1** | **4.61 s** | 0.79 s | 176.0 | 812 |
+| luna | us-west-2 | 5.02 s | 1.19 s | 180.0 | 903 |
+| luna | us-east-2 | 6.79 s | 1.63 s | 115.8 | 878 |
+| terra | us-east-2 | 6.29 s | 0.63 s | 126.4 | 825 |
+| terra | us-east-1 | 6.72 s | 0.69 s | 122.3 | 785 |
+| terra | us-west-2 | 7.63 s | 0.89 s | 95.1 | 790 |
+| sol | us-east-1 | 11.19 s | 4.19 s | 91.1 | 1,020 |
+| sol | us-east-2 | **30.66 s** | **22.07 s** | 31.6 | 900 |
+
+Sol in `us-east-2` is **6.6x slower than Luna in `us-east-1`** on identical work. Every cell
+returned the same verdict (`HIGH RISK/DECLINE`), so the spread is throughput, not different
+answers.
+
+There is **no cross-region inference on this endpoint** — no `global.*` or `us.*` prefix — so the
+region is a deployment decision, not an inference-profile one. Sol is served in `us-east-1` and
+`us-east-2` only. [Region selection](/docs/model-selection/regions).
+
+<Callout type="error" title="A third-party probe ranks these regions differently, and it is not wrong">
+A public latency dashboard put Luna `us-west-2` fastest at 531 ms and `us-east-2` at 2,703 ms —
+a different ordering from the table above, which measured `us-east-1` fastest.
+
+Both are correct and they measure different things. A short-prompt probe is dominated by
+**time to first token**; a 31,000-character prompt producing 800+ tokens is dominated by
+**throughput**. Our workload is the second kind, so our own measurement governs the deployment
+and the probe is recorded as context rather than as a tiebreak.
+</Callout>
+
+## Cost accounting that differs from Converse
+
+Two details will under-report a GPT bill if missed, both now priced and regression-tested:
+
+| Term | Behaviour | Consequence if ignored |
+|---|---|---|
+| `cacheWriteInputTokens` | Billed at **1.25x** input on 5.6 (30-min cache), implicit caching **on by default** | A measured Luna synthesis reported 6,740 cache-write tokens = **$0.00927 of a $0.01499 call, 62%** |
+| `input_tokens` | Responses API counts the **total** prompt including cached; Converse counts only non-cached | Double-counting cached tokens at the full rate |
+
+GPT-5.4 and GPT-5.5 cache with **no** write charge, so their multiplier is `0.0` — recorded in
+`CACHE_WRITE_MULTIPLIER` rather than assumed. `rates_for()` raises on an unpriced model id instead
+of defaulting, so a new variant cannot enter a cost-reported path silently.
+[What does not reduce cost](/docs/cost/what-does-not-work).
+
+## Still unknown
+
+- **Four agents were never run on any GPT variant** — `dealer`, `straw`, `employment`, `income` —
+  and with them three of the five anti-false-positive fixtures.
+- **n=6 per cell** on band, and n=3 per cell on latency. A band claim needs 5 by this repo's own
+  rule, so these are at the floor rather than comfortably above it.
+- **No GPT variant was measured as a specialist in production.** Every specialist figure here comes
+  from the study, not from a pipeline run.

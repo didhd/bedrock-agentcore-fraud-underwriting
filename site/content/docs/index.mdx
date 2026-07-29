@@ -18,8 +18,14 @@ without rewriting a single prompt.
 | Runs under the customer's 60 s target | **40 of 42** | same file |
 | Cost per adjudication | **$0.1440 p50** (n=41 priced runs) | same file |
 | Specialists held on Claude, on one deterministic metric | `_context` grounding **0.642 Claude vs 0.357 GPT** | `evals/results/set_comparison.json` |
+| Master synthesis, on **GPT-5.6 Luna** | **4.20 s p50** (n=42), down from 55.2 s on Claude | `evals/results/pipeline_14x3_us-east-1.json` |
 
 Derivation, per-specialist breakdown and every caveat: [Measured results](/docs/measured-results).
+
+This is a **mixed-model system**, and both halves of that were measured rather than assumed: eight
+Claude specialists and one GPT-5.6 synthesizer. GPT-5.6 was also tested for all eight specialists
+across **72 blind-judged analyses** and declined — a projected 47.8% cost reduction turned down on
+one compliance measurement. [GPT-5.6 on this platform](/docs/gpt-5-6).
 
 ## Start here
 
@@ -43,6 +49,11 @@ Derivation, per-specialist breakdown and every caveat: [Measured results](/docs/
     title="Open questions"
     href="/docs/open-questions"
     description="Five items that need a customer answer, and the exact sentence to ask each one with."
+  />
+  <Card
+    title="GPT-5.6 on this platform"
+    href="/docs/gpt-5-6"
+    description="Where OpenAI models run in production, where they were tested and declined, and every measurement on Luna, Terra and Sol."
   />
 </Cards>
 
