@@ -1,37 +1,61 @@
 ---
-title: The Runtime entrypoint contract
-description: Why the second parameter must be literally named `context`, how an async-generator entrypoint becomes SSE, why a failed run still returns HTTP 200, and the quotas that matter at the customer's volume.
+title: Runtime entrypoint contract
+description: Why the second parameter must be literally named context, how an async-generator entrypoint becomes SSE, why a failed run still returns HTTP 200, and the quotas that matter at the customer's volume.
 ---
 
-<Callout type="info" title="Audience">
-For the customer's engineer and for anyone writing a client against these endpoints.
-Verified against `bedrock-agentcore` **1.14.0** and re-verified on **1.19.0** — see
-[the SDK upgrade](/docs/platform/sdk-upgrade). `tests/test_runtime_contract.py` holds
-**60 tests** asserting everything on this page.
-</Callout>
+*For the customer's engineer and for anyone writing a client against these endpoints.*
 
-This port declares two runtimes, both `protocol: HTTP` with one `@app.entrypoint` each:
+Four rules govern an AgentCore Runtime entrypoint, and three of them fail silently when broken:
+the second parameter must be named `context`, an async generator becomes SSE automatically, an
+error raised mid-stream arrives **after** HTTP 200, and only one `@app.entrypoint` survives per
+app. Verified against `bedrock-agentcore` **1.14.0** and re-verified on **1.19.0** — see
+[SDK upgrade](/docs/platform/sdk-upgrade). `tests/test_runtime_contract.py` holds **60 tests**
+asserting everything below.
+
+## Request lifecycle
+
+<Mermaid
+  title="Where the 200 is committed, and where an error can still appear"
+  chart={`
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant R as Runtime
+    participant F as Fan-out and synthesis
+    C->>R: POST /invocations
+    R-->>C: HTTP 200, text/event-stream
+    R->>F: start
+    F-->>R: specialist lands
+    R-->>C: data: agent_done
+    F-->>R: exception
+    R-->>C: data: error, terminal
+`}
+/>
+
+Step 2 is the whole hazard. Status is committed the moment the first byte of the stream goes
+out, so every later failure can only be reported *inside a frame*. A dashboard counting HTTP
+status codes reports 100% success on a run that failed.
+
+Two runtimes are declared here, both `protocol: HTTP` with one entrypoint each.
 
 | Runtime | Path | Shape |
 |---|---|---|
 | `underwriter` | `app/underwriter/main.py` | Async-generator entrypoint → SSE. Eight-way fan-out, then synthesis, streaming each specialist as it lands. |
 | `francis` | `app/francis/main.py` | Interactive router; the eight specialists as `@tool` wrappers under the customer's maximum-2-tools-per-query cap. |
 
-## The `context` parameter must be literally named `context`
+## Parameter named `context`, matched by name
 
-<Callout type="error" title="Symptom first">
-**What you see.** One of two things, depending on how you wrote the handler.
+Two failure shapes, depending on how the handler was written.
 
-With a *one-parameter* handler: it runs, but every log line is missing the session id, and
-`RequestContext` is nowhere. You spend an afternoon asking why sessions do not stick.
+| Handler signature | What happens | Why |
+|---|---|---|
+| `def invoke(payload)` | Runs, but every log line lacks the session id and `RequestContext` is nowhere | One parameter, so the SDK never injects |
+| `def invoke(payload, ctx)` | **Every request raises `TypeError`** at invocation time | Second parameter is not named `context` |
+| `def invoke(payload, context)` | Correct | `_takes_context` matches by name |
 
-With a *two-parameter* handler whose second parameter is named anything else — `ctx`,
-`request_context`, `req` — every request raises `TypeError` at invocation time.
-
-**Cause.** `BedrockAgentCoreApp._takes_context` decides whether to inject the
-`RequestContext` by checking that the handler's **second positional parameter is literally
-named `context`**. Not by type. Not by annotation. By name.
-</Callout>
+`BedrockAgentCoreApp._takes_context` decides whether to inject `RequestContext` by checking that
+the handler's **second positional parameter is literally named `context`**. Not by type. Not by
+annotation. By name.
 
 ```python
 @app.entrypoint
@@ -40,13 +64,12 @@ async def invoke(payload, context):     # `context`, exactly
     ...
 ```
 
-`tests/test_runtime_contract.py::test_second_parameter_is_literally_named_context` asserts
-the parameter name on both runtimes, and
-`test_sdk_agrees_the_handler_takes_context` asserts that the SDK's own `_takes_context`
-returns `True` for it — so the guard is against the SDK's real behaviour rather than
-against a restatement of it.
+`test_second_parameter_is_literally_named_context` asserts the parameter name on both runtimes,
+and `test_sdk_agrees_the_handler_takes_context` asserts the SDK's own `_takes_context` returns
+`True` for it — so the guard runs against real SDK behaviour rather than against a restatement
+of it.
 
-## An async-generator entrypoint returns SSE automatically
+## Async generator returns SSE automatically
 
 Yield plain dicts. Never hand-format SSE.
 
@@ -58,12 +81,11 @@ async def invoke(payload, context):
     yield {"event": "done", ...}
 ```
 
-The SDK's `_convert_to_sse` serialises each yielded object as `data: <json>\n\n`. The local
-`agentcore dev` server and the deployed runtime both reply **`text/event-stream` always** —
-even for a one-line prompt. Every client must parse `data: {...}` frames; there is no
-"short answers come back as JSON" path.
+`_convert_to_sse` serialises each yielded object as `data: <json>\n\n`. Local `agentcore dev`
+and the deployed runtime both reply **`text/event-stream` always** — even for a one-line prompt.
+Every client must parse `data: {...}` frames; there is no "short answers come back as JSON" path.
 
-The batch runtime's frame sequence, asserted by test:
+Frame sequence for the batch runtime, asserted by test:
 
 ```
 start
@@ -75,43 +97,37 @@ done
 
 A terminal `error` frame replaces the tail on an unrecoverable failure.
 
-### Choosing sync vs streaming is a resource decision, not a style one
+### Sync versus streaming is a resource decision
 
-The previous entrypoint here was `def invoke(payload) -> dict`. Three consequences, all
-fixed by the async generator:
+The previous entrypoint here was `def invoke(payload) -> dict`. Three consequences, all fixed by
+the async generator:
 
-1. No session id (above).
-2. **A Starlette worker held for the whole fan-out.** `_invoke_handler` routes a *sync*
-   handler through `run_in_threadpool`, so a tens-of-seconds fan-out occupies a worker
-   throughout.
+1. No session id, per the table above.
+2. **A Starlette worker held for the whole fan-out.** `_invoke_handler` routes a *sync* handler
+   through `run_in_threadpool`, so a tens-of-seconds fan-out occupies a worker throughout.
 3. Nothing to show until the end — the live UI could not render specialists as they landed.
 
-## Errors arrive AFTER HTTP 200
+## Errors arrive after HTTP 200
 
-<Callout type="error" title="This is the one a client will get wrong">
-**Symptom.** A monitoring dashboard shows 100% success. Users report failed adjudications.
-
-**Cause.** The response status is committed as **HTTP 200** the moment the first SSE byte
-goes out. An exception raised later inside the generator can only be reported *in a frame*.
+<Callout type="error" title="A 200 is not success. Every frame must be inspected for an error key">
+Symptom pair that identifies this: a monitoring dashboard shows 100% success while users report
+failed adjudications. An exception raised inside the generator can only be reported in a frame —
 `_stream_with_error_handling` catches it and yields a terminal
-`{"error", "error_type", "message"}` object — after the 200.
-
-**A 200 is not success. Every frame must be inspected for an `error` key.**
+`{"error", "error_type", "message"}` object, after the 200 has already gone out.
 </Callout>
 
-This runtime deliberately uses **two different keys** so one client-side check does not
-swallow the other:
+Three keys, deliberately distinct so one client-side check does not swallow another.
 
 | Key | Meaning | Terminal? |
 |---|---|---|
 | `error` | Unrecoverable failure of the whole run. Same shape the SDK itself uses, so one check covers both. | Yes |
 | `failure` | A **single specialist** failed. 7-of-8 graceful degradation; the adjudication proceeds with a documented gap. | No |
-| `done` | The run completed, possibly partially. Always emitted when it completed. | Yes |
+| `done` | Run completed, possibly partially. Always emitted when it completed. | Yes |
 
-A client that treats any `error`-shaped frame as fatal therefore does not abort on a
-degraded-but-valid run. The 42-run benchmark contains a live example: APP-1011 repetition 3
-lost `synthetic` and `rings` to `server_5xx`, finished in 21.2 s, and **still validated all
-21 keys** (`evals/results/pipeline_14x3_us-east-1.json`).
+A client treating any `error`-shaped frame as fatal therefore does not abort on a
+degraded-but-valid run. The benchmark contains a live example: APP-1011 repetition 3 lost
+`synthetic` and `rings` to `server_5xx`, finished in **21.215 s**, and still validated all 21
+keys (`evals/results/pipeline_14x3_us-east-1.json`).
 
 ## Timeouts
 
@@ -119,17 +135,15 @@ lost `synthetic` and `rings` to `server_5xx`, finished in 21.2 s, and **still va
 |---|---|---|
 | Synchronous request | **15 minutes** | **No** |
 | Streaming response | 60 minutes | — |
-| Session ceiling | 8 hours | — (this is *not* a request timeout) |
+| Session ceiling | 8 hours | Not a request timeout at all |
 
-The 8-hour figure appears in enough places to be worth naming explicitly: it is the session
-ceiling, not a request timeout. If you have seen "8 hours" quoted as an invocation limit,
-that is what it was.
+That 8-hour figure appears in enough places to be worth naming: it is the session ceiling. If
+you have seen "8 hours" quoted as an invocation limit, this is what it was.
 
-## `runtimeSessionId` has a 33-character client-side minimum
+## Session id has a 33-character client-side minimum
 
-<Callout type="warn" title="Symptom: ParamValidationError on a perfectly good UUID">
-`uuid4().hex` is **32** characters and is rejected. `str(uuid.uuid4())` is **36** with the
-hyphens and is accepted.
+`uuid4().hex` is **32** characters and is rejected with `ParamValidationError`.
+`str(uuid.uuid4())` is **36** with the hyphens and is accepted.
 
 ```python
 SESSION_ID_MIN_LENGTH = 33
@@ -139,26 +153,23 @@ def new_session_id() -> str:
 ```
 
 `app/runtime_support.py` centralises this so nobody re-derives it, and
-`test_generated_session_id_meets_the_33_char_floor` asserts *both* halves — that
-`uuid4().hex` is below the floor (so the test's premise is checked, not assumed) and that
-the generated id clears it.
+`test_generated_session_id_meets_the_33_char_floor` asserts *both* halves — that `uuid4().hex`
+is below the floor, so the test's premise is checked rather than assumed, and that the generated
+id clears it. Note also that `RequestContext.session_id` is `Optional[str]` and is `None`
+whenever the header is absent, which makes a fallback mandatory rather than defensive.
 
-Also note `RequestContext.session_id` is `Optional[str]` and is `None` whenever the header
-is absent, so a fallback is mandatory rather than defensive.
-</Callout>
+## One entrypoint per app
 
-## Only one entrypoint per app
+A second `@app.entrypoint` **silently overwrites** the first. No error, no warning. Both
+runtimes declare exactly one, in separate `codeLocation` directories precisely so the batch and
+interactive paths cannot collide.
 
-A second `@app.entrypoint` **silently overwrites** the first. There is no error and no
-warning. Both runtimes here declare exactly one, and they are separate `codeLocation`
-directories precisely so the batch and interactive paths cannot collide.
+## Ping handler must reproduce the task check
 
-## The ping handler must reproduce the task check
-
-`@app.ping` is consulted **before** the SDK's automatic behaviour (precedence: forced >
-custom > automatic). The SDK's automatic behaviour already reports `HEALTHY_BUSY` while any
-tracked async task is open — so a custom handler that does not reproduce that check makes a
-long fan-out advertise itself as idle and invites more work onto a busy microVM.
+`@app.ping` is consulted **before** the SDK's automatic behaviour — precedence is forced >
+custom > automatic. Automatic behaviour already reports `HEALTHY_BUSY` while any tracked async
+task is open, so a custom handler that omits that check makes a long fan-out advertise itself as
+idle and invites more work onto a busy microVM.
 
 ```python
 @app.ping
@@ -168,13 +179,11 @@ def ping_status() -> PingStatus:
     return PingStatus.HEALTHY
 ```
 
-<Callout type="info" title="`@app.async_task` rejects async generators">
-`@app.async_task` raises `ValueError: @async_task can only be applied to async functions`
-on an async generator — and a streaming entrypoint must be one. So the streaming entrypoint
-registers by hand with `app.add_async_task(...)` / `app.complete_async_task(...)` in a
-`try/finally`, which keeps the ping status honest for the whole run. The *synthesis* leg,
-which is an ordinary coroutine, does use the decorator.
-</Callout>
+One wrinkle: `@app.async_task` raises `ValueError: @async_task can only be applied to async
+functions` on an async generator — and a streaming entrypoint must be one. So the streaming
+entrypoint registers by hand with `app.add_async_task(...)` / `app.complete_async_task(...)` in
+a `try/finally`, keeping ping status honest for the whole run. The synthesis leg, an ordinary
+coroutine, does use the decorator.
 
 ## Keep `debug=False`
 
@@ -182,16 +191,16 @@ which is an ordinary coroutine, does use the decorator.
 app = BedrockAgentCoreApp(debug=False)
 ```
 
-This is a security decision, not a log-level one. With `debug=True` the SDK routes any
-payload carrying `_agent_core_app_action` to `_handle_task_action`, which lets a caller
-force the ping status and enumerate running jobs — a health-state backdoor on the
-`/invocations` path. `test_debug_mode_is_off` asserts it on both runtimes.
+Security decision, not a log-level one. With `debug=True` the SDK routes any payload carrying
+`_agent_core_app_action` to `_handle_task_action`, which lets a caller force the ping status and
+enumerate running jobs — a health-state backdoor on the `/invocations` path.
+`test_debug_mode_is_off` asserts it on both runtimes.
 
-## Payload tolerance is required, because `agentcore invoke` only sends prompts
+## Payload tolerance, because `agentcore invoke` only sends prompts
 
-`agentcore invoke --runtime underwriter "Run a full underwriting review of APP-1004"`
-delivers a *prompt*, not a structured payload. So the entrypoint accepts all of these and
-extracts the application id from each:
+`agentcore invoke --runtime underwriter "Run a full underwriting review of APP-1004"` delivers a
+*prompt*, not a structured payload. So the entrypoint accepts all of these and extracts the
+application id from each:
 
 ```python
 {"application_id": "APP-1004"}
@@ -201,87 +210,64 @@ extracts the application id from each:
 {"messages": [{"role": "user", "content": [{"text": "look at APP-1003"}]}]}
 ```
 
-A payload with no recoverable id yields a structured `error` frame naming the accepted
-shapes, not a stack trace.
+A payload with no recoverable id yields a structured `error` frame naming the accepted shapes,
+not a stack trace.
 
-## Observability: the SDK gives you no token or cost attributes
+## Observability: no token or cost attributes come free
 
-<Callout type="warn" title="What is and is not instrumented for you">
-- Declaring `instrumentation.enableOtel: true` makes AgentCore wrap the entrypoint with
-  **`opentelemetry-instrument`**. That wrapper needs `aws-opentelemetry-distro>=0.18.0`
-  installed *in the runtime's own `pyproject.toml`* — missing it means the wrapper cannot
-  start and the runtime emits **zero spans**, only service-level metrics.
-- **The AgentCore SDK emits no token, cost or latency span attributes**, and Strands
-  records its token histograms *without* attributes, so they cannot be sliced per agent.
-  Per-agent spend telemetry is this repo's own code (namespace `AgentCoreFraudDemo`), which
-  is why the runtime execution role carries a namespace-scoped
-  `cloudwatch:PutMetricData`.
-- Spans require the one-time account-level **CloudWatch Transaction Search** setup, and
-  roughly 10 minutes after enabling it before anything is indexed. An empty
-  `agentcore traces list` right after the first deploy is expected. See
-  [Deployment](/docs/platform/deployment#one-time-cloudwatch-transaction-search).
-- **Only Runtime gets a log/trace destination automatically.** Memory and Gateway get none;
-  wiring theirs is a manual `PutDeliverySource` → `PutDeliveryDestination` →
-  `CreateDelivery` sequence.
-- **AgentCore Memory does not work under `agentcore dev`.** The Francis session manager is
-  written to no-op when `MEMORY_FRANCISMEMORY_ID` is unset, so local runs are stateless by
-  design rather than by accident.
-</Callout>
+| Concern | What AgentCore gives you | What this repo had to add |
+|---|---|---|
+| Spans at all | Only with `instrumentation.enableOtel: true` **and** `aws-opentelemetry-distro>=0.18.0` in the runtime's own `pyproject.toml`. Missing the dependency means the `opentelemetry-instrument` wrapper cannot start and the runtime emits **zero spans**, service metrics only | the dependency, per runtime |
+| Token / cost / latency span attributes | **None.** Strands also records its token histograms *without* attributes, so they cannot be sliced per agent | per-agent spend telemetry in our code, namespace `AgentCoreFraudDemo`, needing namespace-scoped `cloudwatch:PutMetricData` |
+| Trace indexing | Requires the one-time account-level CloudWatch Transaction Search setup plus ~10 minutes. An empty `agentcore traces list` right after the first deploy is expected | see [Deployment](/docs/platform/deployment#one-time-cloudwatch-transaction-search) |
+| Log and trace destinations | **Runtime only.** Memory and Gateway get none | a manual `PutDeliverySource` → `PutDeliveryDestination` → `CreateDelivery` sequence |
+| Memory under `agentcore dev` | **Does not work** | the Francis session manager no-ops when `MEMORY_FRANCISMEMORY_ID` is unset, so local runs are stateless by design |
 
-A related fabrication guard worth naming: when a run is offline, token counts and cost do
-not exist and are emitted as `null`, all the way to the browser and to CloudWatch — where
-the datapoint is **omitted** rather than sent as `0`. A fabricated `0` in a spend metric is
-worse than a gap, because a gap is visible and a `0` averages in.
+One fabrication guard belongs beside that table. When a run is offline, token counts and cost do
+not exist and are emitted as `null` all the way to the browser and to CloudWatch — where the
+datapoint is **omitted** rather than sent as `0`. A fabricated `0` in a spend metric is worse
+than a gap, because a gap is visible and a `0` averages in.
 `test_cloudwatch_emission_omits_unmeasured_datapoints_rather_than_sending_zero` asserts it.
 
 ## Quotas that matter at the customer's stated volume
 
-<Callout type="error" title="Raise this before any load test, not after">
-This is arithmetic on the customer's own aspiration, and it is labelled as such: at
-**300,000 applications/day × 9 model calls × ~2,250 tokens ≈ 6.1 billion tokens/day**.
-Claude Sonnet 5's daily token ceiling is **8.64 billion and is not adjustable** — that is an
-account-team escalation, not a self-serve service-quota ticket.
+<Callout type="warn" title="Raise the Sonnet 5 ceiling before any load test, not after">
+Arithmetic on the customer's own aspiration, labelled as theirs: **300,000 applications/day × 9
+model calls × ~2,250 tokens ≈ 6.1 billion tokens/day**. Claude Sonnet 5's daily token ceiling is
+**8.64 billion and is not adjustable** — an account-team escalation, not a self-serve
+service-quota ticket.
 
-The volume figure is the customer's, and it is also
-[the single unresolved question in the cost case](/docs/cost/snowflake-comparison): nobody
-has told us how many applications/day actually go through the full eight-agent forensic
-path. At ~3,000/day none of this matters; at 300,000/day it is the first thing to fix.
+Nobody has told us how many applications/day actually take the full eight-agent forensic path.
+At ~3,000/day none of this matters; at 300,000/day it is the first thing to fix, and it is
+[the single unresolved input in the cost case](/docs/cost/snowflake-comparison).
 </Callout>
 
-Two smaller quotas that already shaped code here:
+Two smaller quotas already shaped code here:
 
-- **Memory `CreateEvent` is throttled per (actor, session) at roughly 5 TPS.** The Francis
-  session manager therefore uses `batch_size=5` (`FRANCIS_MEMORY_BATCH_SIZE`) so a
-  multi-turn exchange does not walk into it. `test_francis_memory_batch_size_avoids_the_create_event_tps_cap`
-  asserts the setting.
-- **Throttling was measured at zero on this workload** — `ModelThrottledException` occurred
-  **0 times across 336 specialist calls** at concurrency 1
-  (`evals/results/tail_analysis.json`). That is a real observation and it is also a narrow
-  one: the benchmark ran **one application at a time**, so nothing here says what the
-  throttle rate is when N adjudications overlap. Throughput is on the
-  [not-measured list](/docs/performance/benchmark-method).
+- **Memory `CreateEvent` throttles per (actor, session) at roughly 5 TPS.** The Francis session
+  manager therefore uses `batch_size=5` (`FRANCIS_MEMORY_BATCH_SIZE`), asserted by
+  `test_francis_memory_batch_size_avoids_the_create_event_tps_cap`.
+- **Throttling measured zero on this workload.** `ModelThrottledException` occurred **0 times
+  across 336 specialist calls** (`evals/results/tail_analysis.json`). Real observation, and a
+  narrow one: the benchmark ran one application at a time.
 
-## What this page's figures do and do not cover
+## What this page's figures do not cover
 
-<Callout type="warn" title="Runtime overhead is NOT in the measured latency">
-The 42-run benchmark called Bedrock **directly from a developer host**, not through a
-deployed runtime. Quoted from the artifact's own caveats:
-
-> *"container cold start, session setup and SSE framing are NOT in the end-to-end figures"*
-
-So the 31.45 s p50 (n=42) excludes everything on this page. The repo names this as the
-single largest known gap between that figure and what a deployed customer would see. It is
-not estimated anywhere.
-</Callout>
+**AgentCore Runtime overhead is NOT MEASURED anywhere on this site.** The 42-run benchmark called
+Bedrock directly from a developer host rather than through a deployed runtime, and the artifact
+says so in its own caveats: container cold start, session setup and SSE framing are not in the
+end-to-end figures. So the 31.45 s p50 (n=42) excludes everything on this page, and the repo
+names that as the single largest known gap between the measured figure and what a deployed
+customer would see. It is not estimated.
 
 <Cards>
   <Card
-    title="The CLI"
+    title="AgentCore CLI"
     href="/docs/platform/agentcore-cli"
     description="The verbs that exist, the two that do not, and the rename-destroys-resources rule."
   />
   <Card
-    title="Strands concurrency"
+    title="Strands Agents SDK"
     href="/docs/platform/strands"
     description="Why the fan-out is asyncio.gather over fresh Agent instances and not GraphBuilder."
   />

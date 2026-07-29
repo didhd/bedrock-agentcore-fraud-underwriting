@@ -3,63 +3,60 @@ title: Artifact index
 description: Every committed measurement artifact, what it contains, when it was produced, what it cost to produce, and which pages on this site draw their figures from it.
 ---
 
-<Callout type="info" title="Audience">
-For anyone who wants to check a number on this site rather than take it. Each artifact below
-is committed in the repository; each row states the run's own recorded timestamp, region and
-git SHA, taken from the artifact's `run` block rather than from a commit log.
-</Callout>
+*For anyone who wants to check a number on this site rather than take it.*
 
-This site's rule is that every figure traces to a file. This page is the other half of that
-rule: the list of files, so a reader can go the other direction and ask what a given artifact
-does and does not support.
+Four measurement artifacts, **$28.89** of measured spend between them, each committed with its own
+recorded timestamp, region and git SHA taken from its `run` block rather than from a commit log.
+Every figure on this site traces to one of these files; this page is the other direction, so a reader
+can ask what a given artifact does and does not support.
 
-## The four measurement artifacts
-
-<Callout type="warn" title="Note the two different clocks">
-The pipeline benchmark ran at **07:42 UTC**; the two quality studies ran at **17:29** and
-**21:32** the same day. The model assignment changed *between* them — `synthetic` and `rings`
-moved off Opus 5 after the benchmark. So the benchmark measures the **previous** assignment,
-and the [assignment page](/docs/model-selection/assignment) marks the current one's
-end-to-end cost as a projection for exactly that reason.
-</Callout>
+## Four measurement artifacts
 
 | Artifact | What it is | Recorded run | Measured spend |
 |---|---|---|---:|
 | `evals/results/pipeline_14x3_us-east-1.json` | 14 fixtures × 3 repetitions = **42 adjudications**, **336 specialist calls**, 41 complete + 1 degraded | 2026-07-28 07:42 UTC, `us-east-1`, git `9bb569b` | **$6.4659** |
 | `evals/results/tier_quality.json` | Claude-only tier study, **48 blind-judged analyses**, judge Claude Opus 5, candidates Haiku 4.5 / Sonnet 5 / Opus 5 | 2026-07-28 17:29 UTC, `us-east-1` | **$4.9088** |
 | `evals/results/set_comparison.json` | Cross-family study, **120 analyses / 240 verdicts**, two judges biased in opposite directions | 2026-07-28 21:32 UTC | **$16.8869** |
-| `evals/results/tail_analysis.json` | Re-analysis of the pipeline run's tail. **Derives no new calls** — its `source` block names the pipeline artifact it reads | derived from the 07:42 run | **$0** (no live calls) |
+| `evals/results/tail_analysis.json` | Re-analysis of the pipeline run's tail, plus one live cap sweep of 30 calls. Its `source` block names the pipeline artifact it reads | derived from the 07:42 run | **$0.6278** (the cap sweep only) |
 
-Each JSON has a companion `.md` written for a human: `pipeline_14x3_us-east-1.md`,
-`tier_quality.md`, `set_comparison.md`, `tail_analysis.md`. The Markdown is generated from the
-JSON, so if the two ever disagree **the JSON is authoritative**.
+<Callout type="warn" title="Note the two different clocks: the benchmark measures the PREVIOUS assignment">
+The pipeline benchmark ran at **07:42 UTC**; the two quality studies ran at **17:29** and **21:32** the
+same day. Model assignment changed *between* them — `synthetic` and `rings` moved off Opus 5 after the
+benchmark. So the benchmark measures the previous assignment, and the
+[assignment page](/docs/model-selection/assignment) marks the current one's end-to-end cost as a
+projection for exactly that reason.
+</Callout>
 
-### The sidecars, and why reuse is recorded
+Each JSON has a companion `.md` written for a human: `pipeline_14x3_us-east-1.md`, `tier_quality.md`,
+`set_comparison.md`, `tail_analysis.md`. The Markdown is generated from the JSON, so if the two ever
+disagree **the JSON is authoritative**.
 
-`set_comparison_analyses.json` and `set_comparison_verdicts.json` hold the raw analyses and
-raw verdicts behind the summary; `tier_quality_analyses.json` and `tier_quality_verdicts.json`
-do the same for the tier study.
+## Sidecars, and why reuse is recorded
 
-They exist because both studies **reuse** earlier work instead of re-billing for it, and that
-has to be visible or a spend figure becomes uncheckable. Both artifacts record it explicitly
-in `live_calls`:
+`set_comparison_analyses.json` and `set_comparison_verdicts.json` hold the raw analyses and raw
+verdicts behind the summary; `tier_quality_analyses.json` and `tier_quality_verdicts.json` do the same
+for the tier study.
 
-- `set_comparison.json` — `reused_analyses: 120`, `judge_verdicts_reused_from_cache: 240`,
-  `specialist_calls_made: 0`. Every row came from the sidecars; the `$16.8869` is the spend
-  those calls **originally** cost, carried forward.
-- `tier_quality.json` — `reused_analyses: 48`, and `reuse_sources` naming the three earlier
-  sweeps (`tiering.json`, `tq_bustout_identity.json`, `tq_rings_synth_extra.json`).
+They exist because both studies **reuse** earlier work instead of re-billing for it, and that has to be
+visible or a spend figure becomes uncheckable. Both artifacts record it explicitly in `live_calls`.
 
-Both `spend_actual_usd` blocks carry the same note: rows reused from an earlier sweep carry
-that sweep's measured cost, and **rows with no recorded usage contribute nothing rather than an
-estimate**. That is why the spend is exact rather than round.
+| Artifact | `specialist_calls_made` | Verdicts reused | Analyses reused | Spend still reported |
+|---|---:|---:|---:|---:|
+| `set_comparison.json` | **0** | 240 | 120 | $16.8869 |
+| `tier_quality.json` | **0** | 48 | 48 | $4.9088 |
+
+`tier_quality.json` additionally names its `reuse_sources` — three earlier sweeps, `tiering.json`,
+`tq_bustout_identity.json` and `tq_rings_synth_extra.json`. Both `spend_actual_usd` blocks carry the
+same note: rows reused from an earlier sweep carry that sweep's measured cost, and **rows with no
+recorded usage contribute nothing rather than an estimate**. That is why the spend figures are exact
+rather than round.
 
 ## Which page rests on which artifact
 
 | Page | Primary artifact |
 |---|---|
 | [Measured results](/docs/measured-results), [Pipeline results](/docs/performance/pipeline-results) | `pipeline_14x3_us-east-1.json` |
-| [The tail](/docs/performance/the-tail), [Critical path](/docs/performance/critical-path) | `tail_analysis.json` (+ the pipeline artifact it derives from) |
+| [Latency tail](/docs/performance/the-tail), [Critical path](/docs/performance/critical-path) | `tail_analysis.json`, plus the pipeline artifact it derives from |
 | [Tier re-derivation](/docs/model-selection/tier-rederivation) | `tier_quality.json` |
 | [Cross-family study](/docs/model-selection/cross-family-study), [Length vs evidence](/docs/model-selection/length-vs-evidence), [Judge methodology](/docs/model-selection/judge-methodology) | `set_comparison.json` |
 | [Snowflake comparison](/docs/cost/snowflake-comparison) | `pipeline_14x3_us-east-1.json` for our side; the customer's own reported figures for theirs, attributed as theirs |
@@ -70,7 +67,7 @@ estimate**. That is why the spend is exact rather than round.
 |---|---|
 | `docs/model-selection.md` | The long-form model-selection record, including the rejected options |
 | `docs/general_rules_coverage.md` | The General Rules coverage table, **generated** from `signal_layer/rules/catalog.py` rather than maintained by hand |
-| `docs/semantic-layer-mcp.md` | The Cortex Analyst / MCP analysis behind [the semantic-layer page](/docs/platform/semantic-layer) |
+| `docs/semantic-layer-mcp.md` | The Cortex Analyst / MCP analysis behind [Semantic layer question](/docs/platform/semantic-layer) |
 | `CLAUDE.md` | Engineering context: the findings that change decisions, and the open TODOs |
 | `CHANGELOG.md` | The human-readable history of the two landing passes |
 
@@ -84,15 +81,15 @@ estimate**. That is why the spend is exact rather than round.
 | `agents/pricing.py` | The rate card. Raises on an unpriced model id rather than defaulting |
 | `agents/output_contract.py` | Derives each specialist's output rules **from the prompt text**, so a rule cannot be misremembered |
 
-## What is deliberately absent
+## Deliberately absent
 
 <Callout type="error" title="Three things you will not find, and should not infer">
 - **No end-to-end measurement of the current assignment.** The 42-run benchmark predates the
   `synthetic`/`rings` move to Sonnet 5. Re-running it is one command and it has not been run.
-- **No AgentCore Runtime overhead figure.** The benchmarked calls left the benchmark host
-  directly for Bedrock. Runtime, cold start and SSE framing are all outside the timed window.
-- **No throughput or concurrency figure.** Every measurement ran **one application at a time**.
-  Nothing here says what happens when adjudications overlap.
+- **No AgentCore Runtime overhead figure.** The benchmarked calls left the benchmark host directly for
+  Bedrock, so Runtime, cold start and SSE framing all sit outside the timed window.
+- **No throughput or concurrency figure.** Every measurement ran **one application at a time**. Nothing
+  here says what happens when adjudications overlap.
 
 Each is stated on the page that would otherwise be read as covering it, not only here.
 </Callout>
@@ -100,13 +97,33 @@ Each is stated on the page that would otherwise be read as covering it, not only
 ## Reproducing any of it
 
 ```bash
-# offline: 1224 tests, no AWS calls
+# offline: 1,237 tests collected, no AWS calls
 MOCK_MODE=1 python3 -m pytest tests/ -q
 
 # the pipeline benchmark (real Bedrock spend)
 AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.bench --pipeline --repetitions 3
 ```
 
-The live gate is `AGENTCORE_BENCH_ALLOW_LIVE=1`, and it exists so a spend-incurring run cannot
-be started by muscle memory. See [the eval harness](/docs/reference/eval-harness) for each
-harness's own gate and what it measures.
+The live gate is `AGENTCORE_BENCH_ALLOW_LIVE=1`, and it exists so a spend-incurring run cannot be
+started by muscle memory. See [Eval harness](/docs/reference/eval-harness) for each harness's own gate
+and what it measures.
+
+## Still unknown
+
+**No artifact here was produced from a deployed AgentCore Runtime.** All four record `run.host` as a
+developer machine calling Bedrock and bedrock-mantle directly. Anything a reader wants to know about
+Runtime behaviour — cold start, SSE framing, session handling under load — is not in these files and
+is not estimated in them.
+
+<Cards>
+  <Card
+    title="Eval harness"
+    href="/docs/reference/eval-harness"
+    description="What produced each artifact, how to re-run it, and what it refuses to report."
+  />
+  <Card
+    title="Benchmark method"
+    href="/docs/performance/benchmark-method"
+    description="The percentile policy and the refusal thresholds these artifacts obey."
+  />
+</Cards>

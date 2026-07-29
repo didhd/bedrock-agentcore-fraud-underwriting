@@ -1,43 +1,45 @@
 ---
-title: What does not work
+title: What does not reduce cost
 description: Three things that look like cost levers and are not — per-agent tiering saves $0.00 structurally, prompt caching never engages on this workload, and max_tokens failed all three of its own criteria.
 ---
 
-<Callout type="info" title="Audience">
-Both audiences, and this is the page to read **before** building a cost slide. Each item below
-was believed, then measured, then removed from the cost story. Two of the three were on this
-repository's own README at some point.
-</Callout>
+*For both audiences, and this is the page to read before building a cost slide. Two of the three items below were on this repository's own README at some point.*
 
-## Per-agent tiering saves $0.00 structurally
+**Tiering saves $0.00 by its shape, prompt caching engages on 0 of 8 agents, and a lower `max_tokens` failed all three criteria set for it in advance.** Each was believed, then measured, then removed from the cost story — and each is now asserted against by a test so it cannot come back.
 
-The intuitive claim: Snowflake Intelligence pins every Cortex Agent to one LLM class, Bedrock
-lets each of the nine agents run a right-sized model, therefore right-sizing saves money.
-
-The arithmetic says the *shape* saves nothing.
-
-### The symmetric-step identity
-
-`agents/pricing.py:BASE_RATES_PER_MTOK`, $ per 1M tokens (input / output):
-
-| Tier | Model | Rate | Step from the previous row |
+| Proposal | What it was believed to be worth | What it measured | Status |
 |---|---|---|---|
-| LIGHT | Haiku 4.5 | $1.00 / $5.00 | — |
-| baseline | Sonnet 4.6 | $3.00 / $15.00 | **+$2.00 / +$10.00** |
-| HEAVY | Opus 5 | $5.00 / $25.00 | **+$2.00 / +$10.00** |
+| Per-agent model tiering | "The Bedrock differentiator" | **$0.00** structurally, by exact arithmetic | Removed; `test_two_opus_cancelling_two_haiku_reports_a_zero_saving` |
+| Prompt caching | Lower input cost on a repeated system prompt | Engages on **0 of 8** agents; prompts are 547–956 tokens against 1024/4096 minimums | Left enabled, not counted; `cache_prefix_report` |
+| Lower `max_tokens` | A latency fix and a cost fix | No latency gain, **14 of 30** cells truncated, **13 of 30** kept their band | Rejected; `MEASURED_TRUNCATION_BOUNDARY` |
+| Orchestration overhead | Something to optimise | `asyncio` fan-out costs **0.83 s p50**, never more than **2.71 s** above its slowest member (n=42) | Nothing to win |
+| Batch inference at −50% end-to-end | Half the bill | **3.58%**, because Bedrock offers no batch price for Sonnet 5 or GPT-5.6 | [Detail](/docs/cost/levers#lever-2-batch-inference--50-with-a-real-exclusion-list) |
+| Moving the specialists to GPT-5.6 | −47.8% | Projected −47.8%, declined on a measured `_context` grounding gap | A real forgone saving, stated as one. [Detail](/docs/model-selection/cross-family-study#what-holding-costs) |
+| A cheaper region | Regional arbitrage | No per-region Bedrock rate difference in the card | `us.*` vs `global.*` is a **profile** difference, and [a real lever](/docs/cost/levers#lever-1-global-instead-of-us--exactly-909) |
 
-**Haiku → Sonnet is a $2/$10-per-MTok step down. Sonnet → Opus is the identical step up.** So at
-equal token counts, **one LIGHT agent's discount is exactly one HEAVY agent's surcharge**, and a
-symmetric 2-down / 2-up tiering cancels to zero.
+## Per-agent tiering saves $0.00 structurally [#per-agent-tiering-saves-000-structurally]
 
-Asserted directly in `tests/test_pricing.py`:
+Intuitive claim: Snowflake Intelligence pins every Cortex Agent to one LLM class, Bedrock lets each of the nine agents run a right-sized model, therefore right-sizing saves money. Arithmetic says the *shape* saves nothing.
+
+<Mermaid
+  title="A symmetric roster cancels to zero"
+  chart={`
+flowchart LR
+  H["Haiku 4.5<br/>$1 / $5"] -->|"step +$2 / +$10"| S["Sonnet 4.6 baseline<br/>$3 / $15"]
+  S -->|"step +$2 / +$10"| O["Opus 5<br/>$5 / $25"]
+  H --- Z["2 LIGHT discount<br/>= 2 HEAVY surcharge<br/>at equal tokens"]
+  O --- Z
+`}
+/>
+
+**Haiku → Sonnet is a $2/$10-per-MTok step down. Sonnet → Opus is the identical step up.** So at equal token counts one LIGHT agent's discount is exactly one HEAVY agent's surcharge, and a symmetric 2-down / 2-up tiering cancels. Asserted directly in `tests/test_pricing.py`:
 
 ```python
 assert (baseline - light) == pytest.approx(heavy - baseline, rel=1e-12)
 ```
 
 <Callout type="error" title="The regression, reproduced to the cent">
-The previous configuration was 2 Haiku + 4 Sonnet 4.6 + 2 Opus 4.8 specialists plus a Sonnet 4.6
+A previous configuration ran 2 Haiku + 4 Sonnet 4.6 + 2 Opus 4.8 specialists plus a Sonnet 4.6
 synthesizer, against an all-Sonnet-4.6 baseline. On a uniform token profile:
 
 | | $/adjudication |
@@ -46,46 +48,29 @@ synthesizer, against an all-Sonnet-4.6 baseline. On a uniform token profile:
 | Uniform baseline | **$0.12270** |
 | **Saving** | **$0.00** |
 
-`test_two_opus_cancelling_two_haiku_reports_a_zero_saving` pins that identity to `abs=1e-9`.
-The README of the time called tiering "the Bedrock differentiator."
+`test_two_opus_cancelling_two_haiku_reports_a_zero_saving` pins that identity to `abs=1e-9`. The
+README of the time called tiering "the Bedrock differentiator."
 </Callout>
 
 ### What the current assignment's saving actually is
 
-There is **no HEAVY agent left** — `rings` and `synthetic` both moved to MID on measurement — so
-the two sides no longer cancel and `structural_saving_usd` is genuinely positive today. But note
-what that means: the shape is now "two cheap agents, six standard", and the saving is simply
-**not paying Opus rates for output that measured no better**. That is a *model-choice* result,
-not a property of tiering.
+**No HEAVY agent is left** — `rings` and `synthetic` both moved to MID on measurement — so the two sides no longer cancel and `structural_saving_usd` is genuinely positive today. But note what that means: the shape is now "two cheap agents, six standard", and the saving is simply **not paying Opus rates for output that measured no better**. A *model-choice* result, not a property of tiering.
 
-`agents/pricing.py:compare_tiered_vs_uniform` splits any reported saving into three components
-from real usage, so they can never be conflated on a slide:
+`agents/pricing.py:compare_tiered_vs_uniform` splits any reported saving into three components from real usage, so they can never be conflated on a slide:
 
-| Component | What it is |
-|---|---|
-| `structural_saving_usd` | The tier **shape**: LIGHT and HEAVY assignments priced against the baseline with MID held at the baseline model. Near zero — exactly zero — on a symmetric roster. |
-| `model_saving_usd` | What the MID **model generation** is worth. Mostly the Sonnet 5 promotional rate, which goes to zero on 2026-09-01. |
-| `synthesizer_saving_usd` | The GPT-5.6 Luna **substitution**, broken out so nobody attributes it to tiering. Non-expiring. |
+| Component | What it is | Expires? |
+|---|---|---|
+| `structural_saving_usd` | The tier **shape**: LIGHT and HEAVY assignments priced against the baseline with MID held at the baseline model. Exactly zero on a symmetric roster | n/a — it is near zero |
+| `model_saving_usd` | What the MID **model generation** is worth. Mostly the Sonnet 5 promotional rate | **Yes, 2026-09-01** |
+| `synthesizer_saving_usd` | The GPT-5.6 Luna **substitution**, broken out so nobody attributes it to tiering | No |
 
-The synthesizer is deliberately held at the baseline model when computing
-`structural_saving_usd`: swapping it to a mantle model is a **substitution**, not a tier
-assignment, and letting it into the structural figure would credit the tier shape with a saving
-it did not produce.
+Computing `structural_saving_usd` deliberately holds the synthesizer at the baseline model: swapping it to a mantle model is a **substitution**, not a tier assignment, and letting it into the structural figure would credit the tier shape with a saving it did not produce. `test_the_whole_current_saving_expires_with_the_sonnet_5_promo` asserts that after the expiry the whole remaining saving is exactly `structural_saving_usd + synthesizer_saving_usd` — i.e. the MID tier collapses onto the baseline and contributes nothing.
 
-`test_the_whole_current_saving_expires_with_the_sonnet_5_promo` asserts that after the expiry the
-whole remaining saving is exactly `structural_saving_usd + synthesizer_saving_usd` — i.e. the MID
-tier collapses onto the baseline and contributes nothing.
+**Say "right-sized models plus the levers that survive arithmetic", not "per-agent tiering is the Bedrock differentiator"** — and then name them: the `global.*` prefix, batch for backfills, and removing the per-application Cortex Analyst calls. [Cost levers](/docs/cost/levers).
 
-<Callout type="warn" title="What to say instead">
-Not "per-agent tiering is the Bedrock differentiator." Say **"right-sized models plus the levers
-that survive arithmetic"** — and then name them: the `global.*` prefix, batch for backfills, and
-removing the per-application Cortex Analyst calls. [Cost levers](/docs/cost/levers).
-</Callout>
+## Prompt caching does not engage [#prompt-caching-does-not-engage]
 
-## Prompt caching does not engage
-
-Bedrock prompt caching is real and it is enabled in this code. On **this workload** it never
-pays, for two independent reasons — either alone would be sufficient.
+Bedrock prompt caching is real and it is enabled in this code. On **this workload** it never pays, for two independent reasons — either alone would be sufficient.
 
 ### Reason 1: the prompts are below the minimum cacheable prefix
 
@@ -99,11 +84,9 @@ pays, for two independent reasons — either alone would be sufficient.
 | Claude Opus 4.8 | 1024 |
 | **Claude Haiku 4.5** | **4096** |
 
-**The table is not monotonic across generations, and that is the trap: Haiku 4.5 needs 8x the
-prefix Opus 5 does.**
+**That table is not monotonic across generations, and that is the trap: Haiku 4.5 needs 8x the prefix Opus 5 does.**
 
-Against the customer's actual prompts, at the model each agent now runs
-(`estimate_prompt_tokens`, a chars/4 estimate labelled as one everywhere it surfaces):
+Against the customer's actual prompts, at the model each agent now runs (`estimate_prompt_tokens`, a chars/4 estimate labelled as one everywhere it surfaces):
 
 | Agent | Prompt chars | Est. tokens | Model | Minimum | Caches? |
 |---|---:|---:|---|---:|---|
@@ -116,95 +99,57 @@ Against the customer's actual prompts, at the model each agent now runs
 | `rings` | 3,537 | 884 | Sonnet 5 | 1024 | **No** |
 | `bustout` | 3,825 | 956 | Sonnet 5 | 1024 | **No** |
 
-**Zero of eight.** The prompts run **547–956** estimated tokens; the nearest threshold is 1024.
+**Zero of eight.** Prompts run **547–956** estimated tokens; the nearest threshold is 1024.
 
-<Callout type="error" title="Below the minimum, a cachePoint is accepted silently">
-No error. No warning. `cacheWriteInputTokens` comes back **0** and the caller pays full input
-price forever. That is the entire failure mode, and it is why
-`agents/models.py:cache_prefix_report` exists — it reports, per agent, whether the cache point
-will engage:
+Below the minimum, a `cachePoint` is accepted **silently**. No error, no warning; `cacheWriteInputTokens` comes back **0** and the caller pays full input price forever. That is the entire failure mode, and it is why `agents/models.py:cache_prefix_report` exists — it reports, per agent, whether the cache point will engage:
 
 > *"prefix 956 &lt; minimum 1024: cachePoint is accepted silently, cacheWriteInputTokens will be 0
 > and every call pays full input price"*
 
-Note also that under the previous assignment the two Opus-tier agents (`rings`, `synthetic`) **did**
-clear their 512-token minimum, which is exactly the kind of partial success that makes a
-"caching is enabled" claim feel true. Both are now on Sonnet 5 at 1024, so **nothing caches on
-the prompt alone any more.**
-</Callout>
+Note also that under the previous assignment the two Opus-tier agents (`rings`, `synthetic`) **did** clear their 512-token minimum, exactly the kind of partial success that makes a "caching is enabled" claim feel true. Both are now on Sonnet 5 at 1024, so **nothing caches on the prompt alone any more.** Extending the cached prefix with the signal layer's per-domain reference block — signal names, the customer's own bands, entitled alert ids — lifts five of eight past 1024 but still leaves **all eight** far below Haiku's 4096.
 
-Extending the cached prefix with the signal layer's per-domain reference block — signal names,
-the customer's own bands, entitled alert ids — lifts five of eight past 1024 but still leaves
-**all eight** far below Haiku's 4096.
+### Reason 2: it would not matter, because the payload differs every time
 
-### Reason 2: and it would not matter, because the payload is different every time
-
-This is the reason that cannot be engineered around.
-
-The part of each request that is actually large is not the prompt — it is the **projected
-application payload**, 3.4–8.3 KB per domain. A cache entry is keyed on an **exact prefix**, so it
-can only be reused when the same prefix recurs. That means analysing the **same application**
-again.
-
-In a forward-flow underwriting stream, that essentially never happens.
+This is the reason that cannot be engineered around. The part of each request that is actually large is not the prompt — it is the **projected application payload**, 3.4–8.3 KB per domain. A cache entry is keyed on an **exact prefix**, so it can only be reused when the same prefix recurs, which means analysing the **same application** again. In a forward-flow underwriting stream, that essentially never happens.
 
 | | Cacheable? |
 |---|---|
-| System prompt (identical across applications) | Yes in principle — **too short** |
-| Per-application payload (the large part) | **Never reused** |
+| System prompt, identical across applications | Yes in principle — **too short** |
+| Per-application payload, the large part | **Never reused** |
 
-Padding the prefix to cross a threshold would **raise** input token count in order to make a
-cache-hit metric look good, which costs more than it saves.
+Padding the prefix to cross a threshold would **raise** input token count in order to make a cache-hit metric look good, which costs more than it saves.
 
 <Callout type="info" title="So caching is left enabled and is not counted as a lever">
 A cache miss is free. `cached_system_prompt` places the cache point after the verbatim customer
 prompt — the only correct place for it — and `cache_prefix_report` reports the truth per agent.
 `evals/bench.py` records real `cacheReadInputTokens` rather than assuming any.
 
-The 42-run benchmark shows exactly this mixed picture: four specialists record non-zero
+That mixed picture is exactly what the 42-run benchmark shows: four specialists record non-zero
 `cacheReadInputTokens` (`employment` 1,091/call, `bustout` 1,297, `synthetic` 1,001, `rings`
 1,175) and four record zero. That is **not** evidence of a working cost lever. Those are the two
 Opus agents plus two others under the previous assignment, and none of it recurs across
 applications.
 </Callout>
 
-The GPT side is not a counterexample either: `agents/mantle.py` notes that prompt caching is
-explicit for 5.6 and *"would not help here anyway — the eight analyses sit inside the prompt, so
-the prefix differs on every application."* And on GPT the cache term is not a discount but a
-**surcharge**: cache-write bills at **1.25x** input, which is
-[62% of a measured Luna call](/docs/cost/levers#gpt-56-cache-write-tokens-bill-at-125x-input).
+GPT is not a counterexample either. `agents/mantle.py` notes that prompt caching is explicit for 5.6 and *"would not help here anyway — the eight analyses sit inside the prompt, so the prefix differs on every application."* And on GPT the cache term is not a discount but a **surcharge**: cache-write bills at **1.25x** input, which is [62% of a measured Luna call](/docs/cost/levers#gpt-56-cache-write-tokens-bill-at-125x-input).
 
-## `max_tokens` failed all three criteria
+## `max_tokens` failed all three criteria [#max_tokens-failed-all-three-criteria]
 
-`bustout` and `rings` write 3.5x the output of the other six agents, and wall clock is linear in
-output tokens (r²=0.9531 over n=332 calls). So capping output tokens looks like both a latency
-fix and a cost fix. It was **measured**, against a quality gate set in advance.
+`bustout` and `rings` write 3.5x the output of the other six agents, and wall clock is linear in output tokens (r²=0.9531 over n=332 calls). So capping output tokens looks like both a latency fix and a cost fix. It was **measured**, against a quality gate set in advance.
 
-The gate, quoted from the artifact: *"A cap is only a fix if it (a) lowers wall clock, (b)
-truncates nothing, and (c) leaves every specialist's risk band unchanged. Failing (b) or (c)
-makes a latency win a lost fraud dimension."*
+That gate, quoted from the artifact: *"A cap is only a fix if it (a) lowers wall clock, (b) truncates nothing, and (c) leaves every specialist's risk band unchanged. Failing (b) or (c) makes a latency win a lost fraud dimension."*
 
-**30 live calls** in `us-east-1` across `bustout` and `rings` at caps 1024 / 1536 / 2048 / 3072 /
-4096, each against a **same-session** 4096 control, so a cap delta is measured against a control
-run in the same session rather than against a run from another day.
-`evals/results/tail_analysis.json → live_cap_sweep`. Measured cost **$0.627827** plus **$0.437793**
-bounded on the truncated calls.
+**30 live calls** in `us-east-1` across `bustout` and `rings` at caps 1024 / 1536 / 2048 / 3072 / 4096, each against a **same-session** 4096 control, so a cap delta is measured against a control run in the same session rather than against a run from another day. `evals/results/tail_analysis.json → live_cap_sweep`. Measured cost **$0.627827** plus **$0.437793** bounded on the truncated calls.
 
-| Criterion | Result |
-|---|---|
-| **(a) Lowers latency?** | **No.** Of the 10 cells that returned an analysis at both their cap and the control, **5 were faster and 5 slower.** Mean delta **−0.23 s** (min −10.39 s, max **+17.84 s**). |
-| **(b) Truncates nothing?** | **No.** **14 of 30** cells raised `MaxTokensReachedException`. 1024 truncated **6 of 6**. |
-| **(c) Leaves bands unchanged?** | **No.** **13 of 30** agreed with the same-session control; 14 lost the band entirely and 3 of the remaining disagreements were **genuine band moves**. |
+| Criterion | Result | Verdict |
+|---|---|---|
+| **(a) Lowers latency?** | Of the 10 cells that returned an analysis at both their cap and the control, **5 were faster and 5 slower.** Mean delta **−0.23 s** (min −10.39 s, max **+17.84 s**) | **Fail** |
+| **(b) Truncates nothing?** | **14 of 30** cells raised `MaxTokensReachedException`. 1024 truncated **6 of 6** | **Fail** |
+| **(c) Leaves bands unchanged?** | **13 of 30** agreed with the same-session control; 14 lost the band entirely and 3 of the remaining disagreements were **genuine band moves** | **Fail** |
 
-### The mechanism: the model writes what it intends to write
+### Mechanism: the model writes what it intends to write
 
-APP-1004 `rings` is the clean counter-example. The cap **did** bind — output fell from 2,876
-tokens to 1,980 at cap 2048 — and the call still took **28.50 s** against the control's 38.90 s at
-a different draw. Meanwhile APP-1012 `bustout` took **33.70 s at cap 3072** and **15.87 s at
-4096**, i.e. 17.84 s *slower* with a *tighter* cap.
-
-The cap either does not bind, or it raises and destroys the whole analysis. It does not
-gracefully shorten.
+APP-1004 `rings` is the clean counter-example. The cap **did** bind — output fell from 2,876 tokens to 1,980 at cap 2048 — and the call still took **28.50 s** against the control's 38.90 s at a different draw. Meanwhile APP-1012 `bustout` took **33.70 s at cap 3072** and **15.87 s at 4096**, i.e. 17.84 s *slower* with a *tighter* cap. A cap either does not bind, or it raises and destroys the whole analysis. It does not gracefully shorten.
 
 <Callout type="error" title="A truncated call is the worst outcome available, not a cheap one">
 `strands` **raises** rather than returning the partial text. So a truncated call:
@@ -218,7 +163,7 @@ gracefully shorten.
 **A cap low enough to shorten these agents is a cap low enough to delete them.**
 </Callout>
 
-### The failure boundary is a probability, not a threshold
+### Failure boundary is a probability, not a threshold
 
 Which is a *stronger* reason not to ship a lower cap than a clean boundary would have been:
 
@@ -227,57 +172,32 @@ Which is a *stronger* reason not to ship a lower cap than a clean boundary would
 | `bustout` | 1024, 1536, 2048, 3072, 4096 | **1024, 1536, 2048** | **1536, 2048**, 3072, 4096 | 3072 |
 | `rings` | 1024, 1536, 2048, 3072, 4096 | **1024, 1536, 2048** | **1536, 2048**, 3072, 4096 | 3072 |
 
-Both agents truncated **and** completed at 1536 **and** at 2048, depending on the application and
-the draw. 3072 is the lowest cap where every cell completed — on **one draw each**, which is not
-enough to call it safe.
+Both agents truncated **and** completed at 1536 **and** at 2048, depending on the application and the draw. 3072 is the lowest cap where every cell completed — on **one draw each**, which is not enough to call it safe. Recorded in `agents/models.py:MEASURED_TRUNCATION_BOUNDARY` so nobody tightens the caps blindly, and the other six agents carry `None` there — **because nobody measured them, not because they are safe.**
 
-Recorded in `agents/models.py:MEASURED_TRUNCATION_BOUNDARY` so nobody tightens the caps blindly,
-and the other six agents carry `None` there — **because nobody measured them, not because they
-are safe.**
+### A character cap is not a token cap
 
-### And a character cap is not a token cap
+Six of the eight prompts say "max 4000 characters". Deriving a token cap from that is a trap, because measured chars-per-output-token runs from **4.51** (`dealer`) down to **1.55** (`identity`), and `identity`'s worst calls hit **0.33** — **3,582 billed output tokens behind 1,191 characters of analysis**, on its slowest calls. A cap computed as 4000/4 = 1024 would truncate `identity` at a third of its own contract, and 1024 truncated every cell in the sweep.
 
-Six of the eight prompts say "max 4000 characters". Deriving a token cap from that is a trap,
-because measured chars-per-output-token runs from **4.51** (`dealer`) down to **1.55**
-(`identity`), and `identity`'s worst calls hit **0.33** — **3,582 billed output tokens behind
-1,191 characters of analysis**, on its slowest calls.
-
-A cap computed as 4000/4 = 1024 would truncate `identity` at a third of its own contract, and
-1024 truncated every cell in the sweep.
-
-**The customer's character rule belongs in her prompt text and in the output-contract tests, not
-in a token cap.**
+**The customer's character rule belongs in her prompt text and in the output-contract tests, not in a token cap.**
 
 ### What the measurement points at instead
 
-Wall clock is linear in output tokens: `wall_ms = 2980 + 11.34 x output_tokens`, r²=0.953 over
-n=332 calls (excluding two server-side stalls). And the driver of output tokens is the prompt:
+Wall clock is linear in output tokens: `wall_ms = 2980 + 11.34 x output_tokens`, r²=0.953 over n=332 calls (excluding two server-side stalls). And the driver of output tokens is the prompt:
 
 | | Domains | n calls | Output tokens p50 | Analyses over 4,000 chars |
 |---|---|---:|---:|---:|
 | Prompt caps at 4,000 chars | identity, dealer, straw, employment, income, synthetic | 251 | **381** | 9 (3.6%) |
 | **No cap in prompt** | **bustout, rings** | 83 | **1,331** | **25 (30.1%)** |
 
-So the lever is **the customer's own prompt text** — adding the missing length sentence to two of
-her artifacts. That is a one-line change to two verbatim customer files, it is **her decision, not
-ours**, and it is **NOT MEASURED**: nobody has run it. It is the recommendation, not a result.
-[Open questions](/docs/open-questions#5-two-of-her-prompts-carry-no-character-cap).
+So the lever is **the customer's own prompt text** — adding the missing length sentence to two of her artifacts. That is a one-line change to two verbatim customer files, it is **her decision, not ours**, and it is **NOT MEASURED**: nobody has run it. It is the recommendation, not a result. [Open questions](/docs/open-questions#5-two-of-her-prompts-carry-no-character-cap).
 
-## Also not levers
+## Still unknown
 
-Recorded because each has been proposed at least once.
+Nothing here measures the six agents that were never in the cap sweep, so `MEASURED_TRUNCATION_BOUNDARY` carries `None` for each of them rather than a safe-looking number. No prompt-caching variant with a payload-prefix cache point has been measured either — moving the cache point after the system prompt *plus* the stable prefix of the signal payload is the untried idea, and quoting a caching benefit before that measurement would be exactly the failure this page documents.
 
-| Proposal | Why it is not a lever |
-|---|---|
-| **Orchestration overhead** | `asyncio` fan-out costs **0.83 s p50** and never more than **2.71 s** above its slowest member (n=42). There is nothing to win, and it should be dropped from the conversation. |
-| **Batch inference at −50% end-to-end** | Bedrock does not offer batch for Sonnet 5 or GPT-5.6, so only `dealer` and `straw` qualify — and they are the two cheapest agents. Worth **3.58%**, not 50%. [Detail](/docs/cost/levers#lever-2-batch-inference--50-with-a-real-exclusion-list). |
-| **Moving the specialists to GPT-5.6 for the cost win** | Projected **−47.8%**, and declined on a measured `_context` grounding gap. It is a real forgone saving and it is stated as one rather than omitted. [Cross-family study](/docs/model-selection/cross-family-study#what-holding-costs). |
-| **A cheaper region** | There is no per-region Bedrock rate difference in the card. `us.*` vs `global.*` is a **profile** difference, not a region one, and it is [a real lever](/docs/cost/levers#lever-1-global-instead-of-us--exactly-909). |
+## Pattern all three share
 
-## The pattern all three share
-
-Each of these was plausible, each was checked, and each is now asserted against by a test so it
-cannot come back into the cost story:
+Each was plausible, each was checked, and each is now asserted against by a test so it cannot re-enter the cost story:
 
 | Claim | The test that prevents its return |
 |---|---|
@@ -285,3 +205,8 @@ cannot come back into the cost story:
 | A −20% saving holds past the promo expiry | `test_the_post_expiry_comparison_reprices_both_sides_not_just_one` |
 | The current caps can be tightened | `test_per_agent_caps_preserve_the_shipped_effective_values`, plus `MEASURED_TRUNCATION_BOUNDARY` |
 | Prompt caching is engaging | `cache_prefix_report` reports per agent; `evals/bench.py` records real `cacheReadInputTokens` |
+
+<Cards>
+  <Card title="Cost levers" href="/docs/cost/levers" description="The three that do survive arithmetic, each with its measured effect." />
+  <Card title="Snowflake comparison" href="/docs/cost/snowflake-comparison" description="What our measured cost is being compared against, and why it is undecided." />
+</Cards>

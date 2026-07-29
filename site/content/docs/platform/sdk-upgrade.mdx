@@ -1,133 +1,111 @@
 ---
-title: The SDK upgrade
-description: strands-agents 1.26.0 to 1.50.2 and bedrock-agentcore 1.14.0 to 1.19.0 — how it was verified by running the whole suite on both, the one real incompatibility, and what a future upgrade should check.
+title: SDK upgrade
+description: strands-agents 1.26.0 to 1.50.2 and bedrock-agentcore 1.14.0 to 1.19.0 — verified by running the whole suite on both versions, the one real incompatibility, and what a future upgrade should check.
 ---
 
-<Callout type="info" title="Audience">
-For the customer's engineer and whoever maintains this after the engagement. Every version
-number and the verification method are recorded in `requirements.txt` itself, with the
-reasoning in comments beside each pin.
-</Callout>
+*For the customer's engineer and whoever maintains this after the engagement.*
+
+One coupled upgrade, one capability motivating it, and exactly one incompatibility — in a test,
+not in product code. Version numbers and the verification method are recorded in
+`requirements.txt` itself, with the reasoning in comments beside each pin.
 
 ## What moved
 
-| Package | Was | Now | Pin style |
-|---|---|---|---|
-| `strands-agents` | 1.26.0 | **1.50.2** | exact |
-| `strands-agents-tools` | — | **0.8.5** | exact, in lockstep |
-| `bedrock-agentcore` | 1.14.0 | **1.19.0** | exact |
-| `openai` | 1.107.3 | **>=2.49.0** | floor |
-| `boto3` | — | >=1.43.54 | floor |
-| `pydantic` | — | >=2.13 | floor |
+| Package | Was | Now | Pin style | Why that style |
+|---|---|---|---|---|
+| `strands-agents` | 1.26.0 | **1.50.2** | exact | this repo reads its API surface directly |
+| `strands-agents-tools` | — | **0.8.5** | exact, in lockstep | same release train |
+| `bedrock-agentcore` | 1.14.0 | **1.19.0** | exact | the entrypoint contract depends on near-private behaviour |
+| `openai` | 1.107.3 | **>=2.49.0** | floor | required by the native Responses provider |
+| `boto3` | — | >=1.43.54 | floor | ships new Bedrock model ids continuously; pinning would freeze out model releases |
+| `pydantic` | — | >=2.13 | floor | structured-output validation only |
 
-Three packages are pinned **exactly** and the rest are floors, and the split is deliberate.
-From `requirements.txt`:
-
-> *"Every pin below is EXACT for the three libraries whose API surface this repo reads
-> directly. Loose floors are the failure mode we guard against: BedrockModel silently accepts
-> unknown \*\*model_config keys with only a UserWarning, so a kwarg that moved between
-> releases does not raise — it just stops taking effect."*
-
-`boto3` is deliberately a floor rather than a pin: it ships new Bedrock model ids and
-inference-profile support continuously, and pinning would freeze the project out of model
-releases. 1.43.54 is the verified-working floor (Converse + `cachePoint` `SystemContentBlock`
-+ `global.*` inference profiles).
+Three exact pins and three floors, and the split is deliberate. From `requirements.txt`: every pin
+is exact for the three libraries whose API surface this repo reads directly, because loose floors
+are the failure mode being guarded against — `BedrockModel` accepts unknown `**model_config` keys
+with only a `UserWarning`, so a kwarg that moved between releases does not raise, it stops taking
+effect. 1.43.54 is the verified-working `boto3` floor: Converse plus `cachePoint`
+`SystemContentBlock` plus `global.*` inference profiles.
 
 ## Why upgrade at all
 
-One reason, and it is a capability rather than a hygiene argument:
+One reason, and it is a capability rather than hygiene:
 **`strands.models.openai_responses.OpenAIResponsesModel` is absent from 1.26.x.** It is the
-*native* way to reach GPT-5.6 on the `bedrock-mantle` endpoint. With it, a GPT agent becomes
-an ordinary `strands.Agent` — same fan-out, same hooks, the customer's verbatim prompt in a
-real `system_prompt` rather than concatenated into one Responses `input` string — instead of a
-second bespoke code path.
-
-It also needed `openai>=2.0.0`, against an installed 1.107.3. So this was one coupled move,
-not two.
+*native* way to reach GPT-5.6 on the `bedrock-mantle` endpoint, and with it a GPT agent becomes an
+ordinary `strands.Agent` — same fan-out, same hooks, the customer's verbatim prompt in a real
+`system_prompt` rather than concatenated into one Responses `input` string — instead of a second
+bespoke code path. It also needed `openai>=2.0.0` against an installed 1.107.3, so this was one
+coupled move rather than two.
 
 ## How it was verified
 
-<Callout type="info" title="The method, because 'we upgraded and it seems fine' is not evidence">
-The **full test suite was run against both versions in isolated virtualenvs**, and both
-reported the identical **1206 passed / 0 failed** — after one real incompatibility was found
-and fixed.
+**The full suite ran against both versions in isolated virtualenvs, and both reported the identical
+1206 passed / 0 failed** — after one real incompatibility was found and fixed. That is the claim
+recorded in `requirements.txt` at the time of the upgrade.
 
-That is the claim recorded in `requirements.txt`, at the time of the upgrade. Re-run today on
-1.50.2 / 1.19.0, the committed suite reports:
+Re-run today on 1.50.2 / 1.19.0, excluding the two docs-guard files, the committed suite reports:
 
 ```console
-$ MOCK_MODE=1 python3 -m pytest tests/ -q -p no:cacheprovider --ignore=tests/test_docs_site.py
-1214 passed, 1 skipped, 51 warnings in 15.67s
+$ MOCK_MODE=1 python3 -m pytest tests/ -q -p no:cacheprovider \
+    --ignore=tests/test_docs_site.py --ignore=tests/test_docs_readability.py
+1214 passed, 1 skipped, 51 warnings in 11.63s
 ```
 
-The count differs from 1206 because tests were added after the upgrade landed, not because
-the result changed. See [the test suite](/docs/reference/testing) for the current per-file
-breakdown.
-</Callout>
+That count differs from 1206 because tests were added after the upgrade landed, not because the
+result changed. Current collection across the whole suite is 1,237; see
+[Test suite](/docs/reference/testing) for the per-file breakdown.
 
-Running the suite on both versions is the only method that answers the question that actually
-matters here, which is not "does it import" but "does anything this repo *relies on* still
-behave the same way". Two specific reasons that mattered:
+Running the suite on both versions is the only method that answers the question that matters here,
+which is not "does it import" but "does anything this repo *relies on* still behave the same way".
+Two reasons that mattered concretely:
 
-- Unknown `BedrockConfig` keys are accepted with only a `UserWarning`, so a kwarg that moved
-  would have produced a **silent** behaviour change, not a failure.
-- `1.35.0` alone added `plugins` and `concurrent_invocation_mode` to `Agent`, and
-  `service_tier` to `BedrockConfig`. Nine minor releases separate 1.26 from 1.50; the API
-  surface moved materially in between even though nothing this repo used was removed.
+- Unknown `BedrockConfig` keys are accepted with only a `UserWarning`, so a kwarg that moved would
+  have produced a **silent** behaviour change rather than a failure.
+- `1.35.0` alone added `plugins` and `concurrent_invocation_mode` to `Agent`, and `service_tier` to
+  `BedrockConfig`. Nine minor releases separate 1.26 from 1.50, so the API surface moved materially
+  even though nothing this repo used was removed.
 
-## The one real incompatibility
+## One real incompatibility
 
-<Callout type="error" title="Symptom: a test failing on a private attribute name">
-**What broke.** A test asserted `BedrockModel._supports_caching`. On 1.50 that private
-attribute has been refactored into `_cache_strategy`, so the test failed on the new version —
-for no product reason at all. The *product* behaviour was identical on both.
+<Callout type="error" title="A test named a private attribute, and the rename broke the test for no product reason">
+A test asserted `BedrockModel._supports_caching`. On 1.50 that private attribute is refactored into
+`_cache_strategy`, so the test failed on the new version while the *product* behaviour was
+identical on both.
 
-**The fix was to stop naming a private attribute**, not to rename it. The test now asserts
-this repo's own public guard, which holds on both versions:
+Fix was to stop naming a private attribute, not to rename it. The test now asserts this repo's own
+public guard, which holds on both versions:
 
 ```python
 assert m.supports_prompt_caching(m.LIGHT_MODEL) is True
 assert m.supports_prompt_caching("global.amazon.nova-pro-v1:0") is False
 ```
 
-The comment left in `tests/test_pricing.py` states the rule for next time:
-
-> *"a test that names either one breaks on the other version for no product reason. What must
-> hold across both is that our own guard agrees the model can cache."*
+The comment left in `tests/test_pricing.py` states the rule for next time: a test naming either
+private name breaks on the other version for no product reason, and what must hold across both is
+that this repo's own guard agrees the model can cache.
 </Callout>
 
-That is the whole list. One failure, in a test, caused by the test reaching into a private
-attribute. **No product code changed for the upgrade.**
+That is the whole list. One failure, in a test, caused by reaching into a private attribute.
+**No product code changed for the upgrade.**
 
 ## What was re-verified as still true
 
-The upgrade was additive — `Agent` kwargs were added, none removed, and every symbol this
-repo imports resolves. The behaviours it depends on were each re-checked rather than assumed:
+This upgrade was additive — `Agent` kwargs were added, none removed, and every symbol this repo
+imports resolves. Each depended-on behaviour was re-checked rather than assumed.
 
-<Accordions>
+| Library | Behaviour | Still true |
+|---|---|---|
+| strands 1.50.2 | `BedrockModel`'s flat `**model_config` | Yes — still no `params` kwarg |
+| strands 1.50.2 | `structured_output_model=` on `Agent(...)` | Yes, and `Agent.structured_output()` remains deprecated |
+| strands 1.50.2 | `ModelRetryStrategy` import path `from strands.agent import …` | Yes |
+| strands 1.50.2 | `threading.Lock` in `stream_async` raising `ConcurrencyException` on a concurrently reused `Agent` | Yes — the constraint the whole fan-out design rests on |
+| bedrock-agentcore 1.19.0 | `_takes_context()` matching the second parameter **literally by the name `context`** | Yes |
+| bedrock-agentcore 1.19.0 | Async-generator entrypoint auto-converted to `text/event-stream` | Yes |
+| bedrock-agentcore 1.19.0 | `tests/test_runtime_contract.py` (**60 tests**) | Passes on both versions |
 
-<Accordion title="strands-agents 1.50.2">
-| Behaviour | Still true on 1.50.2 |
-|---|---|
-| `BedrockModel`'s flat `**model_config` | Yes — there is still no `params` kwarg. |
-| `structured_output_model=` on `Agent(...)` | Yes, and `Agent.structured_output()` remains deprecated. |
-| `ModelRetryStrategy` | Yes, same import path (`from strands.agent import ModelRetryStrategy`). |
-| The `threading.Lock` in `stream_async` raising `ConcurrencyException` on a concurrently reused `Agent` | Yes — the constraint the whole fan-out design rests on. |
-</Accordion>
-
-<Accordion title="bedrock-agentcore 1.19.0">
-| Behaviour | Still true on 1.19.0 |
-|---|---|
-| `_takes_context()` matching the second parameter **literally by the name `context`** | Yes. |
-| An async-generator entrypoint auto-converted to `text/event-stream` | Yes. |
-| `tests/test_runtime_contract.py` (**60 tests**) | Passes on both versions. |
-
-Those two behaviours are the entrypoint contract in its entirety, and they are exactly the
-ones a silent change would be hardest to notice. See
-[the Runtime entrypoint contract](/docs/platform/agentcore-runtime).
-</Accordion>
-
-</Accordions>
+Those last two behaviours are the entrypoint contract in its entirety, and they are exactly the
+pair a silent change would be hardest to notice. See
+[Runtime entrypoint contract](/docs/platform/agentcore-runtime).
 
 ## What a future upgrade should check
 
@@ -137,22 +115,20 @@ order.
 <Steps>
 
 <Step>
-**Run the whole suite in an isolated venv on both the old and the new version.** Not just the
-new one. A pass on the new version alone cannot distinguish "still correct" from "the test was
-always vacuous".
+**Run the whole suite in an isolated venv on both the old and the new version.** Not just the new
+one. A pass on the new version alone cannot distinguish "still correct" from "the test was always
+vacuous".
 </Step>
 
 <Step>
 **Run with `-W error::UserWarning`.**
 
-`BedrockConfig` swallows unknown keys with a warning. Without this flag, a kwarg that moved
-between releases stops taking effect and no test fails. This is the single highest-value guard
-for a Strands upgrade specifically.
+`BedrockConfig` swallows unknown keys with a warning. Without this flag a kwarg that moved between
+releases stops taking effect and no test fails. Highest-value single guard for a Strands upgrade.
 </Step>
 
 <Step>
-**Re-assert the two AgentCore entrypoint behaviours by *calling the SDK*, not by restating
-them.**
+**Re-assert the two AgentCore entrypoint behaviours by *calling the SDK*, not by restating them.**
 
 `test_sdk_agrees_the_handler_takes_context` invokes the SDK's own `_takes_context` rather than
 re-implementing the name check. A restated rule cannot detect the rule changing.
@@ -162,44 +138,56 @@ re-implementing the name check. A restated rule cannot detect the rule changing.
 **Check `ConcurrencyException` still fires on a reused `Agent`.**
 
 If it ever stops, that is not permission to share instances — `accumulated_usage` is still
-cumulative on a reused Agent, so per-request telemetry would go wrong silently while the
-exception stopped warning about it.
+cumulative on a reused Agent, so per-request telemetry would go wrong silently while the exception
+stopped warning about it.
 </Step>
 
 <Step>
 **Grep the test suite for private attributes before starting.**
 
-The one incompatibility found in this upgrade was exactly that. `_`-prefixed names in
-assertions are upgrade debt.
+The one incompatibility found here was exactly that. `_`-prefixed names in assertions are upgrade
+debt.
 </Step>
 
 <Step>
 **Re-check whether `agents/mantle.py` can shrink.**
 
-The native `OpenAIResponsesModel` now exists. Each future release should be checked against
-`responses_provider_available()` and against whether the base-URL and effort handling can move
-into the provider. The **rate card, the availability map and the measured region matrix stay
-regardless** — Strands prices nothing and chooses no region.
+The native `OpenAIResponsesModel` now exists. Check each release against
+`responses_provider_available()` and against whether base-URL and effort handling can move into the
+provider. The **rate card, availability map and measured region matrix stay regardless** — Strands
+prices nothing and chooses no region.
 </Step>
 
 <Step>
 **Re-pin `runtimeVersion` if `agentcore.json` was regenerated.**
 
-The CLI's default is `PYTHON_3_14`; this project pins `PYTHON_3_12` to match the interpreter
-the suite ran on. This is an AgentCore-CLI concern rather than a Python-package one, but it
-belongs in the same pass. See [the CLI](/docs/platform/agentcore-cli).
+CLI default is `PYTHON_3_14`; this project pins `PYTHON_3_12` to match the interpreter the suite
+ran on. An AgentCore-CLI concern rather than a Python-package one, but it belongs in the same pass.
+See [AgentCore CLI](/docs/platform/agentcore-cli).
 </Step>
 
 </Steps>
 
-<Callout type="warn" title="What the upgrade did not do">
-It did **not** re-run any live measurement. Every latency and cost figure on this site was
-measured under `strands-agents 1.26.0` / `bedrock-agentcore 1.14.0` — the 42-run benchmark
-records exactly those versions in its `run.packages` block
-(`evals/results/pipeline_14x3_us-east-1.json`).
+## What the upgrade did not do
 
-There is no reason to expect client-library versions to move Bedrock's own latency, and the
-one behaviour that could have (the retry ladder) was re-verified as unchanged. But the honest
-statement is that **the benchmark was taken on the older pair and has not been re-taken on the
-newer one.** It is not presented as having been.
-</Callout>
+**No live measurement was re-run.** Every latency and cost figure on this site was measured under
+`strands-agents 1.26.0` / `bedrock-agentcore 1.14.0`, and the 42-run benchmark records exactly
+those versions in its `run.packages` block (`evals/results/pipeline_14x3_us-east-1.json`).
+
+There is no reason to expect client-library versions to move Bedrock's own latency, and the one
+behaviour that could have — the retry ladder — was re-verified as unchanged. But the honest
+statement is that the benchmark was taken on the older pair and has not been re-taken on the newer
+one. Nothing here presents it otherwise.
+
+<Cards>
+  <Card
+    title="Strands Agents SDK"
+    href="/docs/platform/strands"
+    description="Every constraint the upgrade had to preserve, and why the fan-out is shaped the way it is."
+  />
+  <Card
+    title="Test suite"
+    href="/docs/reference/testing"
+    description="What the mutation tests prove, and why a test never names a private SDK attribute."
+  />
+</Cards>
