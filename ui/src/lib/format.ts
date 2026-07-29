@@ -47,15 +47,24 @@ export function money0(value: number | null | undefined): string {
 }
 
 export function rateLabel(
-  rate: { input_per_mtok?: number; output_per_mtok?: number; cache_read_per_mtok?: number } | null,
+  rate: {
+    input_per_mtok?: number
+    output_per_mtok?: number
+    cache_read_per_mtok?: number
+    cache_write_per_mtok?: number
+  } | null,
 ): string {
   if (!rate || rate.input_per_mtok === undefined || rate.output_per_mtok === undefined) {
     return EM_DASH
   }
-  const base = `$${rate.input_per_mtok} in / $${rate.output_per_mtok} out per 1M`
-  return rate.cache_read_per_mtok !== undefined
-    ? `${base} - $${rate.cache_read_per_mtok} cache read`
-    : base
+  const parts = [`$${rate.input_per_mtok} in`, `$${rate.output_per_mtok} out`]
+  if (rate.cache_read_per_mtok !== undefined) parts.push(`$${rate.cache_read_per_mtok} cache-read`)
+  // Cache-WRITE is shown because it is the term that most often dominates a bill and
+  // is easiest to forget: on GPT-5.6 it is 1.25x input, and a measured synthesis had
+  // 56% of its cost in this term alone.
+  if (rate.cache_write_per_mtok !== undefined)
+    parts.push(`$${rate.cache_write_per_mtok} cache-write`)
+  return `${parts.join(" / ")} per 1M`
 }
 
 /** Trim the Bedrock inference-profile prefix so a model id fits in a card. */
