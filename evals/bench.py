@@ -56,6 +56,7 @@ import json
 import math
 import os
 import platform
+import shutil
 import statistics
 import subprocess
 import sys
@@ -521,14 +522,29 @@ def summarize_latencies(values: Iterable[float], label: str = "") -> dict[str, A
 
 
 def _git(*args: str) -> str | None:
+    """Run a read-only git command for run provenance, or return None.
+
+    The executable is resolved to an ABSOLUTE path via ``shutil.which`` rather than
+    passed as the bare name ``git``. A partial path is resolved against ``PATH`` at
+    exec time, so on a machine with a writable directory earlier in ``PATH`` this
+    would run whatever ``git`` that directory contains. Provenance metadata is not
+    worth that, and the fix costs one lookup.
+
+    ``shell=False`` is explicit for the same reason: it is the default, but stating it
+    means a later edit has to remove it deliberately rather than inherit a shell.
+    """
+    git = shutil.which("git")
+    if git is None:
+        return None
     try:
-        return subprocess.run(
-            ["git", *args],
+        return subprocess.run(  # nosec B603 - absolute path, static argv, shell=False
+            [git, *args],
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
             timeout=10,
             check=True,
+            shell=False,
         ).stdout.strip()
     except Exception:
         return None
