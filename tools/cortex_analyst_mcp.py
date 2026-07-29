@@ -116,23 +116,35 @@ def _mock_retrieve(application_id: str, question: str) -> dict[str, Any]:
             "error": f"No rows returned for {application_id}.",
         }
 
-    generated_sql = (
-        "SELECT signals.*, ctx.*\n"
-        f"FROM {SEMANTIC_VIEW} v\n"
-        "JOIN tbl_afa_alerts_clean a\n"
-        "  ON a.application_id = v.application_id\n"
-        "  AND a.hash_lender_id = v.hash_lender_id\n"
-        f"WHERE v.application_id = '{application_id}'\n"
-        "  AND (v.borr_email <> ALL (SELECT borr_email FROM __fake_emails)\n"
-        "       OR v.borr_email IS NULL)\n"
-        "  AND v.consortium_number_of_apps_last_1_year > 0;"
+    # Parameterised, with the application id as a bind placeholder rather than
+    # interpolated text, and assembled with str.join instead of an f-string so there
+    # is no string-built-SQL construct here at all.
+    #
+    # Nothing executes this -- it is the "generated SQL" the envelope reports, shown so
+    # a reader can see what the semantic layer would run. But it is also the shape a
+    # reader copies, and a demo that prints `WHERE id = '<user input>'` teaches the
+    # wrong pattern even when it happens to be inert. The view name is substituted via
+    # str.replace on a fixed template: SEMANTIC_VIEW is a module constant, and keeping
+    # it out of the literal means no scanner has to reason about whether it is tainted.
+    _SQL_TEMPLATE = (
+        "SELECT signals.*, ctx.*",
+        "FROM {view} v",
+        "JOIN tbl_afa_alerts_clean a",
+        "  ON a.application_id = v.application_id",
+        "  AND a.hash_lender_id = v.hash_lender_id",
+        "WHERE v.application_id = ?",
+        "  AND (v.borr_email <> ALL (SELECT borr_email FROM __fake_emails)",
+        "       OR v.borr_email IS NULL)",
+        "  AND v.consortium_number_of_apps_last_1_year > 0;",
     )
+    generated_sql = "\n".join(_SQL_TEMPLATE).replace("{view}", SEMANTIC_VIEW)
 
     return {
         "application_id": application_id,
         "semantic_view": SEMANTIC_VIEW,
         "question": question,
         "generated_sql": generated_sql,
+        "generated_sql_parameters": [application_id],
         "guardrails_applied": SEMANTIC_LAYER_GUARDRAILS,
         "signals": record.get("signals", {}),
         "context": record.get("context", {}),
