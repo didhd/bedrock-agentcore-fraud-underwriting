@@ -1,0 +1,319 @@
+---
+title: Measured results
+description: The headline benchmark — 42 live adjudications, 336 specialist calls, $6.47 of Bedrock spend. Every figure cited to its artifact.
+---
+
+*For both audiences. Unless a sentence names another file, every figure here comes from `evals/results/pipeline_14x3_us-east-1.json`, with its human-readable sidecar at `evals/results/pipeline_14x3_us-east-1.md`.*
+
+**31.45 s p50, 46.55 s p95, 40 of 42 runs under the 60-second target, $0.1440 p50 per
+adjudication.** Everything below is the derivation of those four numbers and the caveats
+attached to each.
+
+## What was run
+
+| Field | Value |
+|---|---|
+| Schema | `pointpredictive.agentcore.pipeline-bench/1` |
+| Mode | `pipeline-live` (`workload.mock = false`) |
+| Timestamp | `2026-07-28T07:42:42+00:00` |
+| Git | `9bb569bac801884f9c7c5f379520cf3ddbf4a270`, branch `feat/1to1-agentcore-replacement`, `git_dirty: true` |
+| Region | `us-east-1` (synthesizer also `us-east-1`) |
+| Host | Python 3.12.9, `macOS-26.5.2-arm64`, 11 CPUs |
+| Packages | `strands-agents 1.26.0`, `bedrock-agentcore 1.14.0`, `boto3 1.43.54`, `pydantic 2.13.4` |
+| Workload | 14 applications x 3 repetitions, 9 model calls per adjudication |
+| Execution order | Round-robin: repetition 1 over every application, then repetition 2, and so on. **One application in flight at a time.** |
+| Totals | **42 runs**, **336 specialist calls**, 41 complete, 1 degraded, **42 validated adjudications** |
+| Measured spend | **$6.46591995** |
+
+<Callout type="warn" title="This benchmark ran under the previous model assignment">
+`run.model_ids` records `synthetic` and `rings` on `global.anthropic.claude-opus-5`. Both moved
+to Sonnet 5 on 2026-07-28 *after* this run, on the strength of the
+[tier re-derivation](/docs/model-selection/tier-rederivation). Every latency and cost figure
+below therefore describes the **old** assignment. Its replacement's end-to-end result is a
+[projection and is labelled one](/docs/cost/levers); it becomes a measurement only when
+`python -m evals.bench --pipeline --repetitions 3` is re-run.
+</Callout>
+
+## Headline distribution
+
+Percentile method, quoted from the artifact: *"nearest-rank, inclusive (no interpolation);
+ceil(p*n)-th of the sorted samples."*
+
+| Stage | n | min | p50 | p95 | max | mean |
+|---|---:|---:|---:|---:|---:|---:|
+| **End to end** | 42 | 18.93 s | **31.45 s** | **46.55 s** | 74.97 s | 32.80 s |
+| Fan-out (8 specialists in parallel) | 42 | 15.37 s | 24.93 s | 41.05 s | 70.62 s | 28.31 s |
+| Master synthesis | 42 | 3.08 s | 4.20 s | 5.59 s | 15.21 s | 4.49 s |
+| Sum of eight (sequential counterfactual) | 42 | 65.52 s | 85.62 s | 157.14 s | 173.00 s | 101.09 s |
+
+Every p99 on this page is a refusal rather than a number. Percentiles below a documented sample
+count are refused outright — p50 needs 5, p95 needs 20, p99 needs 100 — and all four rows above
+carry the same recorded string: `"p99": "refused: 42 sample(s), need >= 100. A p99 over 42
+sample(s) is not a p99."` That string is in the artifact, and nothing on this site launders it
+into a figure.
+
+<Mermaid
+  title="Where the p50 goes: 24.93 s fan-out + 4.20 s synthesis"
+  chart={`
+flowchart LR
+  A["Fan-out p50<br/>24.93 s"] --> B["Synthesis p50<br/>4.20 s"]
+  B --> C["End to end p50<br/>31.45 s"]
+  D["rings p50 20.96 s<br/>slowest in 25 of 42 runs"] -.->|"sets the fan-out floor"| A
+`}
+/>
+
+Fan-out p50 and synthesis p50 do not add to end-to-end p50, and that is expected: each column
+is an independent percentile over its own 42 samples, so the medians come from different runs.
+
+What the last row is and is not, quoted from the artifact's own caveat: *"sum_of_eight_ms is the
+SEQUENTIAL COUNTERFACTUAL, the sum of the eight specialists' own measured wall clocks in this
+run. It is what eight calls cost one after another only if each would take the same time alone;
+the terms are measured, the arrangement is hypothetical."*
+
+## Against the 60-second target
+
+| | Value |
+|---|---|
+| Target | 60.0 s (`run.target_e2e_seconds`) |
+| Runs under target | **40 of 42** |
+| Applications under target on **every** repetition | **12 of 14** |
+| Applications under target on **at least one** repetition | **14 of 14** |
+| Applications **never** under target | **0** |
+| Applications straddling the target | 2 |
+
+A count is not an SLA, and the artifact says so: *"A count of runs under a threshold is not a
+percentile and not an SLA. It is the only form of a 'sub-minute per application' claim this
+sample size can support."* Both runs over target — APP-1007 rep 2 at 75.0 s and APP-1001 rep 2
+at 70.2 s — are explained on [Latency tail](/docs/performance/the-tail).
+
+## Parallel speed-up
+
+Fan-out against the sequential counterfactual, one ratio per run, n=42:
+
+| min | p50 | p95 | max | mean |
+|---:|---:|---:|---:|---:|
+| 1.85x | **3.64x** | 4.99x | 5.11x | 3.73x |
+
+Reporting a distribution rather than a single number is the artifact's own insistence: *"One
+speed-up per run, not one number for the port. The spread is the finding: the fan-out is bounded
+by its slowest dimension, so the ratio moves with which specialist ran long."*
+
+## Cost per adjudication
+
+n=41 fully priced runs; 1 unpriced (the degraded run) is excluded.
+
+| min | p50 | p95 | max | mean |
+|---:|---:|---:|---:|---:|
+| $0.1177 | **$0.1440** | $0.2271 | $0.2536 | $0.1562 |
+
+Spread is **$0.1359**, and because rates are fixed per model, token volume is the only driver.
+Both endpoints are recorded so the driver is identifiable rather than asserted:
+
+| | Cheapest run | Most expensive run |
+|---|---|---|
+| Application / rep | APP-1001 rep 3 | APP-1004 rep 3 |
+| Total | $0.117721175 | $0.253649875 |
+| Specialist input tokens | 20,237 | 21,657 |
+| **Specialist output tokens** | **4,098** | **13,735** |
+| Synthesis input / output | 2 / 640 | 2 / 887 |
+| Synthesis cache-write tokens | 3,433 | 6,757 |
+| Specialist cost | $0.1087746 | $0.2385026 |
+| Synthesis cost | $0.008946575 | $0.015147275 |
+
+Specialist input tokens differ by 7%; specialist **output** tokens differ by **3.35x**. Cost
+variance on this workload is an output-length story — the same mechanism that drives
+[the latency floor](/docs/performance/the-tail).
+
+## Per specialist
+
+Percentiles run over successful calls only, so `n calls` is the attempts and the percentile `n`
+is `n calls − n failed`. `Slowest in N runs` counts the runs in which that specialist owned the
+critical path.
+
+| Specialist | Model | n calls | n failed | p50 | p95 | max | SDK-reported p50 | mean $/call | Slowest in N runs |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `identity` | `global.anthropic.claude-sonnet-5` | 42 | 0 | 12.56 s | 33.40 s | 41.04 s | 11.16 s | $0.01727 | 4 |
+| `dealer` | `global.anthropic.claude-haiku-4-5-...` | 42 | 0 | 6.56 s | 14.56 s | 18.85 s | 5.46 s | $0.00541 | 0 |
+| `straw` | `global.anthropic.claude-haiku-4-5-...` | 42 | 0 | 4.40 s | 8.76 s | 12.52 s | 3.39 s | $0.00352 | 0 |
+| `employment` | `global.anthropic.claude-sonnet-5` | 42 | 0 | 7.48 s | 17.64 s | 20.00 s | 6.67 s | $0.01022 | 0 |
+| `income` | `global.anthropic.claude-sonnet-5` | 42 | 0 | 8.09 s | 31.44 s | **66.01 s** | 7.37 s | $0.01537 | 5 |
+| `synthetic` | `global.anthropic.claude-opus-5` | 42 | **1** | 8.52 s | 20.82 s | 26.70 s | 7.54 s | $0.02869 | 1 |
+| `bustout` | `global.anthropic.claude-sonnet-5` | 42 | 0 | 14.46 s | 35.71 s | **69.78 s** | 13.86 s | $0.01699 | 7 |
+| `rings` | `global.anthropic.claude-opus-5` | 42 | **1** | **20.96 s** | 32.25 s | 36.17 s | 20.49 s | $0.04765 | **25** |
+
+Two readings matter here.
+
+- **`rings` owns the critical path in 25 of 42 runs but is not the source of the tail.** The two
+  runs over 60 s were owned by `bustout` (69.78 s) and `income` (66.01 s). Median-setter and
+  tail-producer are different agents.
+  [Critical path](/docs/performance/critical-path).
+- **Wall clock and SDK-reported latency barely diverge** — p50 0.73 s, p95 1.69 s over n=334
+  (`evals/results/tail_analysis.json`). So the tail sits inside the model's own reported
+  latency, not in the client.
+
+### Per-specialist token totals
+
+Sums over all 42 calls per specialist, and the mean per call:
+
+| Specialist | Input (total / mean) | Output (total / mean) | Cache read (total / mean) | Cost total |
+|---|---|---|---|---|
+| `identity` | 130,620 / 3,110.0 | 46,419 / 1,105.2 | 0 / 0 | $0.72543 |
+| `dealer` | 147,741 / 3,517.6 | 15,929 / 379.3 | 0 / 0 | $0.227386 |
+| `straw` | 100,797 / 2,399.9 | 9,424 / 224.4 | 0 / 0 | $0.147917 |
+| `employment` | 99,252 / 2,363.1 | 22,147 / 527.3 | 45,822 / 1,091.0 | $0.4291384 |
+| `income` | 133,710 / 3,183.6 | 37,818 / 900.4 | 0 / 0 | $0.6456 |
+| `synthetic` | 111,944 / 2,730.3 | 23,840 / 581.5 | 41,041 / 1,001.0 | $1.1762405 |
+| `bustout` | 74,997 / 1,785.6 | 55,289 / 1,316.4 | 54,474 / 1,297.0 | $0.7137788 |
+| `rings` | 64,295 / 1,568.2 | 64,320 / 1,568.8 | 48,175 / 1,175.0 | $1.9535625 |
+
+`rings` and `bustout` write 1,568.8 and 1,316.4 output tokens per call against `straw`'s 224.4 —
+the direct consequence of
+[their prompts carrying no character cap](/docs/fidelity/output-contract-defects#the-two-prompts-with-no-character-cap).
+
+Note the cache-read column: four specialists record non-zero `cacheReadInputTokens` and four
+record zero. That is **not** evidence that prompt caching works as a cost lever. Prompts sit far
+below the minimum cacheable prefix for their models and the large per-application payload
+differs every time, so no entry is ever reused. See
+[what does not work](/docs/cost/what-does-not-work#prompt-caching-does-not-engage).
+
+## Synthesis, in detail
+
+Model `openai.gpt-5.6-luna` on `bedrock-mantle`, 42 calls, **0 failed**.
+
+| | n | min | p50 | p95 | max | mean |
+|---|---:|---:|---:|---:|---:|---:|
+| Wall clock | 42 | 3.08 s | 4.20 s | 5.59 s | 15.21 s | 4.49 s |
+| Adapter-reported latency | 42 | 3.05 s | 3.90 s | 5.55 s | 15.19 s | 4.45 s |
+
+| Token class | Total | Mean per call |
+|---|---:|---:|
+| Input | 84 | **2.0** |
+| Output | 30,066 | 715.9 |
+| Cache read | 0 | 0.0 |
+| **Cache write** | **180,610** | **4,300.2** |
+
+Total synthesis cost $0.44686675, mean **$0.010640/call**. `repair_attempts` totalled **0**
+across all 42 runs, and `runs_needing_a_repair` was 0.
+
+<Callout type="error" title="Two input tokens is why cache-write pricing matters">
+The synthesizer reports 2 input tokens and 4,300 cache-**write** tokens per call, because the
+whole ~31K-character prompt lands in the cache-write class. GPT-5.6 bills cache-write at
+**1.25x input**. Omitting that term under-reported a measured Luna call by **62%**. See
+[cost levers](/docs/cost/levers#gpt-56-cache-write-tokens-bill-at-125x-input).
+</Callout>
+
+## Per application
+
+Each application ran three repetitions of byte-identical input.
+
+| Application | e2e per repetition (s) | Reps under 60 s | Pinned band | Observed band(s) |
+|---|---|---:|---|---|
+| APP-1001 | 24.3 / 70.2 / 18.9 | 2 / 3 | LOW RISK | LOW RISK |
+| APP-1002 | 23.2 / 22.9 / 22.3 | 3 / 3 | LOW RISK | LOW RISK |
+| APP-1003 | 31.7 / 34.4 / 34.3 | 3 / 3 | MEDIUM RISK | **LOW RISK (0 / 3 match)** |
+| APP-1004 | 37.8 / 36.2 / 39.2 | 3 / 3 | HIGH RISK | HIGH RISK |
+| APP-1005 | 46.5 / 42.0 / 43.9 | 3 / 3 | MEDIUM RISK | **HIGH / MEDIUM (2 / 3 match)** |
+| APP-1006 | 22.3 / 23.8 / 33.7 | 3 / 3 | LOW RISK | LOW RISK |
+| APP-1007 | 34.6 / **75.0** / 23.5 | 2 / 3 | LOW RISK | LOW RISK |
+| APP-1008 | 25.5 / 31.4 / 28.5 | 3 / 3 | LOW RISK | LOW RISK |
+| APP-1009 | 25.7 / 25.8 / 23.8 | 3 / 3 | LOW RISK | LOW RISK |
+| APP-1010 | 28.6 / 28.4 / 28.0 | 3 / 3 | LOW RISK | LOW RISK |
+| APP-1011 | 22.4 / 22.8 / 21.2 | 3 / 3 | LOW RISK | LOW RISK |
+| APP-1012 | 42.7 / 36.6 / 38.2 | 3 / 3 | HIGH RISK | **HIGH / MEDIUM (1 / 3 match)** |
+| APP-1013 | 34.0 / 35.2 / 39.8 | 3 / 3 | MEDIUM RISK | MEDIUM RISK |
+| APP-1014 | 24.8 / 41.9 / 31.6 | 3 / 3 | MEDIUM RISK | MEDIUM RISK |
+
+Pinned bands are the fixture expectations from `fixtures/applications/*.json`; observed bands
+come from `verdict_stability.per_application`.
+
+## Verdict stability
+
+| | Value |
+|---|---|
+| Applications returning the same `overall_risk_decision` on every repetition | **12 of 14** |
+| Unstable applications | APP-1005, APP-1012 |
+| Applications disagreeing with the pinned expectation | APP-1003, APP-1005, APP-1012 |
+| Applications **never** matching the pinned expectation | APP-1003 |
+
+- **APP-1005** — pinned MEDIUM RISK; observed HIGH RISK and MEDIUM RISK across 3 runs; matched 2
+  of 3. Its `recommendation_decision` moved with the band, between DECLINE and REVIEW AND APPLY
+  STIPULATIONS.
+- **APP-1012** — pinned HIGH RISK; observed HIGH RISK and MEDIUM RISK; matched 1 of 3.
+- **APP-1003** — pinned MEDIUM RISK; observed LOW RISK on all three runs, stably. Matched 0 of
+  3.
+
+Whether the pin or the model is wrong is not adjudicated here, and the artifact says why:
+*"Whether the pin or the model is wrong is the customer's call; run the calibration judge in
+`evals/evaluators/` before drawing an accuracy conclusion."* APP-1003 is a
+self-employed-income-variance fixture pinned at MEDIUM by its author, and three stable LOW
+readings is as likely to be a pin question as a model question.
+
+A separate and stronger finding — two fixtures that **every model in both families** gets wrong
+the same way — is on
+[Open questions](/docs/open-questions#3-the-calibration-failures-no-model-choice-fixes).
+
+## One degraded run
+
+| Field | Value |
+|---|---|
+| Run | APP-1011, repetition 3 |
+| Failed domains | `synthetic`, `rings` |
+| Failure kinds | `synthetic: server_5xx`, `rings: server_5xx` |
+| Underlying error (both) | `InternalServerException ... (reached max retries: 2)` on `ConverseStream` |
+| Synthesis error | none |
+| **Adjudication validated** | **true — all 21 keys** |
+| End to end | **21.215 s** |
+
+Three things this single run demonstrates, all of them design intent working:
+
+1. **7-of-8 graceful degradation is real.** Two specialists were lost and the adjudication still
+   validated its full 21-key contract.
+2. **A 5xx fails fast.** 21.2 s is among the quickest runs in the whole sample. A server error
+   here costs a *fraud dimension*, not latency.
+3. **Degraded runs are reported, never averaged away.** Quoted from the artifact: *"It stays in
+   the latency distribution and leaves the cost distribution."* Hence end-to-end n=42 and cost
+   n=41.
+
+## Throttling: zero
+
+Across all 336 specialist calls, `ModelThrottledException` occurred **0** times. Retry ladder in
+force was `[1, 2, 4]s` over 4 attempts, and that strategy retries on
+`ModelThrottledException` and nothing else. Source: `evals/results/tail_analysis.json`.
+
+That matters because it removes the most common explanation for a tail. See
+[why the tail is irreducible](/docs/performance/the-tail).
+
+## What this benchmark did not measure
+
+Reproduced from the artifact's own `caveats` array, because the exclusions are as load-bearing as
+the figures.
+
+- **AgentCore Runtime overhead.** *"These calls go to Bedrock (and to bedrock-mantle for the
+  synthesizer) directly from the host named in run.host, so container cold start, session setup
+  and SSE framing are NOT in the end-to-end figures."*
+- **Signal generation.** *"build_payload runs OUTSIDE the timed window because the customer's
+  architecture precomputes signals; an end-to-end figure here is agent latency, not
+  pipeline-including-ETL latency."*
+- **Throughput.** *"Applications were run ONE AT A TIME, so nothing here says what happens when N
+  adjudications overlap."*
+- **Per-application percentiles.** Computed over 3 repetitions each and *"therefore mostly
+  suppressed by design."*
+
+One process note from the same array: aggregates in the file were recomputed from `raw_runs` by
+`evals.bench.reaggregate_pipeline_report` at `2026-07-28T07:46:30+00:00`. Measurements are
+unchanged and no model was called to produce that recomputation.
+
+## Where the earlier single-run figure fits
+
+`README.md` and `CHANGELOG.md` carry an earlier headline: **37.5 s end-to-end at $0.245** on
+APP-1004, one live run.
+
+**The 42-run benchmark is authoritative**: 31.45 s p50 / 46.55 s p95, $0.1440 p50. The 37.5 s
+figure is one run on one application and the repo says so in place (*"one measured run on one
+application, which is enough to show the target is reachable and not enough to call it a
+benchmark"*). Neither contradicts the other — APP-1004's three benchmarked repetitions ran 37.8 / 36.2
+/ 39.2 s, which brackets 37.5 s neatly — but only one of them is a distribution. Quote the p50
+with its n.
+
+A recording of that single run is committed at `media/demo.mp4` (16.6 MB, 1920x1080), with
+`media/demo-poster.png` as its poster frame.

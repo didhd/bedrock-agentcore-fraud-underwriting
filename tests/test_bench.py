@@ -978,3 +978,913 @@ def test_readme_states_the_measurement_status_honestly():
                     f"evals/README.md:{lineno} puts the non-existent {phantom!r} in a "
                     "runnable command block"
                 )
+
+
+# ---------------------------------------------------------------------------
+# 7. Pipeline mode: the aggregation that produces the published p50/p95
+#
+# WHY THESE EXIST. --pipeline is the mode that answers "how long does one
+# application take". Every guard below is a way that answer can go quietly wrong:
+# a p95 printed from 3 samples, an under-60s counter that rounds a 60.4s run down,
+# a degraded run averaged into the cost as though nine calls had answered, a
+# speed-up published as one number when it is a distribution. All offline: they run
+# on synthetic PipelineRun objects and call no model.
+# ---------------------------------------------------------------------------
+
+
+def _specialist(
+    domain: str,
+    wall_ms: float,
+    *,
+    error: str | None = None,
+    priced: bool = True,
+    cost: float = 0.01,
+    in_tokens: int = 2000,
+    out_tokens: int = 300,
+) -> bench.SpecialistMeasurement:
+    """One synthetic specialist measurement."""
+    usage = (
+        {
+            "inputTokens": in_tokens,
+            "outputTokens": out_tokens,
+            "totalTokens": in_tokens + out_tokens,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+        }
+        if priced and error is None
+        else None
+    )
+    return bench.SpecialistMeasurement(
+        domain=domain,
+        agent_name=f"AGENT_{domain.upper()}",
+        model_id="global.anthropic.claude-sonnet-5",
+        tier="mid",
+        wall_ms=wall_ms,
+        latency_ms=wall_ms - 100.0,
+        usage=usage,
+        cost_usd=(cost if usage else None),
+        stop_reason="end_turn" if error is None else None,
+        error=error,
+        analysis_chars=1200,
+        source="bedrock",
+    )
+
+
+def _pipeline_run(
+    application_id: str = "APP-1001",
+    repetition: int = 1,
+    *,
+    e2e_ms: float = 30_000.0,
+    fanout_ms: float = 25_000.0,
+    synthesis_ms: float | None = 5_000.0,
+    specialist_walls: dict[str, float] | None = None,
+    failed: dict[str, str] | None = None,
+    synthesis_error: str | None = None,
+    synthesis_cost: float | None = 0.015,
+    validated: bool = True,
+    repair_attempts: int = 0,
+    specialist_cost: float = 0.01,
+) -> bench.PipelineRun:
+    """One synthetic adjudication, in the shape run_pipeline produces."""
+    failed = failed or {}
+    walls = specialist_walls or {d: 10_000.0 + 100 * i for i, d in enumerate(DOMAINS)}
+    specialists = [
+        _specialist(d, walls[d], error=failed.get(d), cost=specialist_cost) for d in DOMAINS
+    ]
+    usage = (
+        {
+            "inputTokens": 28_000,
+            "outputTokens": 800,
+            "totalTokens": 28_800,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+        }
+        if synthesis_cost is not None
+        else None
+    )
+    return bench.PipelineRun(
+        application_id=application_id,
+        repetition=repetition,
+        fanout_wall_ms=fanout_ms,
+        specialists=specialists,
+        synthesis_wall_ms=synthesis_ms,
+        synthesis_latency_ms=synthesis_ms,
+        synthesis_usage=usage,
+        synthesis_cost_usd=synthesis_cost,
+        synthesis_model_id="openai.gpt-5.6-luna",
+        synthesis_stop_reason="tool_use",
+        repair_attempts=repair_attempts,
+        degraded_domains=sorted(failed, key=DOMAINS.index),
+        adjudication_validated=validated,
+        adjudication_keys=21 if validated else None,
+        overall_risk_decision="HIGH RISK" if validated else None,
+        recommendation_decision="DECLINE" if validated else None,
+        e2e_wall_ms=e2e_ms,
+        synthesis_error=synthesis_error,
+    )
+
+
+def _pipeline_report(runs, repetitions=1, mock=False):
+    return bench.build_pipeline_report(
+        env=bench.run_environment("pipeline-live", "us-east-1", {"synthesis": "openai.gpt-5.6-luna"}),
+        runs=runs,
+        models={"synthesis": "openai.gpt-5.6-luna"},
+        application_ids=sorted({r.application_id for r in runs}),
+        repetitions=repetitions,
+        mock=mock,
+    )
+
+
+# -- percentile guards on the new summarizer ---------------------------------
+
+
+def test_summarize_values_applies_the_same_minimums_as_latencies():
+    """A ratio and a dollar figure must be guarded like a latency."""
+    small = bench.summarize_values([1.0, 2.0, 3.0], "speed-up", unit="x")
+    assert small["n"] == 3
+    assert small["p50"] is None and small["p95"] is None
+    assert "p50" in small["suppressed"] and "p95" in small["suppressed"]
+    assert small["unit"] == "x"
+    # min/max/mean stay honest at any n.
+    assert small["min"] == 1.0 and small["max"] == 3.0
+
+    enough = bench.summarize_values([float(i) for i in range(1, 21)], "speed-up", unit="x")
+    assert enough["p50"] is not None and enough["p95"] is not None
+    assert enough["p99"] is None
+
+
+def test_summarize_values_and_summarize_latencies_agree_on_the_same_sample():
+    values = [float(i) for i in range(1, 101)]
+    bare = bench.summarize_values(values)
+    suffixed = bench.summarize_latencies(values)
+    for name in ("p50", "p95", "p99", "min", "max"):
+        assert bare[name] == pytest.approx(suffixed[f"{name}_ms"]), name
+
+
+def test_pipeline_p95_is_refused_at_three_repetitions_per_application():
+    """The exact sample size --repetitions 3 produces per application.
+
+    14 x 3 clears the pooled p95 minimum and does NOT clear it per application.
+    Both facts must show up in the report rather than being resolved silently.
+    """
+    runs = [
+        _pipeline_run(f"APP-10{i:02d}", rep, e2e_ms=20_000.0 + 500 * (i + rep))
+        for i in range(1, 15)
+        for rep in (1, 2, 3)
+    ]
+    report = _pipeline_report(runs, repetitions=3)
+    assert report["end_to_end"]["n"] == 42
+    assert report["end_to_end"]["p50_ms"] is not None
+    assert report["end_to_end"]["p95_ms"] is not None, "42 pooled samples supports a p95"
+    assert report["end_to_end"]["p99_ms"] is None
+    for app_id, data in report["per_application"].items():
+        assert data["end_to_end"]["n"] == 3
+        assert data["end_to_end"]["p50_ms"] is None, app_id
+        assert data["end_to_end"]["p95_ms"] is None, app_id
+        assert "p95" in data["end_to_end"]["suppressed"], app_id
+
+
+def test_pipeline_report_caveats_name_the_refused_p95_when_n_is_too_small():
+    report = _pipeline_report([_pipeline_run() for _ in range(4)], repetitions=4)
+    assert report["end_to_end"]["p95_ms"] is None
+    assert any("below the 20" in c and "p95" in c for c in report["caveats"])
+
+
+def test_pipeline_percentiles_are_observed_samples_not_interpolated():
+    runs = [_pipeline_run(repetition=i, e2e_ms=float(i) * 1000.0) for i in range(1, 101)]
+    report = _pipeline_report(runs, repetitions=100)
+    observed = {r.e2e_wall_ms for r in runs}
+    for key in ("p50_ms", "p95_ms", "p99_ms"):
+        assert report["end_to_end"][key] in observed, key
+
+
+# -- the under-60s counter ---------------------------------------------------
+
+
+def test_target_threshold_is_the_customers_sixty_seconds():
+    assert bench.TARGET_E2E_SECONDS == 60.0
+
+
+def test_under_target_counter_is_strict_at_the_boundary():
+    """59.999s is under; exactly 60.000s and 60.001s are not.
+
+    A counter that rounds is a counter that can report a 60.4s run as meeting a
+    60s target.
+    """
+    runs = [
+        _pipeline_run("APP-A", 1, e2e_ms=59_999.0),
+        _pipeline_run("APP-B", 1, e2e_ms=60_000.0),
+        _pipeline_run("APP-C", 1, e2e_ms=60_001.0),
+    ]
+    report = _pipeline_report(runs)
+    assert report["target"]["runs_under_target"] == 1
+    assert report["target"]["applications_all_reps_under_target"] == 1
+    assert set(report["target"]["applications_never_under_target"]) == {"APP-B", "APP-C"}
+
+
+def test_under_target_separates_every_rep_from_any_rep():
+    """An application that straddles the line must not be counted as meeting it."""
+    runs = [
+        _pipeline_run("APP-FAST", 1, e2e_ms=30_000.0),
+        _pipeline_run("APP-FAST", 2, e2e_ms=31_000.0),
+        _pipeline_run("APP-STRADDLE", 1, e2e_ms=45_000.0),
+        _pipeline_run("APP-STRADDLE", 2, e2e_ms=75_000.0),
+        _pipeline_run("APP-SLOW", 1, e2e_ms=90_000.0),
+        _pipeline_run("APP-SLOW", 2, e2e_ms=91_000.0),
+    ]
+    report = _pipeline_report(runs, repetitions=2)
+    target = report["target"]
+    assert target["n_applications"] == 3
+    assert target["applications_all_reps_under_target"] == 1  # only APP-FAST
+    assert target["applications_any_rep_under_target"] == 2  # + APP-STRADDLE
+    assert target["applications_straddling_target"] == ["APP-STRADDLE"]
+    assert target["applications_never_under_target"] == ["APP-SLOW"]
+    assert target["runs_under_target"] == 3
+    assert target["per_application_reps_under_target"]["APP-STRADDLE"] == {
+        "n_reps": 2,
+        "under": 1,
+    }
+
+
+def test_under_target_note_refuses_to_call_itself_an_sla():
+    report = _pipeline_report([_pipeline_run()])
+    note = report["target"]["note"]
+    assert "not a percentile" in note and "not an SLA" in note
+
+
+# -- degraded-run accounting -------------------------------------------------
+
+
+def test_a_degraded_run_stays_in_latency_and_leaves_cost():
+    """The whole point: a run that lost a specialist is reported, not averaged in.
+
+    It really did take that long, so it belongs in the latency sample. It did not
+    produce nine priced calls, so it must not contribute a per-application cost.
+    """
+    good = _pipeline_run("APP-1001", 1, e2e_ms=30_000.0)
+    degraded = _pipeline_run(
+        "APP-1001",
+        2,
+        e2e_ms=50_000.0,
+        failed={"rings": "MaxTokensReachedException: output exceeded 4096"},
+    )
+    report = _pipeline_report([good, degraded], repetitions=2)
+
+    assert report["end_to_end"]["n"] == 2, "a degraded run must remain in the latency sample"
+    assert report["end_to_end"]["max_ms"] == pytest.approx(50_000.0)
+
+    cost = report["cost_per_adjudication_usd"]
+    assert cost["n_priced_runs"] == 1
+    assert cost["n_unpriced_runs"] == 1
+    # 8 x 0.01 + 0.015 from the complete run only.
+    assert cost["min"] == pytest.approx(0.095)
+    assert cost["max"] == pytest.approx(0.095)
+
+    assert report["totals"]["degraded_runs"] == 1
+    assert report["totals"]["complete_runs"] == 1
+    assert report["failures"]["by_kind"] == {"max_tokens_truncation": 1}
+    assert report["failures"]["by_run"][0]["failed_domains"] == ["rings"]
+    assert any("REMAIN in the latency samples" in c for c in report["caveats"])
+
+
+def test_degraded_run_cost_is_none_not_a_partial_sum():
+    degraded = _pipeline_run(failed={"identity": "ThrottlingException: slow down"})
+    assert degraded.cost_usd is None, "a 7-of-8 run must not report a total"
+    assert degraded.complete is False
+    assert degraded.fully_priced is False
+    assert degraded.failed_domains == ["identity"]
+
+
+def test_a_run_whose_synthesis_failed_is_degraded_and_unpriced():
+    run = _pipeline_run(
+        synthesis_error="SynthesisContractError: no valid adjudication",
+        synthesis_cost=None,
+        synthesis_ms=8_000.0,
+        validated=False,
+    )
+    report = _pipeline_report([run])
+    assert run.cost_usd is None
+    assert report["totals"]["degraded_runs"] == 1
+    assert report["totals"]["validated_adjudications"] == 0
+    assert report["failures"]["by_kind"] == {"contract_failure": 1}
+    assert report["cost_per_adjudication_usd"]["n_priced_runs"] == 0
+    assert report["cost_per_adjudication_usd"]["note"] is not None
+
+
+def test_specialist_latency_excludes_failed_calls_from_its_percentiles():
+    """A call that failed fast must not make its dimension look fast."""
+    fast_failure = _pipeline_run(
+        specialist_walls={**{d: 20_000.0 for d in DOMAINS}, "rings": 200.0},
+        failed={"rings": "ThrottlingException: rate exceeded"},
+    )
+    slow_success = _pipeline_run(
+        repetition=2, specialist_walls={d: 20_000.0 for d in DOMAINS}
+    )
+    report = _pipeline_report([fast_failure, slow_success], repetitions=2)
+    rings = report["per_specialist"]["rings"]
+    assert rings["n_calls"] == 2
+    assert rings["n_failed"] == 1
+    assert rings["wall_clock_successful_only"]["n"] == 1
+    assert rings["wall_clock_successful_only"]["min_ms"] == pytest.approx(20_000.0)
+    assert rings["errors"] == ["ThrottlingException: rate exceeded"]
+
+
+def test_a_specialist_that_never_succeeded_reports_no_latency_at_all():
+    run = _pipeline_run(failed={d: "AccessDeniedException: no access" for d in DOMAINS})
+    report = _pipeline_report([run])
+    for domain in DOMAINS:
+        block = report["per_specialist"][domain]["wall_clock_successful_only"]
+        assert block["n"] == 0
+        assert "no successful call" in block["note"]
+
+
+@pytest.mark.parametrize(
+    "error,expected",
+    [
+        ("ThrottlingException: Too many requests", "throttled"),
+        ("TooManyRequestsException: slow down", "throttled"),
+        ("MaxTokensReachedException: truncated", "max_tokens_truncation"),
+        ("InternalServerException: try again", "server_5xx"),
+        ("ServiceUnavailableException: nope", "server_5xx"),
+        ("ReadTimeoutError: timed out", "timeout"),
+        ("ValidationException: bad model id", "validation"),
+        ("SynthesisContractError: 19 of 21 keys", "contract_failure"),
+        ("MantleUnavailable: no bearer token", "mantle_unavailable"),
+    ],
+)
+def test_failure_classification_names_the_conversation_each_error_starts(error, expected):
+    """Throttling, truncation and a 5xx are three different customer conversations."""
+    assert bench.classify_failure(error) == expected
+
+
+def test_an_unrecognised_failure_keeps_its_own_name_rather_than_becoming_other():
+    assert bench.classify_failure("SomeBrandNewException: boom") == "SomeBrandNewException"
+
+
+# -- the parallel speed-up distribution --------------------------------------
+
+
+def test_parallel_speedup_is_a_distribution_not_a_single_number():
+    runs = [
+        _pipeline_run(
+            "APP-A", 1, fanout_ms=20_000.0, specialist_walls={d: 10_000.0 for d in DOMAINS}
+        ),
+        _pipeline_run(
+            "APP-B", 1, fanout_ms=40_000.0, specialist_walls={d: 10_000.0 for d in DOMAINS}
+        ),
+    ]
+    report = _pipeline_report(runs)
+    speed = report["parallel_speedup"]
+    assert speed["n"] == 2
+    assert speed["min"] == pytest.approx(2.0)  # 80s / 40s
+    assert speed["max"] == pytest.approx(4.0)  # 80s / 20s
+    assert speed["p50"] is None, "2 samples cannot support a p50"
+    assert len(speed["distribution"]) == 2
+    assert {row["application_id"] for row in speed["distribution"]} == {"APP-A", "APP-B"}
+    assert "spread is the finding" in speed["note"]
+
+
+def test_sum_of_eight_is_labelled_a_counterfactual_in_the_caveats():
+    report = _pipeline_report([_pipeline_run()])
+    assert any(
+        "SEQUENTIAL COUNTERFACTUAL" in c and "arrangement is hypothetical" in c
+        for c in report["caveats"]
+    )
+    assert report["sum_of_eight_sequential_counterfactual"]["n"] == 1
+
+
+def test_speedup_uses_measured_specialist_walls_and_the_measured_fanout_wall():
+    run = _pipeline_run(
+        fanout_ms=10_000.0, specialist_walls={d: 5_000.0 for d in DOMAINS}
+    )
+    assert run.sum_of_eight_ms == pytest.approx(40_000.0)
+    assert run.parallel_speedup == pytest.approx(4.0)
+    assert run.slowest_specialist_wall_ms == pytest.approx(5_000.0)
+
+
+def test_a_zero_length_fanout_yields_no_speedup_rather_than_a_division_error():
+    run = _pipeline_run(fanout_ms=0.0)
+    assert run.parallel_speedup is None
+    report = _pipeline_report([run])
+    assert report["parallel_speedup"]["n"] == 0
+    assert report["parallel_speedup"]["distribution"] == []
+
+
+# -- cost accounting and its variance ---------------------------------------
+
+
+def test_cost_variance_drivers_come_from_measured_token_counts():
+    cheap = _pipeline_run("APP-CHEAP", 1, specialist_cost=0.005, synthesis_cost=0.01)
+    dear = _pipeline_run("APP-DEAR", 1, specialist_cost=0.02, synthesis_cost=0.05)
+    report = _pipeline_report([cheap, dear])
+    drivers = report["cost_per_adjudication_usd"]["variance_drivers"]
+    assert drivers["cheapest_run"]["application_id"] == "APP-CHEAP"
+    assert drivers["most_expensive_run"]["application_id"] == "APP-DEAR"
+    assert drivers["cheapest_run"]["specialist_input_tokens"] == 8 * 2000
+    assert drivers["most_expensive_run"]["synthesis_input_tokens"] == 28_000
+    assert drivers["spread_usd"] == pytest.approx((8 * 0.02 + 0.05) - (8 * 0.005 + 0.01))
+
+
+def test_cost_variance_drivers_refuse_to_attribute_with_no_priced_run():
+    report = _pipeline_report([_pipeline_run(synthesis_cost=None)])
+    drivers = report["cost_per_adjudication_usd"]["variance_drivers"]
+    assert "nothing to attribute" in drivers["note"]
+
+
+def test_token_totals_distinguish_zero_from_unmeasured():
+    """'0 cache reads' and 'no usage measured' are different statements."""
+    measured = bench._token_totals(
+        [{"inputTokens": 100, "outputTokens": 10, "cacheReadInputTokens": 0}]
+    )
+    assert measured["n_calls_with_usage"] == 1
+    assert measured["totals"]["cacheReadInputTokens"] == 0
+    assert measured["note"] is None
+
+    unmeasured = bench._token_totals([None, None])
+    assert unmeasured["n_calls_with_usage"] == 0
+    assert unmeasured["n_calls_without_usage"] == 2
+    assert unmeasured["totals"] is None
+    assert unmeasured["mean_per_call"] is None
+    assert "null" in unmeasured["note"]
+
+
+def test_all_four_token_classes_are_carried_into_the_report():
+    run = _pipeline_run()
+    run.synthesis_usage = {
+        "inputTokens": 1_000,
+        "outputTokens": 800,
+        "cacheReadInputTokens": 12_000,
+        "cacheWriteInputTokens": 6_740,
+        "totalTokens": 20_540,
+    }
+    report = _pipeline_report([run])
+    totals = report["synthesis_detail"]["tokens"]["totals"]
+    for key in (
+        "inputTokens",
+        "outputTokens",
+        "cacheReadInputTokens",
+        "cacheWriteInputTokens",
+    ):
+        assert key in totals, key
+    assert totals["cacheWriteInputTokens"] == 6_740
+
+
+# -- mock pipeline mode labels itself ---------------------------------------
+
+
+def test_mock_pipeline_report_shouts_that_no_model_was_called():
+    report = _pipeline_report([_pipeline_run(synthesis_cost=None)], mock=True)
+    assert "MOCK RUN. NO MODEL WAS CALLED" in report["caveats"][0]
+    assert report["workload"]["mock"] is True
+    rendered = bench.render_pipeline_human(report)
+    assert "NO MODEL WAS CALLED" in rendered.split("Pooled latency")[0]
+
+
+def test_a_real_mock_pipeline_run_produces_a_serializable_report():
+    """End-to-end through run_pipeline itself, offline, over two applications."""
+    import asyncio
+
+    os.environ["MOCK_MODE"] = "1"
+    report = asyncio.run(
+        bench.run_pipeline(
+            ["APP-1001", "APP-1004"], 2, mock=True, region="us-east-1"
+        )
+    )
+    assert report["schema"] == "pointpredictive.agentcore.pipeline-bench/1"
+    assert report["totals"]["runs"] == 4
+    assert report["totals"]["expected_runs"] == 4
+    assert report["totals"]["validated_adjudications"] == 4
+    # No model was called, so every cost must be null rather than 0.0.
+    assert report["cost_per_adjudication_usd"]["n_priced_runs"] == 0
+    assert report["totals"]["total_measured_cost_usd"] is None
+    for domain in DOMAINS:
+        assert report["per_specialist"][domain]["cost_usd"]["total"] is None, domain
+    round_tripped = json.loads(json.dumps(report))
+    assert round_tripped["run"]["mode"] == "pipeline-mock"
+    assert round_tripped["workload"]["repetitions_per_application"] == 2
+
+
+def test_pipeline_report_carries_the_provenance_a_committed_benchmark_needs():
+    report = _pipeline_report([_pipeline_run()])
+    run = report["run"]
+    for key in ("git_sha", "git_branch", "timestamp_utc", "aws_region", "model_ids", "packages"):
+        assert key in run, key
+    assert run["target_e2e_seconds"] == bench.TARGET_E2E_SECONDS
+    assert isinstance(report["caveats"], list) and report["caveats"]
+    assert report["raw_runs"], "every individual run must survive so aggregates can be recomputed"
+    assert report["workload"]["execution_order"]
+
+
+def test_pipeline_report_records_expected_versus_actual_run_count():
+    """A run that died half way must be visible as a short sample, not a full one."""
+    runs = [_pipeline_run("APP-1001", 1), _pipeline_run("APP-1002", 1)]
+    report = bench.build_pipeline_report(
+        env=bench.run_environment("pipeline-live", "us-east-1", {}),
+        runs=runs,
+        models={},
+        application_ids=["APP-1001", "APP-1002", "APP-1003"],
+        repetitions=3,
+        mock=False,
+    )
+    assert report["totals"]["runs"] == 2
+    assert report["totals"]["expected_runs"] == 9
+
+
+# -- the plan is printed before any spend -----------------------------------
+
+
+def test_pipeline_plan_states_the_call_count_and_labels_the_estimate_a_prior():
+    plan = bench.pipeline_plan(
+        [f"APP-10{i:02d}" for i in range(1, 15)],
+        3,
+        mock=False,
+        region="us-east-1",
+        models={"synthesis": "openai.gpt-5.6-luna"},
+        per_application_usd=0.245,
+    )
+    assert "42" in plan  # adjudications
+    assert "378" in plan  # model calls
+    assert "PRIOR" in plan
+    assert "p95 needs 20" in plan
+
+
+def test_pipeline_plan_says_zero_spend_in_mock_mode():
+    plan = bench.pipeline_plan(
+        ["APP-1001"], 1, mock=True, region="us-east-1", models={}, per_application_usd=None
+    )
+    assert "$0.00" in plan
+    assert "no model is called" in plan
+
+
+def test_pipeline_live_is_gated_on_the_same_env_var_as_live(monkeypatch, capsys):
+    monkeypatch.delenv(bench.LIVE_ENV_GATE, raising=False)
+    assert bench.main(["--pipeline", "--repetitions", "1"]) == 2
+    err = capsys.readouterr().err
+    assert "refusing to run the live pipeline" in err
+    assert bench.LIVE_ENV_GATE in err
+
+
+def test_pipeline_mock_needs_no_gate(monkeypatch, capsys):
+    monkeypatch.delenv(bench.LIVE_ENV_GATE, raising=False)
+    monkeypatch.setenv("MOCK_MODE", "1")
+    assert bench.main(["--pipeline", "--mock", "--repetitions", "1",
+                       "--application", "APP-1001"]) == 0
+    out = capsys.readouterr().out
+    assert "MOCK RUN" in out
+
+
+def test_pipeline_default_repetitions_clears_the_pooled_p95_minimum():
+    """3 x 14 = 42 >= 20, so the pooled p95 this mode publishes is supportable."""
+    from fixtures.loader import list_application_ids
+
+    pooled = bench.PIPELINE_DEFAULT_REPETITIONS * len(list_application_ids())
+    assert pooled >= bench.PERCENTILE_MIN_SAMPLES["p95"]
+    # ...and honestly does NOT reach p99.
+    assert pooled < bench.PERCENTILE_MIN_SAMPLES["p99"]
+
+
+# -- the markdown summary contains only numbers the run produced ------------
+
+
+def test_markdown_summary_refuses_a_suppressed_percentile_out_loud():
+    report = _pipeline_report([_pipeline_run() for _ in range(3)], repetitions=3)
+    markdown = bench.render_pipeline_markdown(report)
+    assert "**refused**" in markdown, "a suppressed p95 must be visible, not omitted"
+    assert "p95 is refused, not omitted" in markdown
+    assert "n=3 adjudications" in markdown
+
+
+def test_markdown_summary_reports_degraded_runs_rather_than_hiding_them():
+    runs = [
+        _pipeline_run("APP-1001", 1),
+        _pipeline_run("APP-1002", 1, failed={"rings": "ThrottlingException: rate exceeded"}),
+    ]
+    markdown = bench.render_pipeline_markdown(_pipeline_report(runs))
+    assert "throttled x1" in markdown
+    assert "excluded from the cost distribution" in markdown
+
+
+def test_markdown_summary_states_what_was_not_measured():
+    markdown = bench.render_pipeline_markdown(_pipeline_report([_pipeline_run()]))
+    assert "Not measured" in markdown
+    assert "AgentCore runtime overhead" in markdown
+    assert "throughput" in markdown
+
+
+def test_markdown_summary_carries_the_git_sha_and_region():
+    report = _pipeline_report([_pipeline_run()])
+    markdown = bench.render_pipeline_markdown(report)
+    assert (report["run"]["git_sha"] or "")[:12] in markdown
+    assert "us-east-1" in markdown
+
+
+# ---------------------------------------------------------------------------
+# 8. The committed benchmark report in evals/results/ must stay re-readable
+# ---------------------------------------------------------------------------
+
+RESULTS_DIR = REPO_ROOT / "evals" / "results"
+
+
+PIPELINE_BENCH_SCHEMA = "pointpredictive.agentcore.pipeline-bench/1"
+
+
+def _committed_reports() -> list[Path]:
+    """Every committed PIPELINE-BENCH report in evals/results/.
+
+    Selected by its ``schema`` field, not by being a .json file in the directory. The
+    directory also holds derived analyses of these runs (e.g. the tail analysis, schema
+    ``pointpredictive.agentcore.tail-analysis/1``), which have their own shape and their own
+    guards; asserting the pipeline-bench contract against them fails on the contract's own
+    keys and says nothing true about either artifact.
+
+    A file that is JSON but carries no recognisable schema is still collected on purpose, so
+    that an unschema'd or corrupt report fails loudly here instead of being skipped.
+    """
+    if not RESULTS_DIR.is_dir():
+        return []
+    selected = []
+    for path in sorted(RESULTS_DIR.glob("*.json")):
+        try:
+            schema = json.loads(path.read_text(encoding="utf-8")).get("schema")
+        except (json.JSONDecodeError, OSError):
+            selected.append(path)
+            continue
+        if schema is None or schema == PIPELINE_BENCH_SCHEMA:
+            selected.append(path)
+    return selected
+
+
+def test_a_pipeline_benchmark_report_is_committed():
+    """A benchmark nobody can re-read is not a benchmark."""
+    assert _committed_reports(), (
+        f"no committed report in {RESULTS_DIR}; run "
+        "`python -m evals.bench --pipeline --json evals/results/<name>.json`"
+    )
+
+
+def test_report_selection_skips_only_recognised_non_bench_schemas():
+    """The schema filter must not become a way for a real report to escape its guards.
+
+    Every JSON in evals/results/ is either collected above or carries a schema that is
+    explicitly known NOT to be a pipeline-bench report. A new artifact with an unlisted
+    schema fails here, which forces a decision instead of a silent skip.
+    """
+    known_non_bench = {
+        "pointpredictive.agentcore.tail-analysis/1",
+        # The tier-quality study and its two sidecars. Not pipeline-bench runs: they
+        # measure one specialist at a time with the model varied, so they have no
+        # end-to-end latency, no 21-key adjudication and no fan-out to speed up.
+        # Their own guards live in tests/test_tier_quality.py.
+        "pointpredictive.agentcore.tier-quality/1",
+        "pointpredictive.agentcore.tier-quality-analyses/1",
+        "pointpredictive.agentcore.tier-quality-verdicts/1",
+        # The Claude-set vs GPT-5.6-set study and its two sidecars. Same shape as the
+        # tier-quality study and not pipeline-bench runs for the same reasons: one
+        # specialist at a time with the model varied, so no end-to-end latency, no
+        # 21-key adjudication and no fan-out. It differs from tier-quality only in
+        # crossing model FAMILIES (Claude Converse vs GPT-5.6 on bedrock-mantle) and in
+        # scoring with two judges biased in opposite directions rather than one.
+        "pointpredictive.agentcore.set-comparison/1",
+        "pointpredictive.agentcore.set-comparison-analyses/1",
+        "pointpredictive.agentcore.set-comparison-verdicts/1",
+    }
+    collected = set(_committed_reports())
+    for path in sorted(RESULTS_DIR.glob("*.json")):
+        if path in collected:
+            continue
+        schema = json.loads(path.read_text(encoding="utf-8")).get("schema")
+        assert schema in known_non_bench, (
+            f"{path.name} carries schema {schema!r}, which is neither the pipeline-bench "
+            "schema nor a known derived analysis. Either it is a benchmark report and must "
+            "satisfy the guards below, or add its schema to known_non_bench with a reason."
+        )
+
+
+@pytest.mark.parametrize("path", _committed_reports(), ids=lambda p: p.name)
+def test_committed_report_carries_provenance_sample_counts_and_caveats(path):
+    report = json.loads(path.read_text(encoding="utf-8"))
+    assert report["schema"] == PIPELINE_BENCH_SCHEMA
+    run = report["run"]
+    assert run["git_sha"], "a committed benchmark must name the commit it measured"
+    assert run["timestamp_utc"]
+    assert run["aws_region"]
+    assert run["model_ids"], "model ids must be recorded"
+    assert isinstance(report["caveats"], list) and report["caveats"]
+    assert report["end_to_end"]["n"] == report["totals"]["runs"]
+    assert report["raw_runs"], "raw runs must survive so every aggregate is recomputable"
+    assert len(report["raw_runs"]) == report["totals"]["runs"]
+
+
+@pytest.mark.parametrize("path", _committed_reports(), ids=lambda p: p.name)
+def test_committed_report_percentiles_obey_the_sample_minimums(path):
+    """The published numbers must satisfy the same guard as a fresh run."""
+    report = json.loads(path.read_text(encoding="utf-8"))
+    for key in ("end_to_end", "fan_out", "synthesis"):
+        block = report[key]
+        n = block.get("n", 0)
+        for name in ("p50", "p95", "p99"):
+            value = block.get(f"{name}_ms")
+            if n < bench.PERCENTILE_MIN_SAMPLES[name]:
+                assert value is None, f"{path.name}: {key}.{name} published at n={n}"
+                assert name in block["suppressed"], f"{path.name}: {key}.{name} has no reason"
+            else:
+                assert value is not None, f"{path.name}: {key}.{name} suppressed at n={n}"
+
+
+@pytest.mark.parametrize("path", _committed_reports(), ids=lambda p: p.name)
+def test_committed_report_cost_only_counts_fully_priced_runs(path):
+    report = json.loads(path.read_text(encoding="utf-8"))
+    cost = report["cost_per_adjudication_usd"]
+    priced = [r for r in report["raw_runs"] if r["cost_usd"] is not None]
+    assert cost["n_priced_runs"] == len(priced)
+    assert cost["n_unpriced_runs"] == report["totals"]["runs"] - len(priced)
+    for row in report["raw_runs"]:
+        if row["failed_domains"] or row["synthesis_error"]:
+            assert row["cost_usd"] is None, (
+                f"{path.name}: {row['application_id']} rep {row['repetition']} is degraded "
+                "but carries a cost"
+            )
+
+
+@pytest.mark.parametrize("path", _committed_reports(), ids=lambda p: p.name)
+def test_committed_report_under_target_count_matches_its_own_raw_runs(path):
+    """Recompute the headline claim from the raw rows in the same file."""
+    report = json.loads(path.read_text(encoding="utf-8"))
+    recomputed = sum(
+        1
+        for row in report["raw_runs"]
+        if row["e2e_wall_ms"] / 1000.0 < report["target"]["target_seconds"]
+    )
+    assert report["target"]["runs_under_target"] == recomputed
+
+
+@pytest.mark.parametrize("path", _committed_reports(), ids=lambda p: p.name)
+def test_committed_report_covers_every_fixture_application(path):
+    """A benchmark over a subset must not be read as a benchmark over the set."""
+    from fixtures.loader import list_application_ids
+
+    report = json.loads(path.read_text(encoding="utf-8"))
+    if report["run"]["mode"] != "pipeline-live":
+        pytest.skip("only the live report is the published benchmark")
+    assert set(report["workload"]["application_ids"]) == set(list_application_ids())
+
+
+# ---------------------------------------------------------------------------
+# 9. Verdict stability, and re-aggregating a committed report without re-spending
+# ---------------------------------------------------------------------------
+
+
+def test_verdict_stability_counts_matching_runs_not_distinct_values():
+    """'2 of 3 runs matched the pin' and 'no run matched' are different findings."""
+    runs = [_pipeline_run("APP-1005", rep) for rep in (1, 2, 3)]
+    runs[0].overall_risk_decision = "HIGH RISK"
+    runs[1].overall_risk_decision = "MEDIUM RISK"
+    runs[2].overall_risk_decision = "MEDIUM RISK"
+    report = _pipeline_report(runs, repetitions=3)
+    data = report["verdict_stability"]["per_application"]["APP-1005"]
+    assert data["expected_overall_risk_decision"] == "MEDIUM RISK"
+    assert data["observed_overall_risk_decisions"] == ["HIGH RISK", "MEDIUM RISK"]
+    assert data["n_runs_matching_expectation"] == 2
+    assert data["stable"] is False
+    assert report["verdict_stability"]["unstable_applications"] == ["APP-1005"]
+    assert "APP-1005" not in report["verdict_stability"][
+        "applications_never_matching_pinned_expectation"
+    ]
+
+
+def test_verdict_stability_flags_an_application_that_never_matched_its_pin():
+    runs = [_pipeline_run("APP-1003", rep) for rep in (1, 2, 3)]
+    for run in runs:
+        run.overall_risk_decision = "LOW RISK"
+    report = _pipeline_report(runs, repetitions=3)
+    stability = report["verdict_stability"]
+    data = stability["per_application"]["APP-1003"]
+    assert data["n_runs_matching_expectation"] == 0
+    assert data["stable"] is True, "stable and wrong are independent findings"
+    assert "APP-1003" in stability["applications_disagreeing_with_pinned_expectation"]
+    assert "APP-1003" in stability["applications_never_matching_pinned_expectation"]
+
+
+def test_verdict_stability_refuses_to_adjudicate_the_disagreement():
+    report = _pipeline_report([_pipeline_run()])
+    note = report["verdict_stability"]["note"]
+    assert "reported, not adjudicated" in note
+    assert "calibration judge" in note
+
+
+# -- re-aggregation is lossless and spends nothing ---------------------------
+
+
+def test_a_pipeline_run_round_trips_through_json_without_losing_a_measurement():
+    original = _pipeline_run(
+        "APP-1004",
+        2,
+        e2e_ms=39_231.0,
+        fanout_ms=33_850.0,
+        synthesis_ms=5_371.0,
+        specialist_walls={d: 8_000.0 + 500 * i for i, d in enumerate(DOMAINS)},
+    )
+    rebuilt = bench.pipeline_run_from_json(original.to_json())
+    assert rebuilt.application_id == original.application_id
+    assert rebuilt.repetition == original.repetition
+    assert rebuilt.e2e_wall_ms == pytest.approx(original.e2e_wall_ms)
+    assert rebuilt.fanout_wall_ms == pytest.approx(original.fanout_wall_ms)
+    assert rebuilt.sum_of_eight_ms == pytest.approx(original.sum_of_eight_ms)
+    assert rebuilt.parallel_speedup == pytest.approx(original.parallel_speedup)
+    assert rebuilt.cost_usd == pytest.approx(original.cost_usd)
+    assert rebuilt.slowest_specialist == original.slowest_specialist
+    assert [s.domain for s in rebuilt.specialists] == [s.domain for s in original.specialists]
+    assert [s.usage for s in rebuilt.specialists] == [s.usage for s in original.specialists]
+
+
+def test_a_degraded_run_round_trips_still_degraded_and_still_unpriced():
+    original = _pipeline_run(failed={"rings": "InternalServerException: 500"})
+    rebuilt = bench.pipeline_run_from_json(original.to_json())
+    assert rebuilt.failed_domains == ["rings"]
+    assert rebuilt.cost_usd is None
+    assert rebuilt.complete is False
+    assert rebuilt.failure_kinds == ["rings: server_5xx"]
+
+
+def test_reaggregation_reproduces_every_published_aggregate():
+    """Recomputing must not move a number, or the published one was not derivable."""
+    runs = [
+        _pipeline_run(f"APP-10{i:02d}", rep, e2e_ms=20_000.0 + 700 * (i + rep))
+        for i in range(1, 15)
+        for rep in (1, 2, 3)
+    ]
+    original = _pipeline_report(runs, repetitions=3)
+    rebuilt = bench.reaggregate_pipeline_report(json.loads(json.dumps(original)))
+    for key in ("end_to_end", "fan_out", "synthesis", "sum_of_eight_sequential_counterfactual"):
+        for stat in ("n", "min_ms", "p50_ms", "p95_ms", "max_ms", "mean_ms"):
+            assert rebuilt[key][stat] == pytest.approx(original[key][stat]), f"{key}.{stat}"
+    assert rebuilt["target"]["runs_under_target"] == original["target"]["runs_under_target"]
+    assert rebuilt["cost_per_adjudication_usd"]["p50"] == pytest.approx(
+        original["cost_per_adjudication_usd"]["p50"]
+    )
+    assert rebuilt["totals"]["runs"] == original["totals"]["runs"]
+
+
+def test_reaggregation_keeps_the_original_provenance_and_says_it_recomputed():
+    original = _pipeline_report([_pipeline_run()])
+    original["run"]["git_sha"] = "deadbeefcafe0000"
+    original["run"]["timestamp_utc"] = "2020-01-01T00:00:00+00:00"
+    rebuilt = bench.reaggregate_pipeline_report(json.loads(json.dumps(original)))
+    # The measurement's provenance must NOT be restamped with today's values.
+    assert rebuilt["run"]["git_sha"] == "deadbeefcafe0000"
+    assert rebuilt["run"]["timestamp_utc"] == "2020-01-01T00:00:00+00:00"
+    assert rebuilt["run"]["reaggregated_at_utc"] != original["run"]["timestamp_utc"]
+    assert any("recomputed from raw_runs" in c for c in rebuilt["caveats"])
+    assert any("No model was called" in c for c in rebuilt["caveats"])
+
+
+def test_reaggregate_cli_writes_in_place_without_a_live_gate(monkeypatch, tmp_path, capsys):
+    monkeypatch.delenv(bench.LIVE_ENV_GATE, raising=False)
+    source = tmp_path / "report.json"
+    source.write_text(json.dumps(_pipeline_report([_pipeline_run()])), encoding="utf-8")
+    assert bench.main(["--reaggregate", str(source)]) == 0
+    out = capsys.readouterr().out
+    assert "no model was called" in out
+    assert json.loads(source.read_text(encoding="utf-8"))["run"]["reaggregated_at_utc"]
+
+
+# -- the committed markdown summary must match the committed JSON ------------
+
+
+def test_the_committed_markdown_summary_matches_its_json_report():
+    """A README-pasteable summary that has drifted from its report is worse than none."""
+    for path in _committed_reports():
+        markdown_path = path.with_suffix(".md")
+        assert markdown_path.is_file(), f"{path.name} has no markdown summary beside it"
+        report = json.loads(path.read_text(encoding="utf-8"))
+        expected = bench.render_pipeline_markdown(report)
+        assert markdown_path.read_text(encoding="utf-8").strip() == expected.strip(), (
+            f"{markdown_path.name} has drifted from {path.name}; regenerate with "
+            f"`python -m evals.bench --reaggregate {path} --markdown {markdown_path}`"
+        )
+
+
+@pytest.mark.parametrize("path", _committed_reports(), ids=lambda p: p.name)
+def test_committed_report_speedup_is_recomputable_from_its_own_raw_runs(path):
+    report = json.loads(path.read_text(encoding="utf-8"))
+    for row in report["raw_runs"]:
+        walls = sum(s["wall_ms"] for s in row["specialists"])
+        assert row["sum_of_eight_ms"] == pytest.approx(walls, rel=1e-6), (
+            f"{path.name}: {row['application_id']} rep {row['repetition']} "
+            "sum-of-eight does not equal the sum of its own specialist walls"
+        )
+        if row["parallel_speedup"] is not None:
+            assert row["parallel_speedup"] == pytest.approx(
+                walls / row["fanout_wall_ms"], rel=1e-3
+            )
+
+
+@pytest.mark.parametrize("path", _committed_reports(), ids=lambda p: p.name)
+def test_committed_report_records_verdict_stability(path):
+    report = json.loads(path.read_text(encoding="utf-8"))
+    stability = report["verdict_stability"]
+    assert stability["n_applications"] == len(report["per_application"])
+    for app_id, data in stability["per_application"].items():
+        assert data["n_runs"] >= 1, app_id
+        if data["n_runs_matching_expectation"] is not None:
+            assert 0 <= data["n_runs_matching_expectation"] <= data["n_runs"], app_id

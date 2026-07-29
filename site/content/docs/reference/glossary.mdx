@@ -1,0 +1,274 @@
+---
+title: Glossary
+description: Every term this site uses that a reader could reasonably read two ways — the eight fraud dimensions and their persona names, band, grounding, calibration, critical path, mantle, tier, pinned expectation, and the words that mean different things at different layers.
+---
+
+*For both audiences. Ordered by what a newcomer hits first rather than alphabetically.*
+
+Terms marked **AMBIGUOUS** are ones where two sources in this engagement use the same word for
+different things, and those are the entries worth reading even if you know the domain.
+
+## Eight fraud dimensions
+
+Each specialist carries a persona name from the customer's own documents
+(`prompts.loader.AGENT_NAMES`), lifted from each prompt file's own header line.
+
+| Domain | Persona | Detects | Its anti-false-positive rule |
+|---|---|---|---|
+| `identity` | `ISAAC_IDENTITY` | SSN sharing, PII mismatch, identity volatility | Multiple alerts from one underlying data point count as **one** signal |
+| `dealer` | `DIANA_DEALER` | Dealer-**orchestrated** fraud | Default / EPD / consortium scores are portfolio risk, not fraud |
+| `straw` | `SAMMY_STRAW` | Proxy or nominee co-borrowers, role-switching | No co-borrower means the primary mechanism is absent |
+| `employment` | `EMILY_EMPLOYMENT` | Fabricated or shell employers | Missing employer fields are a data gap, not fraud |
+| `income` | `IRIS_INCOME` | Overstatement, inconsistent reporting | Under 15% variance is normal; self-employment explains variance |
+| `synthetic` | `SYLVIA_SYNTHETIC` | Fabricated identity plus manufactured credit | Thin files are legitimate for young adults and new immigrants |
+| `bustout` | `BRUCE_BUSTOUT` | Rapid velocity, unsustainable exposure | Geography alone must not move the classification |
+| `rings` | `RENEE_RINGS` | Shared identifiers, exact-unit reuse | Multi-unit housing and large employers explain overlap |
+
+**`MASTER_FRAUD_AGENT`** — the batch synthesizer. This id is **this port's**, derived from the prompt's
+header by joining its words with underscores. It is *not* a literal customer string, and the loader
+records that distinction so nobody quotes it back to her as hers.
+
+**Francis** — the *interactive* persona, in the customer's exact casing from
+`master_agent_orchestration_062026`. Deliberately **not** upper-cased: the only all-caps `FRANCIS` the
+customer ever writes is inside `RETRO_FRANCIS`, a separate retro system Francis must deflect to, so
+`FRANCIS` here would collide with the one name she must never answer as.
+
+**`RETRO_FRANCIS`** — the customer's separate retro-data system. Francis deflects retro questions to it
+rather than answering them.
+
+---
+
+## Bands and verdicts
+
+**AMBIGUOUS: the mid band has three names, and each is correct in its own place.**
+
+| Layer | Vocabulary for the mid band | Correct? |
+|---|---|---|
+| **Specialist** output | `POSSIBLE RISK`, between `LOW RISK` and `HIGH RISK` | Yes |
+| **Master adjudication** — `master_agent_prompt.txt`, the file that runs | `MEDIUM RISK`, between `LOW RISK` and `HIGH RISK` | Yes |
+| **The process-guide PDF** | `POSSIBLE RISK`, with **four** recommendation values | **Conflict** |
+
+First two rows are *both* right: a specialist bands with `POSSIBLE RISK`, the master adjudicates with
+`MEDIUM RISK`. Third is the [unresolved enum conflict](/docs/open-questions#the-enum-conflict). The
+prompt file wins here because it is the artifact that executes, and the conflict is surfaced to the
+customer rather than reconciled quietly.
+
+**band** — the risk classification a specialist declares, or the master's `overall_risk_decision`. On
+this site, "band agreement" always means agreement with a [pinned expectation](#pinned-expectation),
+never agreement between two models.
+
+**`recommendation_decision`** — one of `APPROVE` / `REVIEW AND APPLY STIPULATIONS` / `DECLINE` in the
+prompt file's three-value enum. The PDF's fourth value, **`MANUAL REVIEW`**, has no target in that enum
+and is the sharpest edge of the conflict.
+
+**flag** — a per-domain `int 0|1` in the adjudication, for example `identity_flag`. **Not** a
+restatement of the band. `MSTR-039` sets a flag to `1` only on clear, material, corroborated evidence,
+so **a domain can legitimately be `POSSIBLE RISK` with its flag at `0`** — and one fixture (APP-1014) is
+MEDIUM overall with all eight flags at `0`. A flag-counting implementation returns LOW on it.
+
+**adjudication** — the master synthesizer's output: **exactly 21 keys in the customer's order**,
+starting at `master_summary`. There is **no `application_id` key** — it travels in the transport
+envelope. See [Adjudication contract](/docs/fidelity/adjudication-contract).
+
+**fraud score** — a AnyCompany model output on the application, banded by the customer as
+`0–299` low, `300–699` medium, `700–998` high, `999` very high, where 999 means at least one fraud
+accelerator fired. **A score is not evidence**: four fixtures deliberately place it in a band that
+argues against the pinned outcome. It must also not be averaged, being standard-scaled, and must not be
+used to pre-filter investigation.
+
+**IncomePass** — the `income_misrep_score` field, indicating likely material income
+misrepresentation. **Distinct from the fraud score** (General Rule 20).
+
+---
+
+## Measurement vocabulary
+
+**pinned expectation** [#pinned-expectation] — the `expected` block on a fixture: the band, flag,
+requirement id and quoted customer rule recording what *should* come back. The requirement id, for
+example `EMP-017`, is the addressable unit of disagreement.
+
+**AMBIGUOUS: a pin disagreement is not automatically a model error.** When a model disagrees with a
+pin, either could be wrong. APP-1003 was perfectly *stable* across three runs and stably disagreed with
+its pin, and the benchmark's own caveat says whether the pin or the model is wrong is the customer's
+call. This site reports those disagreements and does not adjudicate them.
+
+**grounded_fraction** — the deciding metric of the cross-family study, and the one no judge touches.
+Every specialist prompt requires signals to be validated against the paired `<signal>_context` columns,
+and `grounded_fraction` is the share of the signals in an agent's view whose paired `_context` row is
+demonstrably used in the prose: **distinctive tokens are lifted out of the context rows and looked for
+in the text**, so "cites the context field" is evidence rather than the word *context* appearing
+somewhere.
+
+Measured per-analysis means (`evals/results/set_comparison.json`, 120 analyses): **Claude 0.642 vs GPT
+0.357**, over 48 and 72 analyses respectively, with GPT lower on **4 of 4** agents on both a mean and a
+median basis. Deterministic, invisible in the band, invisible in latency, invisible in cost. See
+[Cross-family study](/docs/model-selection/cross-family-study).
+
+**calibration** — how well a band follows the customer's own calibration text, scored 1–5 by a blind
+judge. **Subjective by construction**, and reported as such. Distinct from *band agreement*, which is
+deterministic. The judge's measured self-preference (+0.31 calibration) is the noise floor below which
+a calibration margin means nothing.
+
+**substance** — a judge score for *distinct grounded evidence*, explicitly **not length**. The
+customer's own master prompt supplies the reason (`MSTR-018`): the amount of analysis written does not
+necessarily indicate fraud severity.
+
+**padding** — output length not carrying additional distinct evidence. Measured by pairing on identical
+payloads, pooled across the four swept agents: Opus writes **2.95×** Luna's characters while naming only
+**1.08×** the payload's signals, and the two agree on band in **23 of 24** pairs. So the length gap is
+padding rather than lost evidence.
+
+**anti-false-positive fixture** — a record built to *look* bad and resolve LOW anyway, isolating one
+rule the customer states as an explicit exception. **Five are designated** (`ANTI_FP_APPS`: APP-1006 …
+APP-1010); **four more are embedded** in records that are not themselves LOW overall, where a single
+domain must clear independently. See [Fixtures](/docs/reference/fixtures).
+
+**false positive / false negative** — in the judges' vocabulary: escalating something the customer's
+rules call benign, or clearing something the rules say should have been escalated. The customer's
+stated quality goal is reducing false positives, which is why the study weights anti-FP escalation
+above every other axis.
+
+**critical path** — the specialist that was the **slowest in a given run**. Because `asyncio.gather`
+cannot return before its slowest member, the distribution of slowest-specialist wall clock *is* the
+fan-out floor. `rings` owned it in **25 of 42** runs.
+
+**AMBIGUOUS: the agent that owns the median is not the agent that produces the tail.** `rings` sets the
+p50 at 20.96 s, the highest of the eight. The two runs that crossed 60 s were owned by `bustout`
+(69.78 s) and `income` (66.01 s), so **shaving `rings` alone would not have fixed either**. See
+[Critical path](/docs/performance/critical-path).
+
+**stall** — in `evals/tail_analysis.py`, a **single specialist** call crossing 60 s. Not an outlier
+rule: it is the customer's sub-minute target applied to one agent, because one specialist consuming the
+whole budget is a different physical event from a verbose one. The two stalls in the sample generated at
+**16.1 and 4.7 output tok/s** against a **65.50 tok/s p50** over the 332 calls under the threshold
+(`evals/results/tail_analysis.json`).
+
+**sequential counterfactual** (`sum_of_eight_ms`) — the sum of the eight specialists' own measured wall
+clocks in a run. **The terms are measured; the arrangement is hypothetical.** It is what eight calls
+would cost one after another *only if* each took the same time alone.
+
+**parallel speed-up** — fan-out wall clock divided by that counterfactual, **one ratio per run** (p50
+3.64×, n=42). Reported as a distribution because the fan-out is bounded by its slowest dimension, so
+the ratio moves with which specialist ran long.
+
+**refused percentile** — `null` in the JSON *with the reason beside it*, not an omission and never a
+substituted number. p50 needs 5 samples, p95 needs 20, p99 needs 100. `n/a` in a table means refused,
+never zero.
+
+**degraded run** — an adjudication that lost one or more specialists and still validated its 21 keys. It
+**stays in the latency distribution**, because it really took that long, and **leaves the cost
+distribution**, because eight priced calls presented as a nine-call total is an under-count wearing a
+total's name. That is why end-to-end is n=42 and cost is n=41.
+
+---
+
+## Platform vocabulary
+
+**mantle** / **bedrock-mantle** — the Amazon Bedrock endpoint serving OpenAI models through the OpenAI
+Responses API, at `bedrock-mantle.{region}.api.aws`. **Not** Converse: GPT-5.x is not on Converse at
+all. Needs the separate IAM action `bedrock-mantle:CreateInference`, a **bearer token** rather than
+SigV4 request signing, and the base URL path `/openai/v1`, since `/v1` on the same host serves only the
+open-weight `gpt-oss` family. See [GPT-5.6 on bedrock-mantle](/docs/platform/bedrock-mantle).
+
+**tier** — this port's `light` / `mid` / `heavy` grouping, which sets `max_tokens` (3072 / 4096 / 4096)
+and the default model per group.
+
+<Callout type="error" title="AMBIGUOUS: 'tier' does not mean 'saves money'">
+Haiku→Sonnet is a **$2/$10-per-MTok step down** and Sonnet→Opus is the **identical step up**, so at
+equal token counts one LIGHT agent funds exactly one HEAVY agent. Tiering saves **$0.00 structurally**,
+and a test asserts the arithmetic so the claim cannot return. The measured 20.13% saving was
+**entirely** Sonnet 5's introductory rate, which reverts on **2026-09-01**. See
+[Cost levers](/docs/cost/levers).
+
+There is also **no HEAVY agent left** — `synthetic` and `rings` moved off Opus 5 on 2026-07-28 — so the
+current shape is two cheap agents and six standard, and what remains is simply not paying Opus rates
+for output that measured no better.
+</Callout>
+
+**inference profile prefix** — `global.*` or `us.*` on a Claude model id. Same weights, same API; `us.*`
+bills at exactly **1.10×** on every rate category. A policy allowing only `us.anthropic.*` silently
+forbids the cheaper one.
+
+**effort** — the reasoning-effort control. On Claude via Converse:
+`additional_request_fields={"output_config": {"effort": "low"}}`. On mantle:
+`reasoning={"effort": …}`, where `temperature` / `top_p` / `top_k` are **ignored**.
+
+**cache-write tokens** — input tokens written to a prompt cache. Billed at **1.25×** the input rate on
+GPT-5.6 and on Claude. Omitting the term under-reported a measured Luna call by **62%**, because with
+implicit caching on and a large prompt most of the input lands in that class.
+
+**minimum cacheable prefix** — the prompt size below which a cache point silently never engages. **Not
+monotonic across generations**: Opus 5 = 512, Sonnet 5 / Sonnet 4.6 / Opus 4.8 = 1024, **Haiku 4.5 =
+4096**. No error, no warning, permanent 0% hit rate. Against 547–956-token specialist prompts, prompt
+caching engages on **0 of 8** agents. See [Cost: what does not work](/docs/cost/what-does-not-work).
+
+**signal** vs **`_context`** — a signal is a precomputed numeric or boolean value
+(`address_reuse_distinct_ssn_count = 96`). Its `_context` row is the paired explanatory field, for
+example a 240-unit apartment complex. **The benign explanation lives only in the context row**, which
+is why `grounded_fraction` is the metric that separates a real reading from a fluent one.
+
+**`DomainView`** — exactly what one specialist is entitled to: its own signals, their context, its own
+alerts. There is no data tool on the agent side, so this object is the **complete universe** the
+specialist reasons over.
+
+**`SignalPayload`** — the whole-application object: core fields, eight `DomainView`s,
+`guardrails_applied` (General Rule **ids**, not prose), `semantic_layer_rev`, `computed_at`.
+
+**guardrail** — **ambiguous by platform**. In this repo it means a numbered **General Rule** from the
+customer's orchestration documents, enforced in `signal_layer/`. On AWS it also names a **Bedrock
+Guardrail**, a platform feature this repo does **not** configure — no rule here relies on one as its
+only enforcement layer.
+
+**General Rule** — one of **29** numbered rules repeated across all eight orchestration documents. **27
+are enforced by deterministic code; 2 are prompt-enforced** interpretive guidance. See
+[General Rules coverage](/docs/fidelity/general-rules).
+
+**requirement id** — the addressable label this port assigns to a single obligation in a customer
+prompt: `IDEN-014`, `EMP-017`, `MSTR-039`, `STRW-008`, `XAG-003`. The `MSTR-*` prefix is the master
+prompt; `XAG-*` is a rule appearing across agents. Every fixture pin and every golden assertion cites
+one, so a disagreement lands on a specific sentence.
+
+**alert category** — one of the **ten** groupings in General Rule 3. **166 entries, 148 distinct ids, 18
+ids in more than one category** — the overlap is the customer's, not a data error. Alerts 31–39 are
+explicitly disregardable.
+
+**`SIGNAL_MODE`** — the proposed flag on the Lambda Gateway target (`cortex` | `aurora`) that makes
+live-Cortex and precomputed-Aurora one config change. See
+[Semantic layer question](/docs/platform/semantic-layer).
+
+---
+
+## Two words to use carefully in front of this customer
+
+<Callout type="warn" title="'measured' and '1:1' both have a narrow meaning here">
+**measured** means: a real call happened, the number came from that call's own reported telemetry, and
+the artifact naming the run is cited. Anything else is labelled **PROJECTION**, **NOT MEASURED**, or
+**the customer's own figure, by attribution**. Their reported figures — 4,500 applications taking over
+48 hours, $700K–$1M projected annual Snowflake AI spend — are **theirs**, and must never appear beside
+one of ours as though both were measured the same way, because this repo has never run their Snowflake
+pipeline and cannot.
+
+**1:1** means the **prompts and the output contracts are the customer's, byte for byte** — not
+"equivalent in intent". The phrase *verbatim in intent* appeared in the pre-port code's own docstring
+while that code had rewritten all nine prompts, so it is a phrase to avoid entirely.
+</Callout>
+
+## Still unknown
+
+**Three terms here are ours rather than hers, and are labelled as such where they appear**:
+`MASTER_FRAUD_AGENT`, every `requirement id`, and the `light`/`mid`/`heavy` tier names. If the customer
+uses different labels internally, these are the ones to reconcile — none of them changes behaviour, and
+all three appear in artifacts she may read.
+
+<Cards>
+  <Card
+    title="Signal layer"
+    href="/docs/reference/signal-layer"
+    description="Where signals, context, views and bands are actually defined."
+  />
+  <Card
+    title="Artifact index"
+    href="/docs/reference/artifact-index"
+    description="Every committed measurement file, its n, its spend, and what it can support."
+  />
+</Cards>

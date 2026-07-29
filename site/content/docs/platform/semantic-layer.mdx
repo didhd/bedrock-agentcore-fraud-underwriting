@@ -1,0 +1,184 @@
+---
+title: Semantic layer question
+description: What is fictional in the original Cortex Analyst MCP design, what Snowflake's managed MCP server actually is, the Lambda Gateway target recommendation, and the latency argument for precomputing signals.
+---
+
+*For the customer's engineer and for the account team. This page corrects a design still committed in this repository.*
+
+Keeping the Cortex semantic layer is possible; the integration described in this repo's own
+`docs/semantic-layer-mcp.md` is not. That file and `tools/cortex_analyst_mcp.py` describe an MCP
+call that does not exist as written, and neither has been rewritten yet — both are on the cleanup
+list, and this page is the accurate statement.
+
+## Recommended shape
+
+<Mermaid
+  title="Lambda Gateway target with a SIGNAL_MODE flag"
+  chart={`
+flowchart LR
+  A["Agents<br/>no data tools"] --> G["AgentCore Gateway<br/>SigV4 inbound"]
+  G --> L["Lambda signal resolver<br/>SIGNAL_MODE"]
+  L --> C["Snowflake Cortex<br/>PAT header, two calls"]
+  L --> D["Aurora PostgreSQL<br/>precomputed signals"]
+`}
+/>
+
+Signals are computed **before** the agents run, so the Gateway leg is not on the per-application
+agent path at all. `SIGNAL_MODE` is a flag on a function, which makes live-Cortex and
+precomputed-Aurora one config change rather than a rearchitecture.
+
+## What the customer will ask
+
+Their stated concern, recorded in `docs/semantic-layer-mcp.md`, is that the hard part of this
+migration is not porting the agents but replicating the SQL guardrails built into the Cortex
+semantic layer. Those guardrails encode institutional knowledge: join rules, lender name
+normalisation, fake-record exclusion, never surfacing a raw SSN, the alert groupings, product-code
+decoding, active-dealer filtering, invalid-credit-value handling.
+
+That concern is correct, and this port answers it two ways. The 29 numbered General Rules are
+[implemented as tested code](/docs/fidelity/general-rules), 27 of 29 deterministically; and the
+semantic layer itself can be **kept** rather than rebuilt. What follows is what is actually possible
+on the second option.
+
+## Four claims in the original design that do not hold
+
+<Callout type="error" title="Ship any of these and the failure lands after the Gateway target is already built">
+**1. `cortex_analyst_query(semantic_view=…, question=…)` does not exist as written.** That tool name
+and argument shape are invented. Snowflake's managed MCP server has **user-defined** tool names —
+the fixed part is `type: "CORTEX_ANALYST_MESSAGE"` — the tool takes a single `message` argument, and
+the semantic view is **bound server-side** rather than passed per call. The
+`arguments={"semantic_view": …, "question": …}` in `tools/cortex_analyst_mcp.py::_live_retrieve`
+would not be accepted. Symptom: a `tools/call` failing on an unknown tool name or on unexpected
+arguments.
+
+**2. Cortex Analyst `/message` returns generated SQL, not rows.** A second call is needed to execute
+it. That module's mock envelope returns `signals` and `context` populated alongside `generated_sql`,
+which is a **two-call** interaction presented as one. Any latency or architecture estimate built on
+the one-call shape is wrong by a round trip plus a warehouse execution.
+
+**3. SigV4 outbound auth to Snowflake is impossible.** The diagram in that file shows
+`AgentCore Gateway --(SigV4 / OAuth)--> Snowflake`. Only **AgentCore Gateway/Runtime, API Gateway
+and Lambda Function URLs** verify SigV4. Snowflake does not. SigV4 authenticates *to* AWS; it is not
+a credential Snowflake can check.
+
+**4. It is presented as the recommended posture.** Snowflake's own official AgentCore guide uses an
+**OpenAPI** Gateway target with a PAT as an API-key header, not an MCP target.
+</Callout>
+
+## What Snowflake's managed MCP server actually is
+
+| Aspect | Reality |
+|---|---|
+| Tool names | **User-defined.** The fixed element is the tool `type: "CORTEX_ANALYST_MESSAGE"` |
+| Arguments | A single `message` |
+| Semantic view | **Bound server-side** in the server's configuration, not selected per call |
+| Semantic model support | **Views only.** A stage-based semantic model YAML is not supported by the managed server |
+| `/message` response | The **generated SQL**. Executing it is a separate call |
+| Auth | Not SigV4. A PAT or OAuth token, presented as a header |
+
+**One unanswered question gates the whole "keep the semantic layer over MCP" option: is their Cortex
+Analyst backed by a semantic VIEW or a stage-based semantic model YAML?** The managed server
+supports views only. If theirs is a stage-based YAML, the managed form of this option does not exist
+and the conversation becomes the OpenAPI path or porting. See
+[Open questions](/docs/open-questions).
+
+## Why a Lambda target rather than an MCP target
+
+Three shapes were considered, and the differences are not stylistic.
+
+| Concern | Lambda Gateway target (recommended) | MCP Gateway target to Cortex | Data tool on the agent | Verdict |
+|---|---|---|---|---|
+| Two-call Cortex interaction | ordinary code inside the function | a second agent turn | a second agent turn | **Lambda** |
+| Live-Cortex vs precomputed swap | one env var, `SIGNAL_MODE` | rebuild the target | rewrite the agent | **Lambda** |
+| Does the agent get a data tool? | **No** | yes | yes — and every specialist prompt forbids the agent from querying | **Lambda** |
+| Outbound auth | PAT/OAuth from AgentCore Identity, no secret in the image | same credential problem, fewer places to put it | credential reaches the agent | **Lambda** |
+| Where governed SQL lives | in Snowflake, single source of truth | in Snowflake | ambiguous | Lambda or MCP |
+| Trust boundary | no Snowflake credential on the agent side | no credential on the agent side | **credential on the agent side** | **not the agent** |
+
+Auth on the recommended path works because each leg uses the mechanism it actually supports. The
+runtime fetches the Snowflake PAT or OAuth token through an AgentCore Identity credential provider
+(`bedrock-agentcore:GetResourceApiKey` / `GetResourceOauth2Token`, plus
+`secretsmanager:GetSecretValue` on the `bedrock-agentcore-identity!` prefix), so **no secret is baked
+into the image** — those statements already exist in `deploy/iam_policy.json`'s
+`runtimeExecutionRole`. The Gateway leg is SigV4, which is the leg SigV4 works on.
+
+One open dependency on the customer's side: AWS publishes no stable Gateway egress IP ranges, so if
+their Snowflake account enforces network policies by IP, the outbound leg may need PrivateLink.
+Better asked now than discovered at cutover.
+
+## The latency argument for precomputing signals [#the-latency-argument-for-precomputing-signals]
+
+Whether the semantic layer stays *on the per-application hot path* is a different question from
+whether it stays at all, and their own architecture already answered it: their process guide (§2.2)
+says signals exist to ease review and cut processing time by preventing the agents from re-issuing
+the same SQL for every application. The split this port implements is theirs.
+
+Three reasons the hot path should not contain text-to-SQL:
+
+**1. The queries are known at design time.** For a *fixed* set of fraud signal groups — exactly what
+the eight specialists consume — regenerating SQL per application buys nothing.
+Natural-language-to-SQL earns its cost on ad-hoc investigation, which is the interactive Francis
+path rather than the batch underwriting path.
+
+**2. It removes 16 per-application operations.** Precomputing eliminates **8 Cortex Analyst messages
+and 8 warehouse executions per application** from the hot path. That is often more persuasive to the
+customer's leadership than any latency figure, because it is a Snowflake-side consumption reduction
+visible on their own bill.
+
+**3. The measured budget has no room for it.**
+
+| Measurement | Value | n |
+|---|---|---|
+| End-to-end adjudication, agents only, p50 | **31.45 s** | 42 |
+| Same, p95 | **46.55 s** | 42 |
+| Runs under the customer's 60 s target | **40 of 42** | 42 |
+| Slowest single specialist observed | 69.78 s (`bustout`) | 336 calls |
+| Headroom to 60 s at the median | 28.6 s | — |
+| Headroom to 60 s at p95 | 13.5 s | — |
+
+Source: `evals/results/pipeline_14x3_us-east-1.json`.
+
+Be precise about what that budget covers. The artifact's own caveat records that `build_payload`
+runs **outside** the timed window, because the customer's architecture precomputes signals, so an
+end-to-end figure here is agent latency and not pipeline-including-ETL latency. Correct statement:
+the measured 31.45 s p50 is agent latency with signals already available, and the remaining headroom
+is the two rows above.
+
+## Still unknown
+
+**Cortex Analyst latency has never been measured here.** This repo has never run the customer's
+Snowflake pipeline and cannot, so any figure for what Analyst adds per call would be invented and
+none appears anywhere on this site. What can be said is structural: whatever that number is, it is
+paid **8 times per application** on the hot path and **zero times** if signals are precomputed, and
+the p95 headroom above is 13.5 s.
+
+Also still unknown, and it is the blocker: whether their semantic layer is a view or a stage-based
+YAML.
+
+## What the two stale files still say
+
+For the engineer reading the repository alongside this site, so nothing is a surprise.
+
+| File | Status |
+|---|---|
+| `docs/semantic-layer-mcp.md` | **Stale.** Carries the invented tool signature, the one-call rows assumption, and the SigV4-to-Snowflake diagram. Correct on the layer-separation argument; wrong on the integration |
+| `tools/cortex_analyst_mcp.py` | **Stale.** Its `MOCK_MODE` envelope is a useful shape for the demo; its `_live_retrieve` calls the fictional tool |
+| `signal_layer/` | **Current.** This is the layer that runs, and it is backend-agnostic by construction |
+
+Read the mock module for what it gets right: it demonstrates *the envelope the analysis layer
+consumes* — semantic view, question, generated SQL, guardrails applied, signal rows — which is
+genuinely backend-agnostic and is the right seam. Only the live call on the other side of that seam
+is wrong.
+
+<Cards>
+  <Card
+    title="Signal layer"
+    href="/docs/reference/signal-layer"
+    description="The registry, the per-domain projection, and what is reconstructed rather than received."
+  />
+  <Card
+    title="General Rules coverage"
+    href="/docs/fidelity/general-rules"
+    description="The 29 numbered rules — 27 enforced deterministically, 2 prompt-enforced."
+  />
+</Cards>

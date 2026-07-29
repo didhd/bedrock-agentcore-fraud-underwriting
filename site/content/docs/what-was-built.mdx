@@ -1,0 +1,207 @@
+---
+title: Component detail
+description: Each piece of the port — the eight specialists and their anti-false-positive rules, the 60-signal registry, the fan-out, the synthesizer, the two entrypoints, and the repository map.
+---
+
+*For the customer's engineer, and for anyone who has read [Architecture overview](/docs/architecture) and now wants the parts list.*
+
+Nine agents, one signal registry, two runtime entrypoints. This page is the component
+inventory; the system-level picture and the request lifecycle live on
+[Architecture overview](/docs/architecture), and every number lives on
+[Measured results](/docs/measured-results).
+
+## What "1:1" means here
+
+**Prompts and output contracts are the customer's, byte for byte** — not "equivalent in
+intent". Prompt text loads from git-ignored `prompts/verbatim/` under sha256 verification and
+the port never rewrites it. Fidelity is the product, because the person reviewing this wrote
+the originals. See [Prompt fidelity](/docs/fidelity/prompt-fidelity).
+
+## Eight specialists
+
+Each carries a persona name from the customer's own documents
+(`prompts.loader.AGENT_NAMES`) and an anti-false-positive rule its prompt requires it to
+honour. Reducing false positives is her stated quality goal: six of the eight prompts say
+outright that LOW should be the most common outcome — `bustout` and `rings` do not.
+
+| Specialist | Persona | Detects | Anti-false-positive rule it must honour |
+|---|---|---|---|
+| identity | `ISAAC_IDENTITY` | SSN sharing, PII mismatch, identity volatility | Multiple alerts from one underlying data point count as one signal |
+| dealer | `DIANA_DEALER` | Dealer-*orchestrated* fraud | Default / EPD / consortium scores are portfolio risk, not fraud |
+| straw | `SAMMY_STRAW` | Proxy or nominee co-borrowers, role-switching | No co-borrower means straw risk is inherently minimal |
+| employment | `EMILY_EMPLOYMENT` | Fabricated or shell employers | Missing employer fields are a data gap, not fraud |
+| income | `IRIS_INCOME` | Overstatement, inconsistent reporting | Under 15% variance is normal; self-employment explains variance |
+| synthetic | `SYLVIA_SYNTHETIC` | Fabricated identity plus manufactured credit | Thin files are legitimate for young adults and new immigrants |
+| bustout | `BRUCE_BUSTOUT` | Rapid velocity, unsustainable exposure | Geography alone must not move the classification |
+| rings | `RENEE_RINGS` | Shared identifiers, exact-unit reuse | Multi-unit housing and large employers explain overlap |
+
+## Signal registry [#the-signal-registry]
+
+`signal_layer/registry.py` is the contract every other layer resolves names through. Read from
+the module at import:
+
+| | Count |
+|---|---|
+| Signals in `SIGNAL_OWNER` | **60** |
+| Signals owned by exactly one domain | 55 |
+| Signals legitimately shared by two domains (`SHARED_SIGNALS`) | **5** |
+
+Per-domain ownership: dealer 14, synthetic 10, straw 8, employment 8, identity 7, income 7,
+bustout 5, rings 1. Rings owns one name of its own because most of what it reasons over is
+shared with identity — the three `*_reuse_distinct_ssn_count` signals.
+
+**Near-duplicate names are both materialised, never aliased.** Her prompts spell the same
+*concept* differently in different domains, and collapsing those spellings silently degrades
+whichever agent uses the other name. So `employer_other_ssns_count` (rings) and
+`employer_distinct_other_ssns_count` (employment) are separate keys; so are `phone_ssn_count`
+(synthetic) and `phone_reuse_distinct_ssn_count` (identity, rings); so are
+`ssn_income_increase_20_percent_or_more` (income) and
+`ssn_income_increased_20_percent_last_30d_rapid_growth` (bustout). A specialist handed a signal
+its prompt never mentions is being invited to reason about something it has no interpretation
+for.
+
+<Callout type="error" title="The registry is reconstructed, not received">
+`full_underwriting_signal_dictionary.xlsx` — the authoritative signal contract — was **never
+received**. It appears only as an embedded thumbnail on page 3 of the process-guide PDF, with
+zero extractable attachments. `CLEAN_MAIN_STREAM_FILE.sql` was likewise never received. So the
+60-signal registry is **reconstructed from the nine prompts**, and that is the correct thing to
+say to the customer rather than presenting it as the signal set.
+[Open questions](/docs/open-questions#4-the-artifacts-we-never-received).
+</Callout>
+
+## Fan-out
+
+`agents/fanout.py` runs `asyncio.gather` over **eight freshly constructed Strands `Agent`
+instances**, one per domain, each on its own configured model. End to end is therefore
+*slowest specialist + synthesis*, not the sum of eight.
+
+<Mermaid
+  title="Fan-out and degradation paths"
+  chart={`
+flowchart LR
+  IN["DomainView x 8"] --> G["asyncio.gather"]
+  G --> OK["7-8 analyses return"]
+  G --> F["1+ specialist fails"]
+  OK --> SY["Synthesis"]
+  F --> SY
+  F --> W["agent_failed frame, non-terminal"]
+  SY --> AD["Adjudication, 21 keys"]
+`}
+/>
+
+Three design constraints behind that, none of them stylistic:
+
+| Constraint | Consequence if ignored |
+|---|---|
+| A Strands `Agent` cannot be invoked concurrently | `ConcurrencyException`. A fresh `Agent` per invocation is mandatory, never module-level |
+| `strands.multiagent.GraphBuilder` is the wrong primitive | Rejected on four grounds, including fail-fast on any node error where this pipeline needs 7-of-8 degradation |
+| `BedrockModel` defaults to `max_pool_connections=10` | A hard ceiling on an eight-way fan-out; and supplying `boto_client_config` silently drops Strands' `read_timeout=120` back to botocore's 60 |
+
+Full failure modes: [Strands Agents SDK](/docs/platform/strands).
+
+**Graceful degradation is designed in.** A failing specialist does not fail the adjudication,
+and the 42-run benchmark contains a live demonstration: APP-1011 repetition 3 lost both
+`synthetic` and `rings` to `server_5xx`, finished in **21.2 s** — a 5xx fails fast, so it costs
+a fraud dimension rather than time — and **still validated all 21 keys**.
+
+## Synthesizer
+
+`agents/synthesize.py` substitutes the eight analyses into the customer's verbatim master
+prompt's own placeholders, in her input order — `IDENTITY, DEALER, STRAW, EMPLOYMENT, INCOME,
+SYNTHETIC, BUSTOUT, RINGS`, deliberately **not** alphabetical (`prompts.loader.DOMAINS`) — and
+emits the 21-key `Adjudication` via Strands' `structured_output_model=` kwarg with one bounded
+repair attempt.
+
+Across the 42 benchmark runs, `repair_attempts` totalled **0**.
+
+It runs on **GPT-5.6 Luna** via the `bedrock-mantle` endpoint: the one place a non-Claude model
+earned its slot on a measurement, and that measurement has
+[its own page](/docs/model-selection/synthesizer).
+
+## Two runtime entrypoints
+
+| Entrypoint | Path | Shape |
+|---|---|---|
+| Batch underwriting | `app/underwriter/main.py` | Async-generator `@app.entrypoint` → SSE. Fan-out then synthesis, streaming each specialist as it completes. |
+| Interactive router ("Francis") | `app/francis/main.py` | Eight specialists as `@tool` wrappers, with the customer's **maximum-2-tools-per-query** cap. |
+
+Francis carries her own behavioural contract, all of it from
+`master_agent_orchestration_062026` — a different artifact from `master_agent_prompt.txt`, the
+former being the interactive router and the latter the batch synthesizer.
+
+| Rule | Where it comes from |
+|---|---|
+| Never identify as Claude; always refer to herself as Francis | The prompt's opening lines |
+| Deflect RETRO questions to `RETRO_FRANCIS` | Named explicitly in the prompt |
+| **Call a MAXIMUM of 2 tools per query**, picking the 2 most relevant | The prompt's `SPEED OPTIMIZATION` clause |
+| Response shaped `## EXECUTIVE SUMMARY` / `## ANALYSIS` / conditional `###RECOMMENDATIONS` | The same document's `instructions.response` block |
+| No unsolicited loan recommendations | The prompt's closing line, and separately General Rule 12 |
+
+<Callout type="warn" title="Three runtime gotchas that produce silent or confusing failures">
+`@app.entrypoint`'s second parameter must be **literally named `context`** or it is not
+injected and every request raises `TypeError`. An async-generator entrypoint returns SSE
+automatically — never hand-format it. And exceptions raised mid-stream arrive as a terminal
+`data: {"error": ...}` frame **after HTTP 200**, so a client checking only the status code
+reports success on a failed run. Full list:
+[Runtime contract](/docs/platform/agentcore-runtime).
+</Callout>
+
+## Model assignment as it stands
+
+From `agents/models.py:SPECIALIST_MODELS` and `DEFAULT_SYNTHESIZER_MODEL`, read from the
+module:
+
+| Role | Model | max_tokens |
+|---|---|---|
+| dealer, straw | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | 3072 |
+| identity, employment, income, synthetic, bustout, rings | `global.anthropic.claude-sonnet-5` | 4096 |
+| master synthesizer | `openai.gpt-5.6-luna` (`bedrock-mantle`) | 4096 |
+
+**No Opus 5 agent remains.** `synthetic` and `rings` were on Opus 5 until 2026-07-28, because a
+reading of the customer's prompts said fraud rings needs heavy multi-signal reasoning.
+Measurement contradicted that on both, and the correction is recorded rather than quietly
+applied: [Tier re-derivation](/docs/model-selection/tier-rederivation).
+
+One consequence to state before anyone quotes a figure: **the 42-run pipeline benchmark ran
+under the previous assignment**, recording `synthetic` and `rings` on
+`global.anthropic.claude-opus-5`. Its latency and cost figures describe that older assignment.
+The new assignment's end-to-end cost is a [projection, labelled as one](/docs/cost/levers),
+until `evals/bench.py --pipeline` is re-run.
+
+## Repository map
+
+```
+prompts/verbatim/        byte-identical customer prompts (9) + orchestration docs (9)
+prompts/loader.py        sha256-guarded loading; raises PromptIntegrityError on drift
+signal_layer/
+  registry.py            60 signals: owner domain(s), the customer's verbatim thresholds
+  schema.py              SignalPayload / DomainView / AlertFinding / render_for_agent
+  alert_categories.py    the ten alert-ID categories (166 entries, 148 distinct IDs)
+  bands.py               fraud-score and dealer-score bands, PRODUCT decode, credit validity
+  rules/                 one module per numbered General Rule + catalog.py coverage table
+agents/
+  models.py              per-agent model assignment, rationales, recorded usage
+  pricing.py             real rate card: global vs us. prefix, cache and batch rates
+  mantle.py              GPT-5.6 on bedrock-mantle; the measured latency matrix
+  fanout.py              asyncio.gather over 8 fresh Agents, per-agent real usage capture
+  contracts.py           Adjudication: exactly 21 required fields, the customer's order
+  output_contract.py     which output rule applies to which agent, derived from the prompts
+  synthesize.py          structured-output synthesis off the verbatim master prompt
+app/underwriter/main.py  AgentCore Runtime entrypoint — batch fan-out + synthesis (SSE)
+app/francis/main.py      AgentCore Runtime entrypoint — interactive router, 8 agents-as-tools
+fixtures/                14 applications with full signal coverage, _context, alerts_fired
+evals/bench.py           the ONLY code allowed to publish latency or cost
+evals/results/           the artifacts every number on this site is quoted from
+ui/                      Vite + React + Tailwind + shadcn/ui customer-facing demo
+agentcore/               agentcore.json + aws-targets.json for the real CLI
+```
+
+**1,238 offline tests** are collected by `MOCK_MODE=1 python3 -m pytest tests/`.
+
+## Still open at the component level
+
+- `app/runtime_support.py::build_signal_payload` reads fixtures. Replacing its body with a
+  Cortex or Aurora read is the whole data-layer migration; nothing above it changes.
+- No Gateway or Lambda resource exists yet — `agentcore/aws-targets.json` ships as `[]`.
+- `income`, `employment`, `dealer` and `straw` carry **no judged quality evidence** in either
+  study. [Open questions](/docs/open-questions).

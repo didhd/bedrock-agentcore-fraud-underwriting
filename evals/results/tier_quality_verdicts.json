@@ -1,0 +1,859 @@
+{
+ "schema": "pointpredictive.agentcore.tier-quality-verdicts/1",
+ "description": "blind judge verdicts keyed by domain|model|application, kept so a failed judge call can be retried without re-paying the successes",
+ "judge_model": "global.anthropic.claude-opus-5",
+ "verdicts": {
+  "rings|global.anthropic.claude-haiku-4-5-20251001-v1:0|APP-1004": {
+   "verdict": {
+    "band_read_from_analysis": "HIGH RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 4,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 3,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Document title/header block (\"# FRAUD RING DETECTION ANALYSIS\"), risk label embedded in a header (\"## RISK CLASSIFICATION: **HIGH RISK**\", \"IDENTITY INCONSISTENCY (Alert #4 - CRITICAL)\"), and numeric alert citations throughout (Alert #4, #66, #104). No emoji. Length inflated by a repeated-findings table plus a \"WHY THIS IS HIGH RISK\" recap.",
+    "justification": "Band is right and largely for the right reasons: it validates each priority signal against paired context (\"5 of 6 at exact same unit, unrelated surnames, all 90d recent\"; \"3 of the 9 share the borrower's phone number\"; \"7 of 9 ... same dealer\") and explicitly rejects the named benign explanations (\"not explained by normal multi-unit housing variation\", household/employment). That is the exact-unit reuse plus multi-identifier convergence RNG-014 asks for. Marked down because it also leans on out-of-domain corroboration the anti-FP rules exclude \u2014 consortium volume of 1,180 apps as \"velocity\", LTV 112%, fraud score 999, income score 71 \u2014 and because the four counts are restated in Section 2, Section 6, the table, and the recap, presenting one behaviour set as repeated corroboration."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.07071
+  },
+  "rings|global.anthropic.claude-sonnet-5|APP-1004": {
+   "verdict": {
+    "band_read_from_analysis": "HIGH RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Risk band embedded in the title header (\"## Fraud Ring Risk Analysis: HIGH RISK\"); numeric alert IDs cited in section headers (\"Alert 4\", \"Alert 104\", \"Alert 64\"); \"Additional Risk Amplifiers\" imports LTV 112% / \"financial exposure\", which is credit rather than fraud reasoning.",
+    "justification": "Band matches RNG-014 and is reached for the right reasons: it validates each signal against context rather than the raw count \u2014 \"5 of 6 are at the same unit number ... no shared surnames, all first seen within 90 days\", \"7 of those applied at the same dealer ... 3 also share the borrower's phone\". It explicitly names and defeats the benign explanations the prompt protects (apartment complex, family household, large-employer SSN counts) and rests on four independent categories plus two non-network identity alerts, not alert volume. Deductions: \"Why This Exceeds Normal Variation\" and the Conclusion largely restate findings 3\u20135 and echo the framework's own language, and the LTV/exposure amplifier is portfolio risk, not fraud corroboration."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.07184
+  },
+  "rings|global.anthropic.claude-opus-5|APP-1004": {
+   "verdict": {
+    "band_read_from_analysis": "HIGH RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Prompt says \"Return only final analysis\"; output adds a document title, a bolded \"VERDICT: HIGH RISK\" header line, and a 6-item recommended-actions block (SAR filing, dealer suspension) beyond analysis. Numeric alert IDs cited verbatim (\"alert 66\", \"alert 64\", \"Alert 4\", \"Alert 104\"). Heavy markdown tables/bold; no emoji.",
+    "justification": "Band matches RNG-014 and for the right reasons. Each primary signal is validated against paired context, not asserted: address reuse is \"5 of 6 SSNs at the same unit number... no shared surnames\" (exact-unit, the customer's own carve-out), phone reuse \"5 different surnames, 4 first seen in last 90 days\" plus same-dealer convergence, email \"4 different surnames... 6-week window\". Employer count 9 is explicitly conceded as benign alone and only counted because \"7 funneled to one dealer and 3 sharing the borrower's phone\". Section 5 rejects the exact benign explanations the customer names (multi-unit density, family sharing, large employer, consortium volume, normalization error) and correctly refuses to lean on the 1,180 apps/yr dealer volume as a driver. Corroboration is independent of the overlap: 9-year DOB spread on one SSN and a 2-month AU-built file at age 57. Section 2 explicitly argues the identifiers cross-link rather than being one behaviour counted four times \u2014 the rule-2 test. Deductions: \u00a75 largely re-litigates the \"Not explainable\" column of \u00a71 and \u00a76 recaps both, so some length is non-load-bearing; the fraud_score 999 / LTV / income items are asserted as fraud weight with no context validation and are secondary to the rings domain."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.07639499999999999
+  },
+  "synthetic|global.anthropic.claude-sonnet-5|APP-1004": {
+   "verdict": {
+    "band_read_from_analysis": "HIGH RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "Pass",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": false,
+    "cites_context_fields": true,
+    "contract_notes": "Risk label embedded in a section header (\"## Classification: HIGH RISK\"); title rendered as H1 markdown rather than plain title. No emojis, no alert numbers cited, length within the 4000-character allowance for HIGH. Minor scope creep into non-synthetic domains (LTV 112%, income misrepresentation score 71) and use of the composite platform fraud score (999) as \"corroboration,\" which is circular rather than independent evidence.",
+    "justification": "Band is correct and reached for the right reasons. It builds four genuinely independent pillars and validates each against context rather than raw values: same-UNIT reuse \"5 SSNs at the exact unit STE 4B, with 5 different surnames,\" phone \"5 different surnames and 4 different addresses \u2014 explicitly not a household pattern, per context,\" \"four address locations across four states... within 47 days, with no relocation record,\" and a negative-file hit for a prior confirmed fabricated identity. It pre-empts each benign explanation the prompt names (\"Unlike normal apartment-building overlap,\" \"rules out normal single-market car-shopping,\" age 57 versus young/immigrant thin file), and treats thin file plus AU credit as one manufactured-credit concern rather than separate corroboration. Weakness: the conclusion largely restates prior sections, and the 999 platform score adds no independent evidence."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.07256
+  },
+  "synthetic|global.anthropic.claude-opus-5|APP-1004": {
+   "verdict": {
+    "band_read_from_analysis": "HIGH RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "Pass",
+    "escalation_drift": "aligned",
+    "substance_score": 5,
+    "padding_observed": false,
+    "cites_context_fields": true,
+    "contract_notes": "Title, no emojis, no alert-number citations, headers carry no risk labels. Detailed format is permitted for HIGH RISK, but the body sits at roughly the 4000-character ceiling and may marginally exceed it; the Summary partially restates the Corroborated Findings.",
+    "justification": "Band matches SYN-019 and is earned, not asserted. It names independent corroborated patterns (negative-file confirmed fabricated-identity loss on the same SSN; 9-year DOB spread across three name/DOB combos; 5 SSNs at STE 4B with five surnames, four first seen in 90 days; phone linking five SSNs across four addresses at one dealer; four states in 47 days with no relocation record). It correctly collapses thin_file/very_new_file/high_AU/older_borrower into ONE concern, flags the building count of 7 as an over-read adding no independent weight, and rebuts the named benign explanations (youth/immigrant AU building, density, car shopping) using context evidence (credit report valid, no employer address change)."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.059190000000000006
+  },
+  "rings|global.anthropic.claude-sonnet-5|APP-1012": {
+   "verdict": {
+    "band_read_from_analysis": "POSSIBLE RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 4,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": false,
+    "cites_context_fields": true,
+    "contract_notes": "Risk band embedded in the H2 title (\"## Fraud Ring Risk Analysis \u2014 POSSIBLE RISK\") and risk verdicts used as header labels (\"\u2014 Materially Suspicious\", \"\u2014 Weak/Explainable but Notable\", \"\u2014 Normal\"). No emoji, no numeric alert IDs cited.",
+    "justification": "Lands on POSSIBLE RISK for largely the right reasons: it validates each key signal against its _context and names the benign explanation before ruling on it \u2014 210 employer SSNs \"consistent with a large gig/courier employer, not a red flag alone\"; address reuse conceded as \"Weak/Explainable\"; family-household explanation for the phone rebutted with the specific fact of \"three different surnames, no shared address\"; fraud_score 734 and consortium 560 apps/yr correctly demoted to \"volume/heuristic indicators, not independent proof\"; credit 548 / 108% LTV flagged as \"not itself a fraud-ring indicator.\" Two flaws: the Identity alert describes the same phone-sharing behaviour yet is called \"corroborating rather than duplicating\" \u2014 that is the double-count rule 2 forbids; and the \"convergence\" framing leans on facts that all trace to one behaviour (the recurring co-borrower). The load-bearing new fact is the narrowing \u2014 4 of 210 at this same dealer with this same co-borrower \u2014 which genuinely supports verification without escalation."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.06955
+  },
+  "synthetic|global.anthropic.claude-haiku-4-5-20251001-v1:0|APP-1012": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 4,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 3,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "LOW RISK output must be 3-5 sentences; this is a multi-section, ~350-word report with headed blocks (Summary, Signal Analysis, Alert Finding Assessment, Risk Mitigating Factors, Recommendation) and a bolded \"CLASSIFICATION: LOW RISK\" label acting as a header. Title is correct; no emojis; alert referenced by finding not number (good). Recommendation appends a hedged secondary investigation directive not asked for at this band.",
+    "justification": "Correct band for largely correct reasons: it validates against context (\"Context confirms 9-month file age is appropriate for a 23-year-old\", \"phone_ssn_count=1\", \"ssn_address_location_variations=1\", single SSN at building and unit level) and names the prompt's benign explanation for the thin file. Two weaknesses: it asserts \"no new-file-high-score combination\" though SYN-013 pins is_thin_file + very_new_file_high_score, and it invents unsupported explanations for the phone alert (\"different phone number formats or un-normalized variants\", \"not yet in the precomputed signal dataset\") rather than simply calling it uncorroborated. Chief failure is format: a LOW RISK verdict delivered as a five-section report instead of 3-5 sentences, with the same \"no corroboration\" finding restated in Summary, Signal Analysis and Alert Assessment."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.07178999999999999
+  },
+  "synthetic|global.anthropic.claude-opus-5|APP-1012": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "Pass",
+    "escalation_drift": "aligned",
+    "substance_score": 5,
+    "padding_observed": false,
+    "cites_context_fields": true,
+    "contract_notes": "Title and no-emoji/no-alert-number rules respected (refers to \"the alert asserting that the borrower's phone number is shared...\"). Brevity cap is met only technically: ~4-5 sentences, but two are very long multi-clause chains packed with findings, so it reads longer than the 3-5 sentence LOW RISK format intends. Markdown headers/bold used for title and classification; benign.",
+    "justification": "Correct band for the right reasons. It validates rather than asserts: \"the phone_ssn_count context confirms only one hash_ssn is associated with this normalized phone number\" is a clean false-positive call, as the prompt demands. It then names the specific mitigating evidence behind SYN-013 \u2014 \"2 open tradelines with 9 months in file for a 23-year-old... age-appropriate with a valid credit report present\" \u2014 and explicitly reduces the firing set to one behaviour (\"The only firing signal is the thin file\"). Reuse/velocity clearance is evidenced (one SSN at building and unit, single city/state, no cross-dealer clustering), and the 548 score/108% LTV/income strain are correctly scoped out as \"credit and affordability concerns, not synthetic identity construction\" rather than smuggled in as escalation fuel. Every clause is load-bearing; no restatement of prompt calibration text."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.06098
+  },
+  "rings|global.anthropic.claude-sonnet-5|APP-1009": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "Pass",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": false,
+    "cites_context_fields": true,
+    "contract_notes": "Adds a document title (\"# Fraud Ring Risk Analysis\") despite \"Return only final analysis\"; cites raw alert numbers (\"Alerts 13/65\", \"Alert 66\", \"Alert 111\") rather than describing the behaviour. No emoji; no risk labels embedded in section headers.",
+    "justification": "Correct band for the right reasons. Each priority signal is validated against paired context, not asserted: address reuse is tested against \"240-unit high-rise\", \"21,000 people/sq mi\", turnover \"below expected\", and decisively \"only 1 of the 96 SSNs is tied to the borrower's specific unit \u2014 no exact-unit reuse\". Employer count is resolved via \"multi-location employer... 48 dealers in 2 states\" plus \"two restaurants in that same neighborhood\". Phone/email confirmed clean at 1. It collapses alerts 13/65/66 into the one address behaviour and reframes 66 as mitigating (one identity per unit) \u2014 exactly the \"alert volume is not corroboration\" rule. Benign explanation is weighed explicitly before concluding. Conclusion is largely restatement, hence substance 4 not 5."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.054209999999999994
+  },
+  "rings|global.anthropic.claude-opus-5|APP-1009": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "Pass",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Adds a document title and a \"Verdict: LOW RISK\" header (risk label in a header); cites numeric alert IDs (\"Alerts 13, 65, and 66\", \"Alert 111\") and the raw fraud score 356; heavy markdown table/bold scaffolding beyond a plain final analysis.",
+    "justification": "Band is correct for the right reasons. It validates each key signal against its _context: \"240-unit residential high-rise\", \"21,000 people/sq mi\", \"Only 1 of the 96 identities maps to this borrower's actual unit\" (directly the exact-unit test), \"48 dealers across 2 states\" diffuse employer footprint, \"3 of 142 co-employees live in this building\" with two restaurants in the neighbourhood, and stated $64,000 vs verified $62,900. It explicitly collapses redundant alerts: \"three restatements of this single underlying fact, not three independent findings.\" Mild padding: the Reasoning section and \"Absent ring markers\" restate earlier findings and the closing line echoes the prompt's own calibration wording."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.06101
+  },
+  "synthetic|global.anthropic.claude-haiku-4-5-20251001-v1:0|APP-1009": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 3,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Violates \"Reference specific alert findings, not alert numbers\" \u2014 explicitly cites \"Alert 13 and 65\", \"Alert 66\", \"Alert 111\". Also breaches the LOW RISK format cap of 3-5 sentences: ~10 sentences across three labelled sections (Reasoning / Clearing Factors / Recommendation) plus a bolded \"CLASSIFICATION: LOW RISK\" line and markdown H1 title. No emojis; title text itself correct.",
+    "justification": "Band is right for the right reason. It collapses the alerts into one behaviour (\"four alerts fired all relate to a single underlying phenomenon\") and validates against context, not raw values: 240 units / 96 identities = 0.4 per unit over 7 years, same-unit count of one SSN (\"no same-unit collocation with unrelated identities\"), employer overlap explained by \"two restaurants in the neighborhood\", and two Chicago addresses 22 months apart read as relocation not multi-state movement. It also names the absent corroborators (inconsistency 0, phone_ssn_count 1, no thin file/velocity). Deductions are contract-only: alert numbers are cited and the \"Clearing Factors\" block restates the density and employer-proximity points already made, exceeding the 3-5 sentence LOW cap."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.05387
+  },
+  "synthetic|global.anthropic.claude-sonnet-5|APP-1009": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Title correct, no emojis, no alert numbers cited (refers to findings). Contract breach: LOW RISK requires 3-5 sentences max; this runs ~8 sentences across two paragraphs plus separate \"Key mitigating factor\" and \"Recommendation\" blocks. Risk label appears as a bolded standalone line rather than in a header, which is acceptable.",
+    "justification": "Right band for the right reason. It collapses the alerts correctly: \"All alerts fired relate to a single underlying pattern\u2014building-level address density,\" satisfying the one-behaviour-one-signal rule, and it engages the exact benign explanation the pinned sentence names by separating building from unit level: \"same-unit overlap is 1 (the borrower only), meaning there is no unrelated-identity collision.\" Context evidence is validated, not asserted: 96 SSNs / 240 units over 7 years = 0.4 per unit, below local turnover; shared employer explained by two nearby restaurant locations; file established (134 months, 9 tradelines), low AU ratio, no velocity, income $64,000 stated vs $62,900 verified. Deductions: the closing mitigating-factor line restates facts already given (same-unit overlap, file age recast as \"11-year\"), which is what pushes it past the 3-5 sentence LOW RISK limit."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.05679
+  },
+  "synthetic|global.anthropic.claude-opus-5|APP-1009": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "Pass",
+    "escalation_drift": "aligned",
+    "substance_score": 5,
+    "padding_observed": false,
+    "cites_context_fields": true,
+    "contract_notes": "Runs ~6 sentences against the 3-5 sentence cap for LOW RISK (the recommendation adds two more). \"All four alerts\" cites alert volume as a count, which brushes against the \"reference specific findings, not alert numbers\" rule, though no alert IDs are used. Bold \"Classification: LOW RISK\" line is a label outside the specified title, but the title itself is verbatim correct. No emoji.",
+    "justification": "Hits the pinned band for exactly the pinned reason: it separates building-level from unit-level overlap (\"96 SSNs across 240 units over 7 years averages 0.4 identities per unit... the borrower's own unit (1804) shows only one SSN with no exact-unit overlap\"), which is SYN-010's distinction. It explicitly collapses the alert volume into one behaviour (\"All four alerts trace back to a single underlying condition\") and rebuts the shared-employer alert with context (employer operates two restaurants in the same neighbourhood). Corroborating clearance is concrete and context-derived: 134-month file, 9 tradelines, 11% AU, one SSN per phone, no velocity, two Chicago locations 22 months apart, $64,000 stated vs $62,900 verified. Every sentence carries distinct evidence; no restatement or echoing of the prompt's calibration text. Only faults are contract-level: slight sentence-cap overage and the \"four alerts\" count."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.060864999999999995
+  },
+  "bustout|global.anthropic.claude-haiku-4-5-20251001-v1:0|APP-1004": {
+   "verdict": {
+    "band_read_from_analysis": "HIGH RISK",
+    "band_matches_expectation": false,
+    "calibration_score": 1,
+    "false_positive_verdict": "FalsePositive",
+    "escalation_drift": "escalates",
+    "substance_score": 3,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Risk label embedded in header/executive summary (\"RISK CLASSIFICATION: HIGH RISK\"); raw numeric alert citations (\"Alert 163\", \"Alert 157\"); \u2713 glyphs throughout the hallmark list; added a decisioning directive (\"DECLINE APPLICATION IMMEDIATELY\", \"should be declined immediately\") beyond returning the analysis; report title added.",
+    "justification": "Declares HIGH RISK against a pinned POSSIBLE RISK. Corroboration is inflated: the 8-item \"hallmarks\" list counts one behaviour four times (7 apps/30d, multi-state spread, 4 apps/7d, $310K accumulation), exactly the alert-volume-as-corroboration error the prompt bars. It treats an alert as proof \u2014 \"not a soft indicator requiring validation\u2014it is definitive evidence\" \u2014 contradicting \"Alert indicators should be treated as supporting context requiring validation.\" It leans on model outputs (fraud score 999, misrep score 71) as findings, and inverts the credit-score guidance (\"high credit score does NOT contradict fraud risk... typical of sophisticated bustout schemes\"). It also overrides three zero-valued key signals by re-deriving a 96% ratio from verified income. Credit: it does validate against velocity/income/employer _context and correctly reads the stated-vs-verified $88,000/$61,100 gap."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.066045
+  },
+  "bustout|global.anthropic.claude-sonnet-5|APP-1004": {
+   "verdict": {
+    "band_read_from_analysis": "HIGH RISK",
+    "band_matches_expectation": false,
+    "calibration_score": 2,
+    "false_positive_verdict": "FalsePositive",
+    "escalation_drift": "escalates",
+    "substance_score": 4,
+    "padding_observed": false,
+    "cites_context_fields": true,
+    "contract_notes": "Adds a document title (\"# Bustout Fraud Risk Analysis\"); embeds the risk label in a header (\"## Overall Assessment: **HIGH RISK**\"); cites alerts by number (\"Alert 163\", \"Alert 157\"). No emoji.",
+    "justification": "Lands HIGH where POSSIBLE RISK was pinned. It does validate against context (verified $61,100 vs stated $88,000; \"not single-market rate shopping\"; single W-2, low variance), which earns it above a 1. But it breaches the customer's rules: the velocity behaviour is split into apparently independent corroboration (\"7 apps in 30 days / 4 in 7 days\", \"5 dealers\", \"$310,000 exposure\", \"rapid_app_velocity=1 and Alert 157\") when these are one signal; and fraud_score 999 plus income_misrep_score 71 are treated as \"independent\" corroboration though they are composite restatements. Alert 163 is asserted as \"documented\" fraud without any paired _context validation, contrary to \"alerts... requiring validation, not independent proof.\""
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.06085499999999999
+  },
+  "bustout|global.anthropic.claude-opus-5|APP-1004": {
+   "verdict": {
+    "band_read_from_analysis": "HIGH RISK",
+    "band_matches_expectation": false,
+    "calibration_score": 2,
+    "false_positive_verdict": "FalsePositive",
+    "escalation_drift": "escalates",
+    "substance_score": 4,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Report title plus \"RECOMMENDATION: **HIGH RISK**\" banner and risk labels inside table cells/headers (\"CORROBORATED \u2014 ADVERSE\", \"DECISIVE\"); numeric alert IDs cited (\"Alert 163\", \"Alert 157\"); large \"Recommended Actions\" block beyond the requested final analysis. No emoji.",
+    "justification": "Reaches HIGH vs pinned POSSIBLE. It does validate against _context (quotes the velocity, 7/30-day and income-variance context rows), which is the strongest part. But the reasoning contradicts the prompt's thresholds: zero-value signals are inverted into adverse ones (\"low-variance income therefore **inverts** from mitigating to consistent-with-synthetic\"); mismatched context rows are treated as data-integrity defects \"suppressing true exposure\" rather than as the data-quality issue the framework pushes toward LOW; consortium_number_of_apps_last_1_year = 1180 (portfolio volume) and ltv_pct/fraud_score ceiling are stacked as corroboration; the 555 employer phone is speculation on an underwriting data gap. Velocity and the $310K alert are one behaviour, yet \u00a72 calls Alert 157 \"not a duplicate heuristic\". Benign-explanation table is genuine credit, but conclusions in \u00a75 restate \u00a71\u20133."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.08013999999999999
+  },
+  "identity|global.anthropic.claude-opus-5|APP-1004": {
+   "verdict": {
+    "band_read_from_analysis": "HIGH RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Title correct, no emojis, no alert numbers. \"**Classification: HIGH RISK**\" places the risk label in a standalone bold heading-adjacent line, brushing the \"no risk labels in headers/titles\" rule. Body plus recommendations runs close to or slightly over the 4000-character ceiling for POSSIBLE/HIGH.",
+    "justification": "Band is right for the right reasons. The severe indicator is named and defended: three identity combinations on one SSN with DOBs \"1978-11 ... differs from 1969-02 by nine years, which no normalization, transposition, or data-entry cleanup explains\" \u2014 and it first concedes the benign reading (\"D CROSS is an initial form\"). Independence is argued, not assumed: \"the remaining signals do not collapse into a single underlying data point.\" Context fields are used to kill the prompt's own named mitigation: \"is_multi_unit_address = true ... context confirms five of the six SSNs resolve to the same unit number.\" Phone/email rest on normalized values with differing surnames. Credit/LTV/income items are correctly demoted to \"ability-to-pay concerns rather than identity proof,\" and dealer concentration appears only as a recommendation, not a driver. Deduction: the Assessment paragraph largely re-lists the four attributes and echoes the prompt's calibration wording (\"not a case of alert volume inflating a benign file\")."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.07148499999999999
+  },
+  "bustout|global.anthropic.claude-sonnet-5|APP-1012": {
+   "verdict": {
+    "band_read_from_analysis": "HIGH RISK",
+    "band_matches_expectation": false,
+    "calibration_score": 2,
+    "false_positive_verdict": "FalsePositive",
+    "escalation_drift": "escalates",
+    "substance_score": 4,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Title line plus explicit risk label in a header (\"## Risk Classification: **HIGH RISK**\"); raw signal values quoted numerically (rapid_app_velocity \"0\", fraud score 734); heavy bold/section scaffolding and a \"Recommendation\" block.",
+    "justification": "Lands HIGH where POSSIBLE was pinned. The DTI evidence is real and well-validated ($52.7K vs verified $31.9K), which is why this is 2 not 1 \u2014 but \"Both unsustainable-debt signals fired... (Corroborated)\" treats two alerts from ONE behaviour as corroboration, breaching the alert-volume rule. It then stacks a model output (\"Fraud score of 734\") as an independent pattern, and admits \"rapid_app_velocity itself did not fire (0)\" yet still counts velocity \"context adds weight.\" The occupation/luxury-asset argument (\"delivery driver... Cadillac Escalade\") is an introduced inference, not an input signal. Net: one corroborated pattern dressed as four, so HIGH is unearned; POSSIBLE + verification was the correct stop."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.070565
+  },
+  "bustout|global.anthropic.claude-opus-5|APP-1012": {
+   "verdict": {
+    "band_read_from_analysis": "POSSIBLE RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 4,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Adds an H1 title and risk labels inside headers (\"FINAL CLASSIFICATION: POSSIBLE RISK\", \"WHY NOT HIGH RISK\"); heavy markdown table/bolding scaffolding; section 3 announces \"Two independent affordability signals\" then enumerates four items (internal numbering inconsistency). No emoji.",
+    "justification": "Band is right and largely for the right reasons: it collapses the 7d/30d counts to \"the same two applications... one underlying behavior,\" neutralises rapid_app_velocity=0, both income signals=0 (CV 0.05, verified $31,900 vs stated $34,000 \"confirming, not conflicting\"), and explicitly discounts the anti-FP traps \u2014 \"Consortium volume (560 apps/yr) is a dealer-level operational statistic\" and \"Newark, NJ metro... not a material factor.\" Two deductions: it calls the loan-vs-income pair \"Two independent affordability signals,\" yet loan_exceeds_income and loan_80pct are one behaviour (it partly self-corrects later by folding them into one \"affordability\" dimension); and the \"luxury SUVs are the preferred collateral in FPD/diversion schemes\" claim is analyst-supplied, not an input signal. Sections 4\u20135 mostly restate 2\u20133."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.07889499999999999
+  },
+  "identity|global.anthropic.claude-sonnet-5|APP-1012": {
+   "verdict": {
+    "band_read_from_analysis": "POSSIBLE RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "Pass",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": false,
+    "cites_context_fields": true,
+    "contract_notes": "Bold standalone \"Classification: Possible Risk\" line sits directly under the title, brushing the \"no risk labels in headers/titles\" rule. The \"Contextual risk factors (non-identity but relevant)\" section imports out-of-domain scores (fraud score 734, income misrep 44, LTV) not part of identity signals, though it is explicitly not treated as identity evidence. Title, length and no-alert-numbers/no-emoji rules are respected.",
+    "justification": "Correct band for the right reasons. It defeats the exact benign explanations the prompt names: phone reuse across 3 SSNs is not cleared as household because \"there is no shared address among these three identities,\" and address reuse is not cleared by density because the property is \"confirmed single-family detached (not multi-unit)\" (is_multi_unit_address check). It handles the one-signal rule head-on: \"These are two separate underlying data points (phone and address) rather than one duplicated alert,\" with the co-borrower as the common thread plus a prior joint application 38 days ago. It also correctly disposes of the inquiry-count alert on its own stated threshold (score 548 < 650) and clears SSN combos and email as normal. Stops short of HIGH (\"no falsified SSN/DOB/name combinations\"), which is right. Minor blemish: the loan-structure/fraud-score paragraph is credit-side colour that does not belong in the identity read, even though it is not used to escalate."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.06032
+  },
+  "identity|global.anthropic.claude-opus-5|APP-1012": {
+   "verdict": {
+    "band_read_from_analysis": "POSSIBLE RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "Pass",
+    "escalation_drift": "aligned",
+    "substance_score": 5,
+    "padding_observed": false,
+    "cites_context_fields": true,
+    "contract_notes": "Standalone bold line \"Classification: POSSIBLE RISK\" sits directly under the title; the prompt bars risk labels in headers/titles, so this prominent label is a borderline deviation (section headers themselves are clean). Title correct, no emojis, no alert numbers cited (\"The alert regarding the shared phone number\"), within length.",
+    "justification": "Band matches and is reached for the right reasons. It clears the borrower's own attributes first (single identity combination, consistent normalized name/DOB, 140 days SSN history, email not in synthetic source), then argues genuine independence rather than alert volume: phone resolves to 3 SSNs with three surnames and \"no shared address among the three, which removes the usual shared-household explanation,\" and the address signal \"points at the same third party through a different data element.\" Density validation is cited from context (\"single-family detached with no unit or apartment token parsed\"), not asserted. It actively discards a signal \u2014 5 inquiries excluded because the rule applies at score >=650 and the applicant is 548 \u2014 and flags the mismatched example row as a reference-data artifact instead of treating it as a discrepancy, which would have been an easy false escalation to HIGH. Verification steps are specific and proportionate. Only nit is the bold classification label under the title."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.056065000000000004
+  },
+  "bustout|global.anthropic.claude-haiku-4-5-20251001-v1:0|APP-1009": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 4,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Adds a document title and \"RISK CLASSIFICATION\" label header; decorative \u2713 glyphs in every table row (emoji-style ornamentation); heavy table/horizontal-rule scaffolding beyond \"return only the final analysis\". Typo/duplication: \"No coordinated or coordinated suspicious behavioral patterns\".",
+    "justification": "Band is correct and reasoning is signal-by-signal against context, not assertion: \"verified $62,900\" vs stated $64,000 (1.7% variance), \"Coefficient of variation 0.05 ... W-2 employee at single employer\", \"Loan $23,800 = 38% of stated income\", \"1 in 7d, 1 in 30d ... consistent with normal car shopping\". It correctly declines to let portfolio-level data escalate: \"Consortium app volume (610 ... ) suggests active lending environment but not indicative of this borrower's activity\", and treats fraud score 356 / income-misrep 13 as non-corroborated. Held back from 5: several specifics (\"Prior comparison 26 months old\", \"Conservative LTV (90%)\") are stated without pointing to the _context field they came from, risking introduced detail; and the Conclusion bullets re-state the velocity/income/DTI findings already in the table, adding no new evidence."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.066715
+  },
+  "bustout|global.anthropic.claude-opus-5|APP-1009": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "Pass",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Prompt says \"Return only the final analysis\"; output adds a titled report (\"# Bust-Out Fraud Risk Analysis\"), an application-summary markdown table, and puts the risk label in a header (\"### **LOW RISK**\") plus a Confidence/Recommendation block. No emoji; no alert-count inflation (no alerts fired).",
+    "justification": "Band matches BST-021 and is reached for the right reasons: every prioritized signal is validated against its _context (\"1 application in 7 days, 1 in 30, 2 in 90. No clustering across dealers\"; CV 0.05 across two stated amounts 26 months apart; verified $62,900 within 1.7% of stated; ~$640 existing obligations; loan ~38% of income vs the 80% threshold). It correctly names benign explanations before concluding \u2014 the 90-day second app as ordinary vehicle shopping, Chicago metro as no weight absent corroboration \u2014 and correctly treats the 610-app consortium volume as a dealer/lender aggregate, not borrower behaviour, so the one nominally elevated datum drives nothing. Deductions: the Assessment and Rationale largely restate facts already established in the signal walkthrough, and formatting exceeds the \"final analysis only\" contract."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.06720000000000001
+  },
+  "identity|global.anthropic.claude-haiku-4-5-20251001-v1:0|APP-1009": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 4,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": false,
+    "cites_context_fields": true,
+    "contract_notes": "Exceeds the LOW RISK budget: 7 sentences against a stated \"3-5 sentences max,\" with the closing \"No corroborated independent fraud indicators are present\" adding nothing new. Risk label appears in a bold standalone line (\"**Classification: LOW RISK**\") immediately under the title \u2014 borderline against \"no risk labels in headers or titles.\" Title itself is correct; no alert numbers cited, no emoji.",
+    "justification": "Band is right for the right reason: it validates the 96-SSN address signal against the paired context (\"240-unit high-rise property type in a dense urban area\", \"7 years\", \"only 1 of the 96 identities is actually at this borrower's unit\") \u2014 exactly the exact-unit test IDEN-012 calls for, not a bare assertion. It also corroborates clean core identity (\"one consistent identity combination over 990 days\", no phone/email reuse) and gives the employer-building overlap a named benign reading (\"concentrated hospitality labor market\"). Short of a 5: it never states outright that the co-firing alerts are one behaviour/one signal, and it drifts out of the identity domain into credit score and income-misrepresentation scoring, which also breaks the sentence cap."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.06679
+  },
+  "identity|global.anthropic.claude-sonnet-5|APP-1009": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Exceeds the LOW RISK budget of 3-5 sentences (~8 sentences across three paragraphs). \"**Conclusion: LOW RISK.**\" places the risk label in a bolded standalone line, brushing the no-labels-in-headers rule. Cites \"four alerts\" as a count (findings are named, so no alert-number citation). No emoji; title correct.",
+    "justification": "Right band for the right reason: it applies IDEN-012 directly - \"240-unit high-rise located in a dense urban census tract (21,000 people/sq mi)\", \"96 distinct SSNs across 240 units over 7 years... below expected turnover\", and crucially \"Only one identity is associated with the borrower's specific unit,\" which is the exact-unit test. It collapses the alerts into one signal (\"all stem from a single underlying data point\") and disposes of the shared-employer overlap via the two-restaurant context plus the borrower's restaurant-manager occupation. Independent signals are checked and cleared: one SSN identity combination with matching name/DOB, 990 days in system, phone/email each tied to one SSN, 2 inquiries in 14 days vs a 4+ threshold. Deductions are contract-only: the conclusion paragraph re-states the address-density finding already made in sentence two, and the whole runs roughly double the LOW-RISK sentence cap. Fraud/income-misrepresentation scores are mild scope drift from the identity domain."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.060945
+  },
+  "identity|global.anthropic.claude-opus-5|APP-1009": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "Pass",
+    "escalation_drift": "aligned",
+    "substance_score": 5,
+    "padding_observed": false,
+    "cites_context_fields": true,
+    "contract_notes": "LOW RISK budget is 3-5 sentences; the body technically lands at ~5 but only via extreme run-on compounding (the first sentence alone carries four findings across multiple clauses), so it reads longer than the contract intends. Bold \"Classification: LOW RISK\" is a label-bearing pseudo-header line rather than plain prose, brushing the no-risk-labels-in-headers rule. \"All four alerts\" is a volume reference but no alert numbers, no emoji, correct title.",
+    "justification": "Right band for the right reasons. It names the pinned mitigant explicitly \u2014 \"validated by `is_multi_unit_address` = true\", 240 units, \"21,000 people per square mile\", and crucially \"only one identity tied to the borrower's own unit (Unit 1804)\", which is exactly the exact-unit test the standard calls for. It collapses the alerts correctly: \"All four alerts trace to a single underlying data point ... one signal, not four.\" Shared-employer is dismissed with a concrete benign explanation (local hospitality group, two nearby restaurants), not hand-waved. Independent elements are each checked and clean (phone/email single-SSN, ssn_distinct_identity_combinations = 1, 990 days, consistent prior identity, 2 inquiries/14d). The template-artifact DOB note is framed as data quality with a proportionate underwriting ask, not an escalation lever."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.055330000000000004
+  },
+  "rings|global.anthropic.claude-sonnet-5|APP-1013": {
+   "verdict": {
+    "band_read_from_analysis": "POSSIBLE RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 4,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": false,
+    "cites_context_fields": true,
+    "contract_notes": "Per-signal risk labels used as inline sub-bands (\"Address reuse (count=1) \u2014 LOW RISK indicator\", \"Not a signal\"), which reads as multiple banded verdicts inside one report; title embeds the hashed SSN as an identifier. No emoji, no alert-ID citations, length proportionate.",
+    "justification": "Band is right and largely for the right reasons: it clears the weak signals against paired context (\"prior apps at this address 14 and 26 months ago\" = repeat customer; email \"not present in fake-email source\"), then names the RNG-012 corroboration \u2014 \"12 of which funnel through this same dealer\", phone-sharing party \"90 miles away... cites the same employer\", and stated $67,000 vs verified $48,200. It explicitly rejects the prompt's benign explanation (\"rather than a large legitimate employer with organically dispersed applicants\") and discounts consortium velocity as non-fraud. Two deductions: it calls the phone anomaly proof of \"multiple independent patterns\" one sentence after conceding it \"directly corroborates the employer-cluster signal\" (same behaviour, one signal); and it lists 99% LTV and subprime lender as corroboration \u2014 credit risk, not fraud \u2014 though neither is load-bearing for the POSSIBLE call."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.06906999999999999
+  },
+  "rings|global.anthropic.claude-opus-5|APP-1013": {
+   "verdict": {
+    "band_read_from_analysis": "POSSIBLE RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "Pass",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": false,
+    "cites_context_fields": true,
+    "contract_notes": "Adds a document title (\"# Fraud Ring Risk Analysis\") despite \"return only final analysis\"; embeds risk verdict labels in signal headers (\"\u2014 MATERIALLY SUSPICIOUS\", \"\u2014 CLEAN / MITIGATING\"). No emoji, no alert-ID padding (correctly notes \"No alerts fired\").",
+    "justification": "Right band for the right reasons. Every key signal is validated against its _context, not asserted: employer count 14 is escalated only because context shows \"12 of those 14 funneled through this same dealer\"; phone count of 2 is called \"nominally normal\" and escalated only after the household explanation is defeated (\"same employer, lives ~90 miles away, shares no surname\"); address=1 and email=1 are explicitly scored as mitigating. Anti-FP rules respected: consortium volume 470 dismissed as \"network-level figure, not applicant-specific\"; large-employer benign explanation weighed and rebutted; staffing/referral alternative acknowledged when declining HIGH. Ceiling argued explicitly (\"falls short of HIGH RISK\"). Minor: subprime/LTV/credit color is loss severity, not fraud, and the Determination lightly restates the Assessment."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.06649
+  },
+  "synthetic|global.anthropic.claude-haiku-4-5-20251001-v1:0|APP-1013": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": false,
+    "cites_context_fields": true,
+    "contract_notes": "Exceeds the LOW RISK \"3-5 sentences max\" cap (two multi-sentence paragraphs plus a recommendation line, ~8 sentences). Risk label embedded as a bold header line (\"CLASSIFICATION: LOW RISK\") rather than plain prose. Cites a raw signal value (\"income_misrep_score: 39\"), though no alert numbers are cited. No emojis; title correct.",
+    "justification": "Correct band for the right reasons. It validates rather than asserts: \"the context reveals all applications cite the same employer\", \"134 months in file... 9 open tradelines\", \"Address-SSN and phone-SSN counts are each 1 (single-family property)\". It explicitly weighs the prompt's own named benign explanation for the firing signal \u2014 velocity as \"a legitimate pattern during car shopping\" \u2014 and correctly refuses to let underwriting/credit facts drive fraud escalation: income overstatement and 99% LTV / 634 score are called \"loan quality/underwriting issue, not identity fabrication\". Deductions are contract-only: the LOW RISK sentence cap is clearly breached and the classification sits in a header."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.056525
+  },
+  "synthetic|global.anthropic.claude-sonnet-5|APP-1013": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 3,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Title wrong: \"Synthetic Identity Fraud Analysis\" instead of the required \"Synthetic Identity Fraud Risk Analysis\". Risk label placed in a bolded header line (\"Classification: LOW RISK\") plus a second bolded \"Conclusion\" header. Length breaches the LOW RISK ceiling of 3-5 sentences (four paragraphs, ~10 sentences). No emojis and no alert numbers cited - findings are referenced by content, which is compliant.",
+    "justification": "Band is right for the right reasons: it validates each negative against context (\"1 SSN per building, unit, and phone number\", \"single, stable location\") rather than asserting raw values, isolates the one live signal (\"three applications in 30 days across three dealers\"), and explicitly weighs the prompt's own benign explanation (\"common during active vehicle shopping... only concerning when paired with other synthetic indicators\") before clearing. It also correctly quarantines the stated-vs-verified income gap and unverified employer as an income/underwriting matter, not a synthetic indicator. Deduction is for density and contract: the \"velocity stands alone, uncorroborated\" finding is stated three times (para 1 list, para 2, Conclusion), doubling the permitted LOW-risk length with no new evidence, and the required title is altered."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.06321
+  },
+  "synthetic|global.anthropic.claude-opus-5|APP-1013": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "Pass",
+    "escalation_drift": "aligned",
+    "substance_score": 5,
+    "padding_observed": false,
+    "cites_context_fields": true,
+    "contract_notes": "Title correct but rendered as an H1 heading and the band is placed on a standalone bold \"Classification: LOW RISK\" line rather than in prose; body is 3 sentences (within the 3-5 limit) plus a 2-sentence recommendation, so slightly over if the recommendation counts. No alert numbers cited, no emoji.",
+    "justification": "Right band for the right reasons. It validates rather than asserts: the single location variation is checked against context (\"one address in one city/state... effectively a non-signal\"), and identity consistency is grounded in the paired evidence (\"normalized first name, last name, DOB, and address key match across all three applications for this SSN\"). It explicitly weighs the prompt's benign explanation for velocity and states why it is uncorroborated (\"no SSN, phone, or address reuse (all counts of 1, single-family property), so the velocity is uncorroborated and consistent with ordinary auto shopping\"). It also correctly quarantines non-fraud material: income variance and 99% LTV routed to underwriting, not treated as synthetic indicators. Thick file (134 months, 11-year oldest tradeline, 11% AU) is used to rule out manufactured credit. \"Rules out\" is slightly absolute but supported."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.053474999999999995
+  },
+  "rings|global.anthropic.claude-haiku-4-5-20251001-v1:0|APP-1014": {
+   "verdict": {
+    "band_read_from_analysis": "POSSIBLE RISK",
+    "band_matches_expectation": false,
+    "calibration_score": 1,
+    "false_positive_verdict": "FalsePositive",
+    "escalation_drift": "escalates",
+    "substance_score": 3,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Risk label embedded in summary/headers (\"RISK CLASSIFICATION\", \"Why Not HIGH RISK\"); numeric alert IDs cited throughout (Alert #50, #44, #45); added title, tables and a conditional multi-band recommendation (\"Escalate to HIGH RISK\" / \"Downgrade to LOW RISK\") rather than a single final band.",
+    "justification": "Escalates on a single isolated signal. The analysis itself clears every other axis: \"phone_reuse... Only this borrower's phone \u2014 Normal\", \"address_reuse... 1 \u2014 Explainable\", \"employer_other_ssns_count 96 \u2014 Operationally normal\", and Alert #45 \"MITIGATES Alert #44\". That leaves email_reuse=3 plus Alert #50 \u2014 one behaviour, one signal, which the prompt says should \"generally remain LOW RISK\" absent coordinated multi-identifier overlap, a point the analysis concedes (\"No coordinated multi-identifier overlap on THIS application\"). It never weighs the benign email explanations before concluding; it defers them to a post-hoc verification list. Context use is genuine (surnames, dates, 5-state employer), but the email finding is restated in five sections."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.060935
+  },
+  "rings|global.anthropic.claude-sonnet-5|APP-1014": {
+   "verdict": {
+    "band_read_from_analysis": "POSSIBLE RISK",
+    "band_matches_expectation": false,
+    "calibration_score": 2,
+    "false_positive_verdict": "FalsePositive",
+    "escalation_drift": "escalates",
+    "substance_score": 4,
+    "padding_observed": false,
+    "cites_context_fields": true,
+    "contract_notes": "Header embeds borrower name and hashed SSN (\"Callum Reyes / hash_ssn_9e4a26\"); per-signal risk labels in headings (\"Address reuse (count: 1) \u2014 LOW RISK / Benign\", \"Email reuse (count: 3) \u2014 MATERIAL CONCERN\"), which invites banding of individual signals rather than one final band; numeric alert IDs cited throughout (\"Alert 50\", \"Alert 44\", \"Alert 45\"). No emoji; length acceptable.",
+    "justification": "Strong context validation on three of four key signals (address = own SSN, repeat customer 14/26 months; phone unique; 96 employer SSNs across 38 dealers/5 states with no clustering; alert 44 mitigated by alert 45's project-site explanation). But it escalates on one isolated overlap: \"corroborated independently by Alert 50\" treats an alert firing off the same shared-email behaviour as independent corroboration \u2014 exactly the rule the prompt forbids (\"multiple alerts may originate from the same underlying behavior\"). It then leans on \"mild income overstatement\" it had already called \"not independently significant.\" Per the framework a single isolated, uncorroborated overlap signal is LOW RISK pending verification, not POSSIBLE RISK; the correct move was to flag the email for verification while banding LOW."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.06764
+  },
+  "rings|global.anthropic.claude-opus-5|APP-1014": {
+   "verdict": {
+    "band_read_from_analysis": "POSSIBLE RISK",
+    "band_matches_expectation": false,
+    "calibration_score": 2,
+    "false_positive_verdict": "FalsePositive",
+    "escalation_drift": "escalates",
+    "substance_score": 4,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Document title (\"# Fraud Ring Detection Analysis\"), risk labels embedded in section headers (\"\u2014 **MATERIAL CONCERN**\", \"\u2014 **EXPLAINED / BENIGN**\", \"\u2014 **CLEAN / EXCULPATORY**\"), numeric alert citations by ID (Alert 50/44/45) in a table, and a duplicated H2 for the verdict plus a post-verdict recommendation list beyond \"return only final analysis\". No emoji.",
+    "justification": "Band is POSSIBLE RISK vs pinned LOW RISK, driven by one signal \u2014 so a false positive. The validation work is genuinely good: employer 96 SSNs dismissed via \"38 dealers and 5 states with no clustering\"; phone and address counts of 1 with \"two prior applications from this same borrower at this address 14 and 26 months ago\"; alerts 44/45 correctly collapsed as \"the same underlying behavior described twice\". But its own convergence test \u2014 \"only one of four identifiers is implicated\", \"isolated single-identifier linkage\" \u2014 is exactly the prompt's LOW RISK wording (\"weak, isolated ... insufficiently corroborated\"), so the reasoning argues LOW and then escalates anyway. Email finding is restated three times (signal, ring assessment, conclusion)."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.07397000000000001
+  },
+  "synthetic|global.anthropic.claude-sonnet-5|APP-1014": {
+   "verdict": {
+    "band_read_from_analysis": "POSSIBLE RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 4,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Violates \"Reference specific alert findings, not alert numbers\" \u2014 \"Email sharing with unrelated identities (Alert 50)\". Risk label appears as a bolded line under the title rather than in a header (acceptable). Title correct, no emoji, length within the 4000-character POSSIBLE allowance.",
+    "justification": "Band is right and reached via the pinned signal: \"three address locations across three states (CO, UT, NM) within 90 days,\" validated against context (multi-state builder, project-site proximity, Site Superintendent) and then correctly not fully cleared because \"no lease or utility record confirms residence.\" It also actively clears the benign-explanation signals (9 tradelines/134 months, identity-inconsistency = 0, no same-unit overlap, no phone sharing), so alert volume is not treated as corroboration. Deductions: cites \"Alert 50\" numerically; the Assessment paragraph largely re-lists Summary findings; and calling the findings \"two independent, uncorroborated identity anomalies\" sits awkwardly against the POSSIBLE threshold it invokes."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.07183
+  },
+  "synthetic|global.anthropic.claude-opus-5|APP-1014": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": false,
+    "calibration_score": 1,
+    "false_positive_verdict": "FalseNegative",
+    "escalation_drift": "dismisses",
+    "substance_score": 4,
+    "padding_observed": false,
+    "cites_context_fields": true,
+    "contract_notes": "Title correct, no emojis, no alert numbers cited (refers to \"the alert finding\"). Bolded \"Classification: LOW RISK\" line sits outside the specified output shape, and the LOW RISK body plus multi-clause recommendation runs at/over the 3-5 sentence cap for a clearing verdict.",
+    "justification": "Pinned band is POSSIBLE RISK on SYN-008 (3+ states in a short timeframe). The analysis reads the same fact \u2014 \"3 locations across CO, UT and NM within 90 days\" \u2014 and clears it. Worse, it names a second independent pattern and then waves it off: the \"shared email address linked to two recently-created identities with different surnames ... stands alone\", while also conceding \"no lease or utility record corroborates any of the three addresses\" and a stated-vs-verified income gap ($79,000 vs $64,800). That is multi-state variation + unrelated-identity email reuse + unverifiable residence, i.e. exactly the corroborated combination the POSSIBLE band describes, so the mitigation (employer project sites, 134-month file) is over-weighted. Context validation itself is genuine and dense \u2014 this is a well-argued wrong answer, not thin reasoning."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_cost_usd": 0.052954999999999995
+  },
+  "rings|global.anthropic.claude-haiku-4-5-20251001-v1:0|APP-1009": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 4,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 3,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Prompt says \"Return only final analysis\": output adds a report title (\"# FRAUD RING DETECTION ANALYSIS\"), an Executive Summary with the risk label in-body (\"**RISK CLASSIFICATION: LOW RISK**\"), risk-verdict labels inside headers/sub-bullets (\"Fraud Ring Indicator: WEAK\", \"FRAUD RING CHARACTERISTICS: NOT PRESENT\"), numeric alert IDs cited (\"Alerts 13, 65, 66\", \"Alert 111\"), decorative \u2713/\u2717 glyphs throughout, and a markdown scoring table. Materially longer than the finding requires.",
+    "justification": "Correct band for largely the right reasons: it validates each key signal against paired context rather than the raw number \u2014 \"240-unit high-rise in high-density urban area (21,000 people/sq mi)\", \"142 other SSNs across 48 different dealers in 2 states (not concentrated)\", \"only 1 identity at borrower's unit\" \u2014 and explicitly names the benign explanation the customer pins (dense urban / multi-unit housing / large multi-location employer). It also correctly collapses the three address alerts into one behaviour (\"Alerts 13, 65, 66: Address-clustering alerts ... Expected in high-rise properties\") rather than stacking them.\n\nTwo reasoning defects keep it off a 5. The arithmetic is wrong and internally contradictory: \"96 distinct SSNs across 240 units over 7 years = ~13 identities per unit average\" (96/240 = 0.4), then immediately \"only one identity per unit\" \u2014 a load-bearing number that is fabricated. And \"142 employers across 48 dealers\" mislabels SSNs as employers.\n\nPadding: the \"FRAUD RING CHARACTERISTICS: NOT PRESENT\" block and the six-bullet Conclusion restate findings already made in Signal Validation and the table with no new evidence."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_wall_s": 21.351,
+   "judge_usage": {
+    "inputTokens": 5235,
+    "outputTokens": 1783,
+    "cacheReadInputTokens": 0,
+    "cacheWriteInputTokens": 0
+   },
+   "judge_cost_usd": 0.07075000000000001
+  },
+  "identity|global.anthropic.claude-haiku-4-5-20251001-v1:0|APP-1012": {
+   "verdict": {
+    "band_read_from_analysis": "POSSIBLE RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 4,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 3,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Header \"Alert 58 Corroboration\" cites an alert by number, violating \"Reference specific findings from alerts, not alert numbers\"; also surfaces the label as a standalone \"Classification: POSSIBLE RISK\" line, brushing the no-risk-labels-in-titles/headers rule. Otherwise within length, no emojis.",
+    "justification": "Band is right and the load-bearing signal is validated against context, not asserted: \"normalized phone number is shared across three distinct SSNs with different surnames... these three identities do not share a common address\" \u2014 the address-overlap check is exactly what separates 3+ reuse from the shared-household benign case the prompt names, and it is stated before concluding. Mitigators are concrete and context-sourced (ssn_distinct_identity_combinations = 1, email reuse 1, ssn_days_in_system 140, address reuse 2 explained by the co-borrower's prior application, single-family so density normalization does not apply), and it correctly declines the inquiries signal (\"flags this only when credit score >=650\").\n\nTwo reasoning faults keep it off 5. The \"Alert 58 Corroboration\" section claims the alert \"independently confirms this finding\" when it is the same shared-phone data point \u2014 the prompt's explicit one-signal rule. And \"560 consortium applications in the past year\" is dragged in as corroboration for phone reuse; that is dealer/portfolio volume, not an independent identity inconsistency. That section plus \"Verification Needed\" largely restate the phone finding."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_wall_s": 21.744,
+   "judge_usage": {
+    "inputTokens": 3899,
+    "outputTokens": 1737,
+    "cacheReadInputTokens": 0,
+    "cacheWriteInputTokens": 0
+   },
+   "judge_cost_usd": 0.06292
+  },
+  "identity|global.anthropic.claude-sonnet-5|APP-1004": {
+   "verdict": {
+    "band_read_from_analysis": "HIGH RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Bolded line directly under the title carries a risk label (\"support a high-risk finding\"), which the prompt forbids in titles/headers. Scope drift beyond identity: income gap ($88k vs $61.1k), 112% LTV and inquiry/score pattern are credit/underwriting concerns presented as compounding evidence. Title, no-alert-numbers, no-emoji and length limits otherwise respected.",
+    "justification": "Band is correct and reached for the right reasons. It validates against context rather than asserting raw counts: \"5 of 6 matched SSNs sit at the *same unit number* with no shared surnames\" for address, surname-count and 90-day recency for phone, and the 6-week registration window for email. It pre-empts each benign explanation the prompt names: \"Name normalization does not explain a 9-year DOB discrepancy\", multi-unit density (\"which can normally explain overlap\"), and shared household (\"rather than a shared household\"). It also explicitly handles the one-behaviour-one-signal rule: \"Unlike cases where one shared data point (e.g., a household phone) triggers several alerts... independent data channels\". Corroboration is genuinely multi-source (SSN-level DOB conflict + phone + email + exact-unit address + 47-day/4-dealer velocity), so HIGH is defensible under IDEN-017. Deductions: the conclusion re-argues the independence point already made and borrows the prompt's own household-phone example; the bolded rationale line breaches the no-risk-label-in-headers rule; and LTV/income-gap material is outside the identity domain, though it is framed as compounding rather than load-bearing."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_wall_s": 21.799,
+   "judge_usage": {
+    "inputTokens": 4094,
+    "outputTokens": 1784,
+    "cacheReadInputTokens": 0,
+    "cacheWriteInputTokens": 0
+   },
+   "judge_cost_usd": 0.06507
+  },
+  "synthetic|global.anthropic.claude-sonnet-5|APP-1012": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "LOW RISK output capped at 3-5 sentences; this runs ~10 sentences across three blocks. Risk label rendered as a bold header line (\"**Classification: LOW RISK**\") rather than folded into the prose. Title correct, no alert numbers cited, no emoji.",
+    "justification": "Band is right and reached for the right reasons. It validates rather than asserts: \"only one hash_ssn (this borrower) associated with the normalized phone number... phone_ssn_count value of 1 confirms no cross-identity phone reuse actually exists, despite the alert's finding text\" \u2014 exactly the prompt's \"if a signal fires but context reveals a false positive, state this clearly.\" It then engages the pinned sentence directly: thin file \"(2 tradelines, 9 months) is age-appropriate for a 23-year-old\" and explicitly checks for the corroborators the prompt requires \u2014 \"not corroborated by high authorized-user ratio, rapid velocity, or a very-new-file-high-score pattern\u2014none of which are present.\" Address reuse is cleared at both building and unit level, and location variations at one city/state. Deductions are contract/economy only: the 3-5 sentence LOW cap is roughly doubled, and the closing paragraph re-states the false-positive finding already made in the opening (\"The one alert that fired is not supported by its underlying data\"), adding no new evidence. No escalation drift, no alert-volume reasoning."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_wall_s": 19.176,
+   "judge_usage": {
+    "inputTokens": 3684,
+    "outputTokens": 1528,
+    "cacheReadInputTokens": 0,
+    "cacheWriteInputTokens": 0
+   },
+   "judge_cost_usd": 0.056620000000000004
+  },
+  "rings|global.anthropic.claude-opus-5|APP-1012": {
+   "verdict": {
+    "band_read_from_analysis": "POSSIBLE RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 4,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Document title (\"# Fraud Ring Risk Analysis\"); risk label in header (\"## Assessment: **POSSIBLE RISK**\") and section labels (\"MATERIALLY SUSPICIOUS\", \"CLEAN\"); numeric alert citation (\"Alert 58\"); table used as restatement. No emoji.",
+    "justification": "Band correct, largely for the right reasons. Signals are validated against paired context: employer_other_ssns_count=210 across \"64 dealers and 6 states\" is discounted as courier/gig scale, retaining only the concentrated fragment (\"4 of the 210 applied at this same dealer with this same co-borrower\"); consortium_number_of_apps_last_1_year=560 is correctly dismissed as \"a portfolio/consortium-level volume figure, not this borrower's velocity\"; alert volume handled per customer rule (\"Only one alert fired, and it describes the same behavior as the phone signal \u2014 this is one underlying pattern\"). Benign explanation named and left open (\"Repeat co-signing... can be legitimate... has not been ruled out\") \u2014 exactly the POSSIBLE posture. Deductions: (a) invents a threshold absent from the input (\"1\u20132 normal; 3+ warrants investigation\"); (b) \"Corroborating Underwriting Inconsistencies\" leans on 108% LTV, score 548, fraud_score 734 \u2014 affordability/credit risk, and \"typical target vehicle in straw-buyer schemes\" is speculation; (c) Convergent Pattern table plus Rationale restate the signal section."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_wall_s": 31.597,
+   "judge_usage": {
+    "inputTokens": 12671,
+    "outputTokens": 2774,
+    "cacheReadInputTokens": 0,
+    "cacheWriteInputTokens": 0
+   },
+   "judge_cost_usd": 0.132705
+  },
+  "synthetic|global.anthropic.claude-haiku-4-5-20251001-v1:0|APP-1014": {
+   "verdict": {
+    "band_read_from_analysis": "POSSIBLE RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 3,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 3,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Repeatedly cites alert numbers (\"Alert 50\", \"Alert 44 & 45\", \"Alerts 44/45\") against \"Reference specific alert findings, not alert numbers.\" Title correct, no emoji; body is at/near the 4000-character ceiling. Recommendation opens with \"Decline or defer\" and \"Without residence verification documents, approval poses elevated fraud risk,\" which reads harder than the POSSIBLE classification it assigns (alignment strain between classification and recommendation).",
+    "justification": "Band is right and anchored on the pinned signal: it works the ssn_address_location_variations value of 3 (CO/UT/NM in 90 days) against the paired context, names the benign explanation (\"employer\u2014Ridgeway Building Systems\u2014operates multi-state project sites, and each address tracks near one of these sites\") and rejects it on the specific context evidence \"no lease or utility record confirms residence at any of the three addresses.\" It also names genuine mitigators (identity inconsistency flag 0, 134-month history, address/phone SSN counts of 1), and correctly pairs 44/45 as one behaviour. Two defects hold the score down. First, it imports \"350 applications in the last year is extraordinarily high for a single individual and suggests either bulk application fraud\" \u2014 consortium/dealer volume is portfolio data, misattributed to the borrower, and it is then reused in \"Why This Is POSSIBLE\" as further support; income_misrep_score 33 and fraud score 612 are similarly stacked as generic elevation. Second, \"Three independent alerts converge\" leans on alert count. The \"Why This Is POSSIBLE\" section largely restates the earlier convergence paragraph."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_wall_s": 30.468,
+   "judge_usage": {
+    "inputTokens": 4777,
+    "outputTokens": 2384,
+    "cacheReadInputTokens": 0,
+    "cacheWriteInputTokens": 0
+   },
+   "judge_cost_usd": 0.08348499999999999
+  },
+  "bustout|global.anthropic.claude-sonnet-5|APP-1009": {
+   "verdict": {
+    "band_read_from_analysis": "LOW RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 4,
+    "false_positive_verdict": "Pass",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": false,
+    "cites_context_fields": true,
+    "contract_notes": "Adds a title with the applicant name and states the band in a header-style bold line (\"Overall Risk Classification: LOW RISK\") rather than in prose; otherwise no numeric alert citations, no emoji, length proportionate.",
+    "justification": "Band is correct and reached for the right reasons: it does not merely restate that the seven priority signals are 0, it validates each against paired context \u2014 \"CoV of 0.05 across two stated points 26 months apart\", \"prior figure is 26 months old\", stated $64,000 vs verified $62,900 (~1.7%), income_misrep_score 13, loan 38% of income, \"Alerts fired: None\". It also correctly refuses to let a bare score drive escalation: fraud_score 356 is \"moderate but not flagged as high-risk threshold breach\", though that line is asserted rather than evidenced and is the weakest link in the chain. Not a 5 because there was little to consolidate here (no alerts, no firing signals), so the analysis never has to weigh a named benign explanation against an actual adverse signal or collapse duplicate alerts into one behaviour; the \"benign\" reasoning is mostly confirmation that nothing fired. The Conclusion recaps prior findings without new evidence, but it is one short paragraph, not material padding."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_wall_s": 21.07,
+   "judge_usage": {
+    "inputTokens": 4539,
+    "outputTokens": 1567,
+    "cacheReadInputTokens": 0,
+    "cacheWriteInputTokens": 0
+   },
+   "judge_cost_usd": 0.06187
+  },
+  "synthetic|global.anthropic.claude-haiku-4-5-20251001-v1:0|APP-1004": {
+   "verdict": {
+    "band_read_from_analysis": "HIGH RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 5,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 4,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Violates \"Reference specific alert findings, not alert numbers\": \"(Alert 163)\", \"(Alert 4)\", \"(Alert 66...)\", \"(Alert 64...)\". Appears to exceed the 4000-character cap. Risk label in a bolded header line (\"CLASSIFICATION: HIGH RISK\"). Consortium app count (1,180) given its own red-flag heading despite being portfolio data. No emojis; title correct.",
+    "justification": "Correct band for the right reasons. Escalation rests on independent corroborated patterns each validated against the paired _context text, not the raw signal: negative-file hit tied to a prior confirmed fabricated-identity loss; nine-year DOB divergence plus diverging middle initials; \"5 hash_ssn values at unit STE 4B with 5 different surnames... Exact-unit reuse, not building-level spread\"; \"5 hash_ssn values on this normalized phone with 5 different surnames and 4 different addresses - not a household\". It explicitly weighs each benign explanation the prompt names before rejecting it: building-level apartment overlap, household phone sharing, car-shopping velocity (\"5 different dealers in 4 states - not single-market rate shopping\"), immigrant/foreign-credit for the 57-year-old 2-month/771 file, and credit-building for the AU ratio. The correlation section properly separates behaviours so alert volume is not double-counted. Deductions: that section largely restates items 2-7, and items 9-10 (consortium count, LTV/vehicle) add little independent fraud weight. Contract slips on alert numbers and length."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_wall_s": 31.62,
+   "judge_usage": {
+    "inputTokens": 11670,
+    "outputTokens": 2678,
+    "cacheReadInputTokens": 0,
+    "cacheWriteInputTokens": 0
+   },
+   "judge_cost_usd": 0.1253
+  },
+  "bustout|global.anthropic.claude-haiku-4-5-20251001-v1:0|APP-1012": {
+   "verdict": {
+    "band_read_from_analysis": "POSSIBLE RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 3,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 3,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Emoji throughout (\u26a0\ufe0f on every finding, \u2713 in corroboration list); risk label embedded in header/exec summary (\"RISK CLASSIFICATION: POSSIBLE RISK\"); raw model scores cited as risk drivers (\"Fraud Score: 734\", \"Income Misrepresentation Score: 44\"); long RECOMMENDATIONS / \"DECISION AUTHORITY\" and DECLINE recommendation go beyond \"return only the final analysis\".",
+    "justification": "Right band, partly right reasons. It correctly anchors on the loan-exceeds-income signal and validates it against context ($52,700 vs verified $31,900), and it genuinely uses _context to retire signals: variance coefficient 0.05 over 26 months, W-2 single employer, \"rapid_app_velocity NOT FIRED... falls within normal car shopping behavior\". That earns credit.\n\nAgainst it: (a) it claims \"Multiple independent indicators\" then lists six items that are largely one affordability behaviour \u2014 155% DTI, 108% LTV, \"luxury vehicle mismatch\", \"young borrower seeking high-value asset\" are the same fact re-expressed, exactly the stacking rule 2 forbids; (b) credit score 548 is framed as evidence of \"previous credit exploitation\" \u2014 subprime credit is credit risk, not fraud; (c) internal contradiction: \"RAPID APPLICATION CLUSTERING \u26a0\ufe0f\" as a critical finding, later conceded as normal shopping; (d) \"Vehicle-Income Mismatch\" as an intent inference is not an input signal.\n\nPadding: Risk Pattern Assessment and Conclusion restate findings 1\u20135 twice with no new evidence."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_wall_s": 29.567,
+   "judge_usage": {
+    "inputTokens": 6103,
+    "outputTokens": 2297,
+    "cacheReadInputTokens": 0,
+    "cacheWriteInputTokens": 0
+   },
+   "judge_cost_usd": 0.08793999999999999
+  },
+  "identity|global.anthropic.claude-haiku-4-5-20251001-v1:0|APP-1004": {
+   "verdict": {
+    "band_read_from_analysis": "HIGH RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 4,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 3,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Far exceeds the 4000-character cap for POSSIBLE/HIGH. Cites an alert number directly (\"Alert 104 documents a credit file only two months old\"), which the prompt forbids. Risk labels appear in the body (\"Classification: HIGH RISK\", repeated \"Fraud Signal Strength: VERY HIGH\"). Adds an out-of-contract Recommendation section (decline, law enforcement referral, file flagging). No emojis.",
+    "justification": "Band right and largely for the right reasons: three SSN-identity combinations with a nine-year DOB gap plus name mutation is the severe indicator, genuinely independent of the phone hub (5 SSNs, 4 new in 90d, no shared surname/address) and email hub (4 SSNs, 4 surnames). It validates against context, not raw values (\"Context confirms that four of these SSNs were first seen in the last 90 days\"; \"flagged as multi-unit, but the concentration within a single unit negates the multi-unit defense\"), and explicitly rejects the benign readings the prompt names: typo/formatting drift, shared household, population density.\n\nDeductions: it double-counts one behaviour \u2014 \"the credit file itself and the inquiry pattern both point to rapid, artificial credit profile construction\" is one thin-file signal, not corroboration. It leans on dealer volume (\"1,180 applications... Prestige Import Center operation\"), which is portfolio risk, and lists income misrep and 112% LTV as identity corroboration. The Fraud Score Validation section and seven-item Corroboration Summary restate prior findings with no new evidence."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_wall_s": 37.187,
+   "judge_usage": {
+    "inputTokens": 12846,
+    "outputTokens": 3231,
+    "cacheReadInputTokens": 0,
+    "cacheWriteInputTokens": 0
+   },
+   "judge_cost_usd": 0.145005
+  },
+  "rings|global.anthropic.claude-haiku-4-5-20251001-v1:0|APP-1013": {
+   "verdict": {
+    "band_read_from_analysis": "POSSIBLE RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 4,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 3,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "H1 title added; emoji/glyph markers (\u2713 NORMAL, \u26a0 SUSPICIOUS) in the table; appends a \"Recommendation\" verification tier plus a conditional \"reclassify to HIGH RISK\" instruction beyond the requested final analysis.",
+    "justification": "Right band, largely right reasons. Corroborators come from paired context, not raw values: phone_reuse=2 validated as \"1 other SSN citing same employer, 90 miles away, no surname overlap\"; employer=14 as \"12 at current dealer; 3 form internal phone-sharing cluster\"; address_reuse=1 discounted via \"prior applications 14 and 26 months ago\"; email cleared as exclusive. It weighs the benign readings (\"Legitimate Explanations to Consider\": large-employer program, single-dealer partnership, 90 miles feasible for branches) and holds the line against HIGH (\"isolated phone reuse (2 SSNs) is explainable... concentration alone does not prove coordination\"). Faults: self-contradicts on consortium volume \u2014 first \"high-volume environment may amplify... overlap\" (benign), then \"Consortium velocity (470 apps/year)... elevate likelihood\"; pads with credit risk (\"99% LTV... 634 (subprime)\", \"Fraud score: 688\"). The 3-SSN phone cluster is billed as a third pattern though it is the same employer-concentration behaviour. Density mixed: Constellation and Conclusion restate the table in prose; the repeat-customer mitigation appears three times."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_wall_s": 47.329,
+   "judge_usage": {
+    "inputTokens": 18062,
+    "outputTokens": 4083,
+    "cacheReadInputTokens": 0,
+    "cacheWriteInputTokens": 0
+   },
+   "judge_cost_usd": 0.192385
+  },
+  "rings|global.anthropic.claude-haiku-4-5-20251001-v1:0|APP-1012": {
+   "verdict": {
+    "band_read_from_analysis": "POSSIBLE RISK",
+    "band_matches_expectation": true,
+    "calibration_score": 4,
+    "false_positive_verdict": "PassWithNote",
+    "escalation_drift": "aligned",
+    "substance_score": 3,
+    "padding_observed": true,
+    "cites_context_fields": true,
+    "contract_notes": "Numeric alert citation (\"Alert 58 Corroboration\"); risk labels in section headers (\"\u2013 CORROBORATED CONCERN\", \"\u2013 EXPLAINABLE\", \"\u2013 NORMAL\"); document title header; verbatim echo of the prompt's POSSIBLE RISK sentence.",
+    "justification": "Band right, and the load-bearing reason is right: the anchor is paired context, not raw counts \u2014 \"4 of the 210 other SSNs applied at Crown Prestige Motors with Bernard Achebe as co-borrower\", plus phone context naming \"co-borrower's other primary borrower\". Benign explanations are weighed and two signals correctly discounted: address reuse \"Explainable by co-borrower's own repeated use; not independent fraud indicator\"; email \"Completely normal\"; employer breadth softened as \"delivery couriers are high-volume, low-wage, job-rotating employers\". It explicitly declines HIGH RISK.\n\nTwo faults keep it off 5. Alert 58 is called \"Corroboration\" of the same phone-reuse behaviour that produced the signal \u2014 one behaviour counted twice. And \"Supporting Indicators\" imports barred portfolio/credit material as ring evidence: \"Consortium high-volume application activity (560 apps)\", \"Fraud score of 734\", \"LTV of 108%\", \"Credit score of 548\".\n\nPadding: the Coordinated Pattern section restates the Achebe finding twice over; the Conclusion adds nothing."
+   },
+   "judge_model": "global.anthropic.claude-opus-5",
+   "judge_wall_s": 34.913,
+   "judge_usage": {
+    "inputTokens": 11949,
+    "outputTokens": 2765,
+    "cacheReadInputTokens": 0,
+    "cacheWriteInputTokens": 0
+   },
+   "judge_cost_usd": 0.12887
+  }
+ }
+}

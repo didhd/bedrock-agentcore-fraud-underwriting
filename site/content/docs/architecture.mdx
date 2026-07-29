@@ -1,0 +1,184 @@
+---
+title: Architecture overview
+description: One request end to end — signal layer, eight-way parallel fan-out, master synthesis, and the two AgentCore Runtime entrypoints. Where each AWS service sits, and how the shape differs from the incumbent.
+---
+
+*For the AWS SA who has to explain this system in a room, and for the customer's engineer who has to recognise her own architecture in it.*
+
+Nine agents, two layers, one boundary. Governed signals are computed first with no model
+involved; eight specialists then interpret their own slice of those signals in parallel; a
+synthesizer turns the eight narratives into one 21-key adjudication. End to end, that took
+**31.45 s at p50 over 42 measured runs** (`evals/results/pipeline_14x3_us-east-1.json`).
+
+## Request lifecycle
+
+<Mermaid
+  title="One application, start to finish"
+  chart={`
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant R as AgentCore Runtime
+    participant S as Signal layer
+    participant B as Bedrock, 8 specialists
+    participant M as bedrock-mantle synthesizer
+    C->>R: POST /invocations, application_id
+    R->>S: build_signal_payload
+    S-->>R: one DomainView per specialist
+    R->>B: asyncio.gather over 8 fresh Agents
+    B-->>R: 8 prose analyses
+    R->>M: master prompt with the 8 analyses
+    M-->>R: Adjudication, 21 keys
+    R-->>C: SSE frames, one per event
+`}
+/>
+
+Steps 2 and 3 sit **outside** the timed window in every benchmark on this site, because the
+customer's own platform precomputes signals rather than querying per application. Every
+latency figure here is agent latency, not pipeline-including-ETL latency.
+
+Steps 4 and 5 are where the eight-way concurrency lives, and step 8 is why a client sees the
+first specialist land in single-digit seconds instead of waiting for all eight: an
+async-generator entrypoint is auto-converted to `text/event-stream`, one frame per yielded
+object.
+
+## Two layers, one boundary
+
+<Mermaid
+  title="Signal layer produces; analysis layer interprets"
+  chart={`
+flowchart LR
+  SL["Signal layer, no LLM<br/>60 signals<br/>29 General Rules<br/>10 alert categories"]
+  SL --> DV["DomainView<br/>one per specialist"]
+  DV --> AL["Analysis layer<br/>8 Strands Agents<br/>in parallel"]
+  AL --> SY["Synthesizer<br/>21-key Adjudication"]
+`}
+/>
+
+**A specialist has no data tool at all.** `signal_layer.schema.DomainView` is the entire
+universe it reasons over: its own signals, their paired `_context` values, and its own fired
+alerts. "The agent only saw its own domain" is therefore a structural property of the code,
+not an instruction in a prompt that a model might ignore.
+
+That split is the customer's own finding rather than an AWS preference, and it is also what
+keeps text-to-SQL out of the per-application hot path. Detail:
+[Signal layer](/docs/reference/signal-layer) and
+[Semantic layer](/docs/platform/semantic-layer).
+
+## Where each AWS service sits
+
+<Mermaid
+  title="Service placement"
+  chart={`
+flowchart TD
+  UW["AgentCore Runtime: underwriter"] --> BR["Amazon Bedrock: Claude specialists"]
+  UW --> MT["bedrock-mantle: GPT-5.6 synthesizer"]
+  UW --> GW["AgentCore Gateway"]
+  GW --> LM["Lambda signal resolver, SIGNAL_MODE"]
+  LM --> DS["Snowflake Cortex or Aurora PostgreSQL"]
+  FR["AgentCore Runtime: francis"] --> BR
+  FR --> ME["AgentCore Memory"]
+  UW --> OB["CloudWatch and X-Ray via OTel"]
+  FR --> OB
+`}
+/>
+
+| Component | Service | State today |
+|---|---|---|
+| Batch underwriting entrypoint | AgentCore Runtime, `CodeZip`, Python 3.12 | Authored, `agentcore validate` passes |
+| Interactive router entrypoint | AgentCore Runtime, same build | Authored |
+| Eight specialists | Amazon Bedrock, `global.*` inference profiles | Measured over 336 calls |
+| Synthesizer | `bedrock-mantle` endpoint | Measured over 42 calls |
+| Conversation memory for the router | AgentCore Memory, 7-day event expiry | Declared in `agentcore/agentcore.json`; unavailable under `agentcore dev` |
+| Signal source | AgentCore Gateway → Lambda → Cortex or Aurora | **Recommended, not built.** `app/runtime_support.py::build_signal_payload` reads fixtures today and is the single swap point |
+| Traces and spans | CloudWatch Transaction Search, X-Ray, OTel | Wiring documented; per-agent token and cost telemetry is our code's job because the SDK emits none |
+
+Nothing above the signal layer changes when the data source does, and that is the whole point
+of putting `SIGNAL_MODE` on a Lambda rather than a data tool on an agent. See
+[Deployment](/docs/platform/deployment).
+
+## Incumbent shape versus this shape
+
+Same nine agents, same prompts, same output contract. What moves is where the queries happen,
+what runs concurrently, and what is measurable.
+
+| Concern | Snowflake-shaped, as the customer describes it | AgentCore-shaped, this port | Recommendation |
+|---|---|---|---|
+| Signal retrieval | 8 Cortex Analyst messages plus 8 warehouse executions per application | **0** of each; signals precomputed by `signal_layer/` | **AgentCore.** The count is claimable without their credit rate; a dollar figure is not |
+| Text-to-SQL per application | Regenerated per application. A published production decomposition of a Cortex Agent call attributes ~27 s of a 55 s total to Analyst SQL generation — **third-party, not our measurement** | Queries fixed at design time, outside the hot path | **AgentCore.** For a fixed signal set, regenerating SQL per application buys nothing |
+| Specialist concurrency | Reported symptom: 4,500 applications took over 48 hours — **their figure** | `asyncio.gather` over 8 fresh `Agent` instances; measured p50 speed-up **3.64x** against the sequential counterfactual (n=42) | **AgentCore**, with the caveat that the counterfactual's arrangement is hypothetical |
+| Partial failure | Not characterised by us | 7-of-8 graceful degradation, demonstrated live once in the benchmark | **AgentCore** |
+| Prompt custody | Prompts live in the platform | Byte-identical files, sha256-verified at import, CI-diffed | **AgentCore**, and this is the fidelity argument |
+| Per-call cost and token visibility | Not characterised by us | Captured per agent per call from real usage; `evals/bench.py` is the only code allowed to publish it | **AgentCore** |
+| Total spend comparison | Reported projection **$700K–$1M** annual AI spend — **their figure** | Measured **$0.14396 per adjudication** (p50, n=41 priced runs) | **Undecided.** One missing input decides it: [Snowflake comparison](/docs/cost/snowflake-comparison) |
+
+<Callout type="warn" title="Two kinds of number appear in that table and they are labelled">
+Rows marked *their figure* are the customer's statements about their own platform. We never
+measured Snowflake, have no access to their account, and nothing on this site is a benchmark
+of their system. The ~27 s decomposition is a published third-party figure and carries the
+same label wherever it appears.
+</Callout>
+
+## Two entrypoints, two shapes
+
+| | Batch underwriting | Interactive router |
+|---|---|---|
+| Path | `app/underwriter/main.py` | `app/francis/main.py` |
+| Shape | Async-generator `@app.entrypoint` → SSE | Eight specialists as `@tool` wrappers |
+| Concurrency | All eight, every request | **At most 2 tools per query**, from the customer's own routing rules |
+| Output | 21-key `Adjudication` | Markdown, fixed section order |
+| Timeout ceiling | 60 minutes streaming; 15 minutes synchronous and not adjustable | same |
+
+Only one `@app.entrypoint` exists per app — a second one silently overwrites the first — and
+the second parameter must be literally named `context` or it is never injected. Detail:
+[Runtime contract](/docs/platform/agentcore-runtime).
+
+## Reading order from here
+
+<Mermaid
+  title="How the rest of the site is sequenced"
+  chart={`
+flowchart LR
+  A["Architecture"] --> B["Fidelity"]
+  B --> C["Performance"]
+  C --> D["Model selection"]
+  D --> E["Cost"]
+  E --> F["Platform and Reference"]
+`}
+/>
+
+Fidelity first is deliberate: the person reviewing this wrote the originals, so
+byte-identical prompts and a 21-of-21-key contract are the gate everything else sits behind.
+
+<Cards>
+  <Card
+    title="Component detail"
+    href="/docs/what-was-built"
+    description="The eight specialists, the registry, the fan-out, the synthesizer, the repository map."
+  />
+  <Card
+    title="Measured results"
+    href="/docs/measured-results"
+    description="42 live adjudications, 336 specialist calls, $6.4659 of Bedrock spend, every figure cited."
+  />
+  <Card
+    title="Prompt fidelity"
+    href="/docs/fidelity/prompt-fidelity"
+    description="What byte-identical means here and the five mutation attempts that were caught."
+  />
+  <Card
+    title="Snowflake comparison"
+    href="/docs/cost/snowflake-comparison"
+    description="Our measured cost, their reported spend, and the one input that decides between them."
+  />
+</Cards>
+
+## Still unknown at the architecture level
+
+- **AgentCore Runtime overhead is not in any figure on this site.** Benchmarked calls went to
+  Bedrock directly from the host recorded in `run.host`, so container cold start, session
+  setup and SSE framing are excluded.
+- **Throughput is unmeasured.** One application was in flight at a time, so nothing says what
+  happens to p95 when adjudications overlap.
+- **The Gateway path is a recommendation, not a deployment.** No Gateway or Lambda resource
+  exists yet; `agentcore/aws-targets.json` still ships as an empty list.

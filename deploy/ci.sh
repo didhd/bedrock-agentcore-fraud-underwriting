@@ -39,36 +39,55 @@ log "0/4 guard: no 'agentcore configure' / 'agentcore launch' anywhere in the re
 # Scope: tracked files PLUS untracked-but-not-ignored ones, so a config that has
 # been written but not yet committed is still checked, while a stale .venv or a
 # vendored node_modules (both gitignored) cannot trip the guard.
-# --fixed-strings: these are literal command strings, not regexes.
 #
-# Exempt, because naming the commands is the whole point of these files:
-#   deploy/ci.sh        - this guard
-#   deploy/deploy.md    - documents that they do not exist
-#   evals/README.md     - same warning for the eval workflow
-#   tests/test_bench.py - asserts the warning is present and not in a code block
-# `git ls-files --cached` also lists tracked-but-deleted paths, so filter to files
-# that actually exist before grepping; otherwise grep reports them as missing and
-# the guard's output becomes noise.
+# WHAT THIS GUARD IS ACTUALLY LOOKING FOR
+#
+# The danger is a file that *runs* the dead commands. A file that *warns* about them
+# -- this script, deploy/deploy.md, evals/README.md, the docs site's page on the CLI
+# -- has to name them to do its job. Those were previously handled by a
+# hand-maintained exemption list of four paths, and that list went stale the moment
+# anyone wrote documentation: sixteen lines of correct, deliberate warnings failed
+# the build. A guard that fails on correct work is one people learn to bypass.
+#
+# So the scope is now structural: only files a machine would EXECUTE are searched --
+# shell scripts, CI YAML, Makefiles, Dockerfiles, and anything carrying a shebang.
+# Prose may say whatever it needs to. This is the right boundary because the failure
+# being prevented is specifically "CI reported success and deployed nothing", and
+# only an executable file can cause it.
+#
+# Within those files a line is a hit only in an invocation position: first token of
+# the line, or after && || | ; or `(`. That still allows a comment in a script to
+# warn about the commands, which several do.
 GUARD_FILES=()
 while IFS= read -r -d '' candidate; do
-  [ -f "$candidate" ] && GUARD_FILES+=("$candidate")
+  [ -f "$candidate" ] || continue
+  case "$candidate" in
+    deploy/ci.sh) continue ;;                                  # this guard
+    *.sh|*.bash|*.zsh|*.yml|*.yaml|Makefile|*/Makefile|Dockerfile|*/Dockerfile)
+      GUARD_FILES+=("$candidate") ;;
+    *)
+      # Anything with a shebang is executed too, whatever its extension.
+      if IFS= read -r first_line < "$candidate" 2>/dev/null && [ "${first_line#\#!}" != "$first_line" ]; then
+        GUARD_FILES+=("$candidate")
+      fi ;;
+  esac
 done < <(
-  git ls-files -z --cached --others --exclude-standard --deduplicate \
-    -- ':!deploy/ci.sh' ':!deploy/deploy.md' ':!evals/README.md' ':!tests/test_bench.py'
+  git ls-files -z --cached --others --exclude-standard --deduplicate
 )
+
+# An invocation position: start of line, or after a shell list/pipeline operator.
+# Leading whitespace is allowed (indented inside a block or a YAML `run:` step).
+INVOKED='(^|&&|\|\||\||;|\()[[:space:]]*agentcore[[:space:]]+(configure|launch)([[:space:]]|$)'
 
 DEAD_HITS=""
 if [ "${#GUARD_FILES[@]}" -gt 0 ]; then
   DEAD_HITS="$(
-    grep -n -I --fixed-strings \
-      -e 'agentcore configure' \
-      -e 'agentcore launch' \
-      /dev/null "${GUARD_FILES[@]}" || true
+    grep -n -I -E "$INVOKED" /dev/null "${GUARD_FILES[@]}" || true
   )"
 fi
 if [ -n "$DEAD_HITS" ]; then
   printf '%s\n' "$DEAD_HITS" >&2
-  fail "the lines above reference AgentCore subcommands that DO NOT EXIST.
+  fail "the lines above INVOKE AgentCore subcommands that DO NOT EXIST.
       'agentcore configure' and 'agentcore launch' are rejected by @aws/agentcore, but the
       deprecated pip starter toolkit ships a colliding binary on which they parse and no-op --
       so whichever 'agentcore' resolves first on PATH decides whether your deploy is real.
@@ -78,10 +97,26 @@ if [ -n "$DEAD_HITS" ]; then
         agentcore validate
         agentcore deploy --dry-run
         agentcore deploy --target <target> --yes
-      Fix the files above, or add them to this guard's exemption list if their purpose is to
-      warn about the dead commands (see the comment above this check)."
+      Only executable files are searched (shell/YAML/Make/Docker/shebang) and only in
+      invocation position, so a hit here is a real caller. Documentation may name the
+      commands freely; if you are documenting them, the file should not be executable."
 fi
-echo "ok: no references to the non-existent subcommands"
+echo "ok: no executable file invokes the non-existent subcommands"
+
+# The guard must not be vacuous. If the pattern stops matching a real invocation --
+# a regex edit, a grep whose flags changed -- every check above passes silently and a
+# CI script could reintroduce the exact failure this repo shipped with. Both
+# directions are proved, on strings never written to disk.
+if ! printf 'agentcore launch --name x\n' | grep -q -E "$INVOKED"; then
+  fail "the dead-command guard no longer matches a real invocation -- it is inert."
+fi
+if ! printf '  agentcore validate && agentcore configure\n' | grep -q -E "$INVOKED"; then
+  fail "the dead-command guard misses an invocation after '&&' -- it is too narrow."
+fi
+if printf '# never run agentcore-launch-style commands\n' | grep -q -E "$INVOKED"; then
+  fail "the dead-command guard matches a hyphenated name it should not."
+fi
+echo "ok: the guard itself still fires on an invocation and not on a near-miss"
 
 # The colliding binary must not be installed either: with it on PATH ahead of the
 # npm CLI, every `agentcore` call in this script silently targets the wrong tool.

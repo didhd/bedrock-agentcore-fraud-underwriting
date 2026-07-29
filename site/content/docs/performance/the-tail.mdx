@@ -1,0 +1,432 @@
+---
+title: Latency tail
+description: Two of 336 calls generated at 16.1 and 4.7 output tok/s against a 65.50 tok/s median, inside Bedrock's own reported latency, with zero throttles — and the max_tokens fix that was measured and failed all three of its criteria.
+---
+
+*For the customer's engineer. Every figure comes from `evals/results/tail_analysis.json`, derived from `evals/results/pipeline_14x3_us-east-1.json`, with a human-readable sidecar at `evals/results/tail_analysis.md`.*
+
+**Two calls out of 336 caused both over-target runs, and neither is fixable from the client.**
+They generated at **16.1** and **4.7** output tokens per second against a healthy median of
+**65.50 tok/s** (n=332), entirely inside the model's own reported latency, with zero throttles and
+`stop_reason=end_turn`. This is the page where a measurement was allowed to say no: four candidate
+causes were tested, three were ruled out, and the obvious engineering fix was then measured and
+made things worse.
+
+## Four questions, asked in order
+
+<Mermaid
+  title="Elimination sequence, and what survived it"
+  chart={`
+flowchart LR
+  Q1["1 Where?<br/>one specialist call<br/>98.8% and 99.3% of fan-out"] --> Q2["2 Verbosity?<br/>NO for the tail<br/>YES for the floor"]
+  Q2 --> Q3["3 Retries?<br/>RULED OUT<br/>0 throttles, 1.8% max"]
+  Q3 --> Q4["4 Floor?<br/>slowest agent<br/>96.3% of fan-out"]
+  Q4 --> V["Verdict: server-side<br/>generation speed"]
+`}
+/>
+
+Two mechanisms come out of that sequence, and only one of them belongs to us. Verbosity sets the
+**floor** and is addressable through the prompt. Server-side generation speed sets the **tail** and
+is not addressable at all.
+
+## Where the tail sits, and who owns it
+
+Critical path — the slowest specialist — across all 42 runs, then split by run speed:
+
+| Specialist | Slowest in all 42 runs | In the 10 slowest runs | In the 10 fastest runs |
+|---|---:|---:|---:|
+| `rings` | **25** | 2 | **7** |
+| `bustout` | 7 | 3 | 3 |
+| `income` | 5 | 2 | 0 |
+| `identity` | 4 | 3 | 0 |
+| `synthetic` | 1 | 0 | 0 |
+
+`same_owner_for_median_and_tail: false` is recorded in the artifact, and this table is why: `rings`
+owns the median and appears in the fastest ten more than three times as often as in the slowest
+ten. Tail ownership belongs to `bustout` and `income`.
+
+The six slowest runs, with the critical path's share of its own fan-out:
+
+| Application | Rep | e2e | fan-out | synthesis | Critical path | Its share of fan-out |
+|---|---:|---:|---:|---:|---|---:|
+| APP-1007 | 2 | **75.0 s** | 70.6 s | 4.3 s | bustout 69.8 s | **98.8%** |
+| APP-1001 | 2 | **70.2 s** | 66.5 s | 3.7 s | income 66.0 s | **99.3%** |
+| APP-1005 | 1 | 46.5 s | 41.0 s | 5.5 s | identity 41.0 s | 100.0% |
+| APP-1005 | 3 | 43.9 s | 39.7 s | 4.2 s | identity 39.7 s | 100.0% |
+| APP-1012 | 1 | 42.7 s | 37.5 s | 5.3 s | bustout 36.7 s | 98.0% |
+| APP-1005 | 2 | 42.0 s | 36.4 s | 5.6 s | bustout 35.7 s | 98.1% |
+
+One call held APP-1007 rep 2 open for 40 extra seconds on its own. Its other seven specialists
+finished in 29.03 s or less, and six of them in under 10 s.
+
+### 61% of the variance is within an application
+
+Here is the decisive framing. Every application ran three repetitions of **byte-identical** input
+— fixtures are deterministic and `build_payload` runs outside the timed window — so any spread
+within a row is service-side, not workload.
+
+| | Share of total variance |
+|---|---:|
+| Between applications | 39.0% |
+| **Within an application, across repetitions of identical input** | **61.0%** |
+
+Method, quoted: *"one-way sum-of-squares split on application id; reported as a variance SHARE, not
+an F test — n=3 per cell cannot support a significance claim."* Interpretation rule, also quoted:
+*"within-application share above 50% means most of the spread is service-side variance on
+identical input, so a verbosity or model change cannot remove it."*
+
+Per-application spread, widest first, over 14 applications:
+
+| Application | Repetitions (s) | Spread | As multiple of min |
+|---|---|---:|---:|
+| APP-1007 | 23.52, 34.58, **74.97** | **51.45 s** | 3.19x |
+| APP-1001 | 18.93, 24.25, **70.24** | **51.32 s** | 3.71x |
+| APP-1014 | 24.75, 31.63, 41.90 | 17.15 s | 1.69x |
+| APP-1006 | 22.31, 23.76, 33.67 | 11.35 s | 1.51x |
+| APP-1012 | 36.58, 38.22, 42.72 | 6.14 s | 1.17x |
+| APP-1008 | 25.50, 28.46, 31.45 | 5.94 s | 1.23x |
+| APP-1013 | 34.01, 35.19, 39.77 | 5.75 s | 1.17x |
+| APP-1005 | 42.01, 43.91, 46.55 | 4.54 s | 1.11x |
+| APP-1004 | 36.25, 37.79, 39.23 | 2.98 s | 1.08x |
+| APP-1003 | 31.68, 34.30, 34.41 | 2.73 s | 1.09x |
+| APP-1009 | 23.84, 25.67, 25.80 | 1.95 s | 1.08x |
+| APP-1011 | 21.22, 22.40, 22.79 | 1.57 s | 1.07x |
+| APP-1002 | 22.32, 22.92, 23.18 | 0.86 s | 1.04x |
+| APP-1010 | 27.96, 28.38, 28.59 | **0.64 s** | 1.02x |
+
+Twelve of the fourteen sit within 17 s of themselves; two sit within 51 s of themselves. So the
+distribution is not "some applications are slow" — it is "any application can draw a slow call."
+
+Repetition index is a wall-clock window, not a warm-up state. Per-repetition means ran 30.29 s /
+**37.62 s** / 30.50 s, and both over-target runs landed in repetition 2, but quoting the artifact,
+*"each agent is a fresh Strands Agent on a shared botocore client, so there is no per-agent cache
+to warm."* Repetition 2 is simply the window the two stalls happened to fall in, and two events
+cannot establish a time-of-day effect either. The study does not claim one.
+
+## Latency is linear in output tokens — except for two calls
+
+Pooled regression of wall clock against output tokens:
+
+| Fit | n | r | r² | ms per output token | Fixed overhead | Marginal rate |
+|---|---:|---:|---:|---:|---:|---:|
+| All calls | 334 | 0.8514 | 0.7249 | 11.2419 | 3.40 s | 89.0 tok/s |
+| **Excluding the 2 stalls** | **332** | **0.9763** | **0.9531** | 11.3379 | 2.98 s | 88.2 tok/s |
+
+Removing two calls out of 334 lifts r² from 0.72 to **0.95**. So `wall_ms = 2980 + 11.34 ×
+output_tokens` describes 332 calls, and two calls obey a different mechanism entirely.
+
+### The two stalls
+
+| Application | Rep | Agent | Wall | Model-reported latency | Unaccounted | Output tokens | **tok/s** | stop_reason | Error |
+|---|---:|---|---:|---:|---:|---:|---:|---|---|
+| APP-1007 | 2 | bustout | 69.78 s | 69.45 s | 0.33 s | 1,120 | **16.1** | `end_turn` | none |
+| APP-1001 | 2 | income | 66.01 s | 65.01 s | 1.00 s | 306 | **4.7** | `end_turn` | none |
+
+Against the healthy population, n=332 calls under the 60 s threshold:
+
+| Output tok/s | n | min | p50 | p95 | p99 | max | mean |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Healthy calls | 332 | 20.93 | **65.50** | 86.63 | **89.78** | 95.88 | 65.93 |
+
+That `p99 = 89.78 tok/s` is the **one p99 in the whole engagement that clears its minimum** — n=332
+exceeds the 100-sample requirement, and its `suppressed` map is empty. Every other percentile on
+this site sits at n=42 or below on the p99 axis and carries a refusal instead, which is worth
+naming because it shows the policy is a threshold rather than a blanket refusal.
+
+Sharper of the two is `income`: **306 output tokens in 66 seconds**. At the fitted marginal rate of
+88.2 tok/s those tokens should have taken about 6.5 s including overhead, and `income`'s p50 in the
+same benchmark is 8.09 s. It ran **14x** slower than the median call in its own population while
+writing a *below-median* amount of text.
+
+Diagnosis rule, stated in the artifact before being applied: *"A stall whose tok/s is an order of
+magnitude below the healthy median, whose unaccounted time is near zero and whose stop_reason is
+end_turn was slow INSIDE the model. It is not a retry, not a truncation, and not verbosity — it is
+server-side generation speed, which the client cannot configure away."*
+
+### Verbosity is real, and it is a different problem
+
+Verbosity does not explain the tail. It does explain the floor.
+
+| | Domains | n calls | Output tok p50 | Output tok max | Analysis chars p50 | Over 4,000 chars |
+|---|---|---:|---:|---:|---:|---:|
+| Prompt caps at 4,000 chars | identity, dealer, straw, employment, income, synthetic | 251 | **381** | 3,582 | 1,224 | 9 (3.6%) |
+| **No cap in prompt** | **bustout, rings** | 83 | **1,331** | 3,257 | 3,519 | **25 (30.1%)** |
+
+3.5x the output tokens. Latency is linear in output tokens at r²=0.9531, so those two agents buy
+the floor one token at a time. They are also the two whose prompts carry [no character cap at
+all](/docs/fidelity/output-contract-defects#the-two-prompts-with-no-character-cap).
+
+Per-domain fits show *where* the two stalls live:
+
+| Agent | Prompt cap | n | r² all | r² excl. stalls | ms/output token | Fixed overhead |
+|---|---|---:|---:|---:|---:|---:|
+| identity | 4000 | 42 | 0.9834 | 0.9834 | 10.34 | 4.20 s |
+| dealer | 4000 | 42 | 0.9107 | 0.9107 | 10.37 | 3.70 s |
+| straw | 4000 | 42 | 0.8439 | 0.8439 | 10.08 | 2.48 s |
+| employment | 4000 | 42 | 0.9669 | 0.9669 | 10.71 | 3.17 s |
+| **income** | 4000 | 42 | **0.3855** | **0.9619** | 10.63 | 3.18 s |
+| synthetic | 4000 | 41 | 0.8931 | 0.8931 | 12.90 | 2.48 s |
+| **bustout** | **NONE** | 42 | **0.3077** | **0.9810** | 10.83 | 2.16 s |
+| rings | **NONE** | 41 | 0.8437 | 0.8437 | 13.80 | 1.10 s |
+
+Only `income` and `bustout` move at all when the stalls are removed — 0.39 → 0.96 and 0.31 → 0.98 —
+because they are the two agents that stalled. One outlier in 42 destroys the fit for that agent and
+leaves the other six untouched, which is a much stronger form of "two events, one mechanism" than a
+pooled number.
+
+Note also that a character cap and a `max_tokens` cap are not the same constraint. Measured
+chars-per-output-token medians: dealer 4.51, straw 4.22, synthetic 3.10, employment 3.03, rings
+2.81, income 2.72, bustout 2.67, **identity 1.55** — with an observed minimum of **0.33** on an
+identity call that spent 3,582 output tokens to produce 1,191 characters of analysis. Quoting the
+artifact: *"Where this ratio collapses, the model is billed for output the analysis text does not
+contain, so a cap chosen from the character contract truncates earlier than the contract implies."*
+A `max_tokens` derived from "4,000 characters" is a different and unpredictably tighter rule.
+
+## Not retries, and not throttling
+
+This is the strongest single piece of evidence, because it removes the explanation everyone reaches
+for first.
+
+| | Value |
+|---|---|
+| Retry strategy in force | `max_attempts=4`, `initial_delay=1`, `max_delay=8` → ladder **[1, 2, 4] s**, worst case +7 s |
+| What it retries on | **`ModelThrottledException` only** (`strands.event_loop._retry` 1.26.0) |
+| `ThrottlingException` / `ModelThrottledException` recorded on 336 calls | **0** |
+| Failure kinds actually recorded | `synthetic: server_5xx` ×1, `rings: server_5xx` ×1 |
+| Synthesis repair attempts | **0** |
+| `stop_reason` distribution | `end_turn` 334, `None` 2 (the two 5xx) |
+
+Wall clock minus the model's own `latencyMs`, over the 334 calls reporting both clocks, then
+bucketed against the backoff ladder:
+
+| n | min | p50 | p95 | p99 | max | mean |
+|---:|---:|---:|---:|---:|---:|---:|
+| 334 | 0.16 s | **0.73 s** | 1.69 s | 2.59 s | 7.66 s | 0.81 s |
+
+| Bucket | n calls |
+|---|---:|
+| Below the first backoff step — **cannot** be a retry | 246 |
+| One step, consistent with at most one retry | 85 |
+| Two steps or more | 3 |
+| At or above the full ladder | 1 |
+
+<Callout type="error" title="Verdict, quoted in full">
+> *"RULED OUT as the cause of the tail. No ThrottlingException was recorded on any of 336 calls,
+> and ModelThrottledException is the only exception this strategy retries. The two stalled calls
+> carry 1.00s, 0.33s of unaccounted wall clock; even attributing ALL of it to backoff explains at
+> most **1.8%** of their excess over the median call. The tail is inside the model's own reported
+> latency, not in the client."*
+
+That 1.8% is the load-bearing number. Not "we found no evidence of retries" but "even if every
+unaccounted millisecond were backoff, it explains 1.8% of the problem." Connection-pool queueing
+falls with it, since queueing would also appear as unaccounted client-side wall clock.
+</Callout>
+
+A 5xx has the opposite shape, and this sample contains one. The degraded run, APP-1011 rep 3, lost
+both `synthetic` and `rings` to `InternalServerException` and finished in **21.2 s**, among the
+quickest in the sample; the two failed calls spent 8.57 s and 8.02 s before giving up. So a 5xx
+**fails fast** and costs a fraud dimension rather than time, while a stall costs time and loses
+nothing. Conflating those two signatures is how a tail investigation goes wrong.
+
+## Floor: fan-out cannot beat its slowest agent
+
+| Layer | n | p50 | p95 | max |
+|---|---:|---:|---:|---:|
+| Fan-out floor (slowest agent's own wall clock) | 42 | **24.03 s** | 41.04 s | 69.78 s |
+| Orchestration above the floor | 42 | **0.83 s** | 1.87 s | 2.71 s |
+| Synthesis + validation | 42 | 4.20 s | 5.59 s | 15.21 s |
+
+| Share | Median |
+|---|---:|
+| Floor as a share of fan-out | **96.3%** |
+| Fan-out as a share of end-to-end | 85.6% |
+| Post-fan-out as a share of end-to-end | 14.4% |
+
+Quoting the reading: *"Fan-out cannot return before its slowest member, so the floor distribution
+IS the fan-out latency distribution up to ~1s of gathering. Any fix that does not lower the slowest
+agent lowers nothing."* Orchestration costs 0.83 s at the median and never more than 2.71 s across
+42 runs, so a perfect orchestration layer buys under a second.
+
+Slowest minus second-slowest, per run, bounds any single-agent fix — the most it can remove before
+another agent becomes the floor:
+
+| n | min | p50 | p95 | max | mean |
+|---:|---:|---:|---:|---:|---:|
+| 42 | 0.014 s | **6.34 s** | 20.56 s | 50.13 s | 8.53 s |
+
+Making the critical-path agent instantaneous recovers 6.34 s at the median. Detail: [Critical
+path](/docs/performance/critical-path).
+
+## max_tokens sweep [#the-max-tokens-fix-was-measured-and-it-failed]
+
+"The floor is bought one output token at a time" invites capping output tokens. That was tested
+rather than assumed: **30 live Bedrock calls** in us-east-1 on 2026-07-28, caps 1024 / 1536 / 2048 /
+3072 / 4096 across bustout and rings on APP-1004, APP-1012 and APP-1013. **$0.627827 measured** on
+the 16 cells that returned an analysis, plus a bounded **$0.437793** on the 14 that truncated. The
+control is cap 4096 — the shipped value for these tiers — **re-run in the same session**, so a cap
+delta is measured against a same-session control rather than against a run from another day.
+
+Gate stated before the sweep ran: *"A cap is only a fix if it (a) lowers wall clock, (b) truncates
+nothing, and (c) leaves every specialist's risk band unchanged. Failing (b) or (c) makes a latency
+win a lost fraud dimension."*
+
+| Criterion | Measured result | Pass/fail |
+|---|---|---|
+| **(a)** Lowers wall clock | 10 comparable cells: 5 faster, 5 slower. Delta min −10.39 s / p50 −1.52 s / mean **−0.23 s** / max **+17.84 s** | **FAILED** |
+| **(b)** Truncates nothing | **14 of 30 cells truncated.** 263.2 s of wall clock burned for no analysis (mean 18.8 s each, max 29.0 s) | **FAILED** |
+| **(c)** Leaves every band unchanged | **13 of 30** agreed with the same-session control band. 17 disagreed, of which 14 lost the band entirely | **FAILED** |
+
+Only cells that returned an analysis at **both** their cap and the control can support a latency
+claim, and the 14 truncated cells are excluded from criterion (a) for that reason. Quoting:
+*"A cell that truncated finished early because it stopped, not because it was faster, and counting
+it would turn a lost fraud dimension into a latency win."* Including them would have produced a
+headline like "lower caps are 25% faster," which would have been arithmetic on nothing.
+
+Mechanism behind criterion (a) is visible in the cell table: at a given cap the model writes what
+it wants to write, and the cap either does not bind or kills the call. **It never produces a
+shorter analysis.**
+
+**A truncated call is the worst outcome available.** Truncation here is `MaxTokensReachedException`
+from Strands, which **fails the whole specialist** rather than shortening it. Quoting the artifact:
+*"The output is not a briefer analysis; the dimension is gone and fan-out degrades to seven of
+eight."* Full wall clock, fully billed, text discarded, fraud dimension lost — so **a cap low enough
+to shorten these agents is a cap low enough to delete them.**
+
+That $0.437793 basis is stated per cell rather than estimated: output tokens assumed equal to the
+cap, which is what raised the exception, and input tokens taken from that same cell's completed
+sibling at another cap. It is labelled *bounded*, not measured, because a truncated call reports no
+usage.
+
+### The failure boundary is not monotonic
+
+| Agent | Caps tested | Truncated at | Completed at | Lowest cap where **every** cell completed |
+|---|---|---|---|---|
+| bustout | 1024, 1536, 2048, 3072, 4096 | **1024, 1536, 2048** | 1536, 2048, 3072, 4096 | **3072** |
+| rings | 1024, 1536, 2048, 3072, 4096 | **1024, 1536, 2048** | 1536, 2048, 3072, 4096 | **3072** |
+
+Note the overlap: both agents **both truncated and completed** at 1536 and at 2048, depending on
+the application and the draw. One cell — APP-1012 rings — completed at 1536 and then **truncated at
+2048**, a higher cap. No safe cap below the shipped 4096 exists for these two agents on these three
+applications, and 3072 is only "lowest that completed every cell" at one draw each, which is not
+enough to call it safe.
+
+Three of the 17 band disagreements were **not** truncations and still moved a fraud band:
+
+| Cell | Control band | At the cap |
+|---|---|---|
+| APP-1012 bustout @ 3072 | `HIGH RISK` | `POSSIBLE RISK` |
+| APP-1012 rings @ 1536 | `POSSIBLE RISK` | `HIGH RISK` |
+| APP-1013 rings @ 3072 | `HIGH RISK` | `POSSIBLE RISK` |
+
+Whether the cap **caused** those moves is **NOT ESTABLISHED**, and the artifact refuses to claim
+it: *"whether those band moves are caused by the cap or are the same run-to-run instability the
+42-run benchmark already records on APP-1005 and APP-1012. One draw per cell cannot separate the
+two, and this sweep does not claim to."* The source benchmark independently records band
+instability on APP-1005 and APP-1012 with no cap change at all, so the honest statement is
+"evidence of instability at that cap."
+
+### Which caps would bind on observed traffic
+
+Separately from the live sweep, a census of the 334 successful pipeline calls — which ones already
+wrote more than a given cap, i.e. which would have raised `MaxTokensReachedException`:
+
+| max_tokens | Calls already over it | % | Domains affected |
+|---:|---:|---:|---|
+| 1024 | 105 / 334 | **31.4%** | rings 41, bustout 24, identity 14, income 13, employment 5, synthetic 5, dealer 3 |
+| 1536 | 45 / 334 | 13.5% | rings 18, income 9, bustout 8, identity 7, employment 2, synthetic 1 |
+| 2048 | 21 / 334 | 6.3% | identity 7, income 5, bustout 5, rings 4 |
+| 3072 | 3 / 334 | 0.9% | identity 2, bustout 1 |
+| **4096** | **0 / 334** | **0.0%** | — |
+
+Shipped caps by tier: light 3072, mid 4096, heavy 4096. Census labelling is precise: *"MEASURED:
+which observed calls already wrote more than the cap... NOT MEASURED here: the latency or cost of
+running with the cap, because a cap changes what the model writes."* At 1024 the binding is not
+confined to the two verbose agents — **seven of eight** domains are affected, `dealer` on Haiku
+among them.
+
+## Two mechanisms, one conclusion
+
+| | Floor | Tail |
+|---|---|---|
+| Cause | Output length. r²=0.9531 over n=332, so wall clock is linear in output tokens | Server-side generation speed: 2 of 336 calls (0.6%) at 16.1 and 4.7 tok/s |
+| Evidence | bustout and rings write 1,331 output tokens p50 against 381 for the six capped agents; rings owned the critical path in 25 of 42 runs | Inside the model's own reported latency. 0 throttles, no retry, `stop_reason=end_turn`. 61.0% of e2e variance is within-application |
+| Right instrument | The **customer's own prompt text** — the "max 4000 characters" sentence bustout and rings are missing | None available. Quoted: *"This is irreducible run-to-run Bedrock variance and no client-side change removes it"* |
+| Wrong instrument | `max_tokens`, which does not shorten the analysis but deletes it — measured above, failed all three criteria | — |
+| Whose call | Hers. A one-line change to two verbatim customer artifacts, [asked as a question](/docs/open-questions#5-two-of-her-prompts-carry-no-character-cap) | — |
+
+**NOT MEASURED:** whether adding the missing character-cap sentence shortens the output. This work
+did not modify the customer's verbatim prompts.
+
+## What this analysis did not establish
+
+Refusals, quoted from the artifact's own closing section. This list is the reason the rest of the
+page can be trusted.
+
+- **Why** a Bedrock call generates at 4.7 tok/s. *"Only that it does, that it did so on 0.6% of 336
+  calls, and that it is not throttling, not retries and not output length."*
+- **Whether the stall rate is stable.** *"Two events over 336 calls cannot support a rate; the 0.6%
+  figure is a count divided by a denominator, not a predicted frequency."*
+- Whether adding the missing character cap to those prompts shortens their output.
+- Whether the band moves in the sweep were **caused** by the cap.
+- **Any p99** on the end-to-end axis. *"n=42 runs and n=42 fan-outs; the p99 stays suppressed,
+  which matters here precisely because the tail is the question — a 0.6%-per-call event is exactly
+  what a sample this size cannot pin down."*
+- AgentCore runtime overhead, signal generation, and concurrent throughput, all of which the source
+  benchmark also excludes.
+
+Most important of those is the second one. A rare-event question needs a rare-event sample, and
+n=42 runs is not one, so the honest position is that **the tail is characterised, not bounded**. We
+can say what caused these two events and what did not. We cannot say how often it happens, and this
+site does not.
+
+## Mitigation actually available
+
+Not a code change: run selection plus a floor reduction.
+
+| Step | What it is | Status |
+|---|---|---|
+| Demo on a measured-stable application | APP-1010 (0.64 s spread), APP-1002 (0.86 s), APP-1011 (1.57 s), each over 3 repetitions of identical input — against APP-1007 and APP-1001, whose spreads exceed 51 s | Available now. n=3 makes it a low-variance **observation**, not a guarantee: the stall rate is 0.6% **per call** and a run makes eight |
+| Move `rings` off Opus 5 | rings owned the critical path in 25 of 42 runs and the floor is 96.3% of fan-out, so this is the one change that moves the median. `evals/results/tier_quality.json`, n=5 applications per cell: rings p50 **22.05 s on Sonnet 5 against 32.81 s on Opus 5**, at 2,026 against 2,448 output tokens p50, both reaching the pinned band 4 of 5 with the same one judge-confirmed false positive | **Applied** to `agents/models.py`. End-to-end effect **NOT MEASURED** — the 42-run benchmark predates it. [Tier re-derivation](/docs/model-selection/tier-rederivation) |
+| Lower `max_tokens` | Measured above | **Rejected.** 14 of 30 cells truncated, non-monotonically, with no latency gain |
+
+One caution on the rings figure: `evals/results/tail_analysis.md` also quotes a smaller separate
+draw — *"n=3 applications, one draw each"* — at 16.22 s versus 32.81 s, but that draw's source is
+`/tmp/bench/tiering.json`, a scratch file that is not a committed artifact. Quote the 22.05 s
+figure.
+
+## Reproducing this
+
+```bash
+# re-derive the whole analysis from the committed benchmark, no model calls
+python -m evals.tail_analysis --source evals/results/pipeline_14x3_us-east-1.json \
+  --json evals/results/tail_analysis.json --markdown evals/results/tail_analysis.md
+
+# the live cap sweep (this one spends money)
+AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.tail_analysis --live \
+  --caps 1024,1536,2048,3072,4096 --domains bustout,rings \
+  --applications APP-1004,APP-1012,APP-1013
+
+MOCK_MODE=1 python3 -m pytest tests/test_tail_analysis.py -q     # 50 tests
+```
+
+The sweep's provenance string in the artifact is that exact command line, and it records that the
+committed summary was *"re-summarised here through the same functions without re-calling any model;
+the cell measurements are unchanged."*
+
+<Cards>
+  <Card
+    title="Critical path"
+    href="/docs/performance/critical-path"
+    description="Who owns the floor, the 6.34 s ceiling on fixing it, and which fixtures to demo on."
+  />
+  <Card
+    title="Pipeline results"
+    href="/docs/performance/pipeline-results"
+    description="The 42-run source benchmark, row by row."
+  />
+  <Card
+    title="Output-contract defects"
+    href="/docs/fidelity/output-contract-defects"
+    description="The two prompts with no character cap, and the titles every Claude model invents."
+  />
+</Cards>

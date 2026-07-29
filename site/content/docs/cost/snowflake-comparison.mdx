@@ -1,0 +1,151 @@
+---
+title: Snowflake comparison
+description: Our measured $0.14396 per adjudication against the customer's reported $700K-$1M annual AI spend. The comparison cannot be made without one number they have not given us — and at the two ends of a plausible range it points in opposite directions.
+---
+
+*For the executive and account audience primarily. Two kinds of number appear on this page and they are never mixed in one table: **OURS, MEASURED** and **THEIRS, REPORTED**.*
+
+**Unresolvable today, and not because our side is unmeasured.** Cost per adjudication is measured over 42 live adjudications; what is missing is one input from the customer — **how many applications per day go through the full eight-agent forensic underwriting path.** At ~3,000/day the measured p50 annualises to roughly **$158K**; at 300,000/day, roughly **$15.8M**. Same architecture, opposite conclusion.
+
+## Where the comparison breaks
+
+<Mermaid
+  title="One missing input, three answers"
+  chart={`
+flowchart LR
+  M["OURS, MEASURED:<br/>$0.14396 per adjudication<br/>n=41 priced runs"] --> Q{"THEIR forensic-path<br/>volume per day?"}
+  Q -->|"~3,000"| A["~$158K/yr:<br/>4.4x to 6.3x cheaper"]
+  Q -->|"~15,000"| B["~$788K/yr:<br/>break-even"]
+  Q -->|"~300,000"| C["~$15.8M/yr:<br/>an order of magnitude dearer"]
+`}
+/>
+
+We did not measure Snowflake, we have no access to their account, and nothing on this site is a benchmark of their system. Where the two kinds of figure appear near each other, every row is labelled. A blended table would be the exact failure mode this site exists to avoid.
+
+## Our side, measured
+
+| Metric | Value | n | Status |
+|---|---|---|---|
+| Cost per adjudication, min | $0.1177 | 41 priced runs | **OURS, MEASURED** |
+| **Cost per adjudication, p50** | **$0.14396** | 41 priced runs | **OURS, MEASURED** |
+| Cost per adjudication, p95 | $0.2271 | 41 priced runs | **OURS, MEASURED** |
+| Cost per adjudication, max | $0.2536 | 41 priced runs | **OURS, MEASURED** |
+| Cost per adjudication, mean | $0.15616 | 41 priced runs | **OURS, MEASURED** |
+| Total Bedrock spend for the benchmark | **$6.46592** | 42 runs, 336 specialist calls | **OURS, MEASURED** |
+| p99 | *"refused: 41 sample(s), need >= 100. A p99 over 41 sample(s) is not a p99."* | — | refusal recorded verbatim |
+
+Source: `evals/results/pipeline_14x3_us-east-1.json`, run `2026-07-28T07:42:42+00:00` in `us-east-1`, git `9bb569bac801`. 14 applications x 3 repetitions, 9 model calls per adjudication. One run is excluded from the cost distribution because it was degraded — two specialists lost to `InternalServerException` — and therefore not fully priced. It remains in the latency distribution, which is why latency is n=42 and cost is n=41.
+
+Two caveats on our own number, both from the artifact:
+
+1. **This ran under the previous model assignment.** `rings` and `synthetic` were on Opus 5; both moved to Sonnet 5 afterwards. The current assignment's cost is a **projection** — $0.12475 at 2026-07-28 rates, $0.17734 once Sonnet 5's introductory rate lapses on 2026-09-01. The measured $0.14396 is the figure with an n behind it, so it drives the arithmetic below, and the projections are shown separately.
+2. **It excludes AgentCore Runtime overhead and signal generation.** Benchmarked calls went to Bedrock directly from the host recorded in `run.host`, and `build_payload` runs outside the timed and priced window because the customer's own architecture precomputes signals. **This is model spend, not total cost of ownership**: no AgentCore Runtime compute, no Aurora, no ETL, no CloudWatch, no engineering time.
+
+## Their side, as they reported it
+
+| Their reported figure | What it is | Status |
+|---|---|---|
+| **$700K–$1M** | Their **projected annual Snowflake AI spend** | **THEIRS, REPORTED** — we have not seen an invoice, a credit rate, or a breakdown |
+| **4,500 applications in over 48 hours** | Their reported throughput on the current forensic path — the pain point that started the engagement | **THEIRS, REPORTED** |
+| ~10 GB in Aurora PostgreSQL, ~3.4M reads/day | Their reported data footprint, already in AWS | **THEIRS, REPORTED** |
+| Under 1 minute per application | Their stated target | **THEIRS, STATED** |
+
+What the $700K–$1M covers is also unknown, independently of volume. It is described as an **AI** spend, and we do not know whether it includes Cortex Analyst message charges, Cortex Agents charges, or both; warehouse compute for the SQL that Analyst generates and then executes; storage, serverless compute or other Snowflake platform costs; or the RETRO and batch workloads as against only forward-flow underwriting. Each of those changes what our figure should be compared *against*. Both this and the volume question need asking — volume first, because it moves the answer by four orders of magnitude.
+
+## Arithmetic, at three volumes
+
+**OURS x AN ASSUMED VOLUME.** The per-adjudication figure is measured; the volumes are **illustrative brackets chosen to show the range** and are **not** the customer's figures. Formula throughout: `volume x 365 x $0.14395847`.
+
+| Applications/day through the full 8-agent path | Daily | Monthly (30d) | **Annualised (365d)** | Against a reported $700K–$1M | Conclusion |
+|---|---:|---:|---:|---|---|
+| **3,000** | $431.88 | $12,956 | **~$158K** | 4.4x to 6.3x lower | Migration case is made on cost alone |
+| **15,000** | $2,159.38 | $64,781 | **~$788K** | inside the reported band | **Genuinely ambiguous** — the case rests on latency |
+| **300,000** | $43,187.54 | $1,295,626 | **~$15.8M** | 16x to 23x higher | **Reverses** — the architecture would need to change first |
+
+At 15,000/day cost stops being the argument and the case rests entirely on latency — 31.45 s p50 against their reported 48+ hours for 4,500 applications — plus removal of eight Cortex Analyst calls and eight warehouse executions per application. That volume is not an implausible one.
+
+At 300,000/day the port is an order of magnitude *more* expensive on model spend, and it would need batch inference for everything that is not forward-flow, a cheaper tier for the agents that measured no worse, and almost certainly a triage stage so that not every application receives all eight specialists. There is also a hard capacity question at that volume, below.
+
+### Break-even volume
+
+Since the reported figure is a range, the more useful form of the question is what volume makes our measured cost equal to theirs.
+
+| Their reported annual AI spend | Break-even at our measured p50 ($0.14396) | At the current assignment's projection ($0.12475) | At the post-2026-09-01 projection ($0.17734) |
+|---|---:|---:|---:|
+| **$700K** | **~13,300 apps/day** | ~15,400 | ~10,800 |
+| **$1M** | **~19,000 apps/day** | ~22,000 | ~15,400 |
+
+**Below roughly 13,000 applications/day, we are cheaper. Above roughly 19,000, we are not.** Everything between is inside the reported range and undecidable without a tighter figure from them.
+
+Note how much the September rate change moves that window. When Sonnet 5's introductory rate lapses, the break-even against $700K falls from ~13,300 to ~10,800 applications/day — a **19% narrower** window on the same architecture, from a calendar date. If the volume answer lands anywhere near the break-even, the promo expiry is not a footnote. [Cost levers](/docs/cost/levers).
+
+## Exact question to ask
+
+Do **not** ask "how many applications do you process". Consortium volume is much larger than forensic-underwriting volume, and mixing them is how this question gets answered wrongly — in the direction that makes us look expensive.
+
+**Ask:** *of the applications you ingest, how many per day receive the full eight-agent forensic underwriting treatment, as opposed to a score-only or single-product path?*
+
+Three secondary figures worth asking for in the same breath, because each changes the arithmetic rather than just the total:
+
+| Question | Why it changes the arithmetic |
+|---|---|
+| Is the eight-agent path applied to every application, or only above a score threshold? | If a triage stage already exists, the relevant volume may be a small fraction of ingestion — and the whole comparison resolves in our favour immediately |
+| What fraction is re-run? | Repeat submissions and RETRO backfills are the workload where [batch inference](/docs/cost/levers#lever-2-batch-inference--50-with-a-real-exclusion-list) at −50% applies, and forward-flow is the workload where it does not. Their own reported "4,500 applications in over 48 hours" sounds exactly like a batch workload |
+| Does the $700K–$1M include warehouse compute, or only the AI/Cortex line items? | Decides whether our model-spend figure is being compared with a like quantity |
+
+## On our side of the ledger, not as a dollar figure
+
+Two things the port removes per application. **Neither is priced here**, because pricing them would need the customer's Snowflake credit rate, their warehouse size, and their Cortex Analyst message pricing — none of which we have. What is claimable is the **count**:
+
+| Per application | Incumbent path | Here |
+|---|---|---|
+| **Cortex Analyst messages** | **8** | **0** |
+| **Warehouse executions** | **8** | **0** |
+| LLM calls | 9 | 9 |
+
+Their leadership often finds the count more persuasive than the latency, because they know what a warehouse-second costs and we do not. Handing them a count they can price themselves is stronger than handing them a dollar figure we had to assume our way into.
+
+A latency argument attaches to the same change. A published production decomposition of a Cortex Agent call attributes **~27 s of a 55 s total** to Cortex Analyst SQL generation alone. **That figure is not our measurement** — it is a published third-party decomposition and is labelled as such wherever it appears. For a fixed set of fraud signal groups the queries are known at design time, so regenerating them per application buys nothing. See `docs/semantic-layer-mcp.md` and [the semantic layer](/docs/platform/semantic-layer).
+
+## Capacity question that only exists at high volume
+
+If the volume answer is at the top of the range, there is a second thing to raise **before any load test**, not after.
+
+At 300,000 applications/day x 9 calls x ~2,250 tokens the workload approaches **6.1B tokens/day**. Claude Sonnet 5's daily token ceiling is **8.64B** and is **not adjustable** — it is an account-team escalation, not a self-serve quota ticket. That is 71% of a non-adjustable ceiling on the model six of the eight specialists run on. It does not block anything at 3,000/day. It is a design constraint at 300,000/day, and it depends entirely on the answer to the same question.
+
+## What must not be said
+
+Recorded explicitly, because each is an easy sentence to say in a room and each is unsupported.
+
+| Do not say | Why |
+|---|---|
+| *"We are 5x cheaper than Snowflake."* | True only at the low end of an unknown volume range, and it quotes their reported figure as if we had measured it |
+| *"$0.14 per application versus their $700K."* | A per-unit figure against an annual total, with no volume. Not a comparison |
+| *"We benchmarked Snowflake at 48 hours."* | We did not benchmark Snowflake at all. That is **their reported figure about their own platform**, and the UI deliberately contains no "AgentCore vs Snowflake" comparison for exactly this reason — the string "Snowflake" does not appear in it |
+| *"Per-agent model tiering delivers the cost saving."* | The tier shape saves **$0.00** structurally, and a test asserts the arithmetic. [Detail](/docs/cost/what-does-not-work#per-agent-tiering-saves-000-structurally) |
+| *"Prompt caching cuts the input cost."* | It does not engage on this workload at all. [Detail](/docs/cost/what-does-not-work#prompt-caching-does-not-engage) |
+| *"Batch inference halves the bill."* | Worth **3.58%** on this assignment, because Bedrock offers no batch price for Sonnet 5 or GPT-5.6. [Detail](/docs/cost/levers#lever-2-batch-inference--50-with-a-real-exclusion-list) |
+| Any annualised figure without its assumed volume stated in the same sentence | The volume is the entire uncertainty |
+
+<Callout type="error" title="The single most important open item in this engagement">
+**Our measured cost is $0.14396 per adjudication over 41 priced runs; their reported spend is
+$700K–$1M a year; the two meet somewhere between 13,000 and 19,000 applications per day, and we
+do not know which side of that line they are on.**
+
+That sentence is the honest state of the cost case, and it is one customer answer away from being
+a conclusion.
+</Callout>
+
+## Still unknown
+
+| Missing input | What it would settle |
+|---|---|
+| **Their forensic-path volume per day** | One number. It converts this page from unresolvable to decided, in either direction |
+| What the $700K–$1M line item covers | Whether it is AI-only or includes warehouse compute, and whether it includes RETRO |
+| Cost of the *current* assignment | `AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.bench --pipeline --repetitions 3` — roughly $5 of spend, and it replaces the $0.12475 projection with a measured p50 |
+| Behaviour under concurrency | Applications were run **one at a time**. Nothing here says what happens when N adjudications overlap, and at any interesting volume they will |
+
+<Cards>
+  <Card title="Cost levers" href="/docs/cost/levers" description="The three levers that survive arithmetic, and the rate change that moves the break-even." />
+  <Card title="Measured results" href="/docs/measured-results" description="Where the $0.14396 and the 31.45 s p50 come from, with their n." />
+</Cards>

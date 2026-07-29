@@ -36,6 +36,16 @@ Usage
 
   AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.bench --live --iterations 3
   AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.bench --live --dry-run   # price only
+
+  python -m evals.bench --pipeline --mock --repetitions 1        # no spend, shape only
+  AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.bench --pipeline --repetitions 3
+
+``--pipeline`` is the mode that answers the customer's actual question. ``--live``
+above re-implements the fan-out inside this module, which makes it a measurement of
+*a* fan-out rather than of the shipped one; ``--pipeline`` calls
+``agents.fanout.fan_out`` and ``agents.synthesize.synthesize`` directly, so what it
+times is the code path AgentCore runs, including the mantle synthesizer, the
+bounded repair loop and the 21-key validation.
 """
 
 from __future__ import annotations
@@ -53,7 +63,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Final, Iterable, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -446,36 +456,63 @@ def nearest_rank_percentile(sorted_values: Sequence[float], p: float) -> float:
     return sorted_values[min(rank, n) - 1]
 
 
-def summarize_latencies(values: Iterable[float], label: str = "") -> dict[str, Any]:
-    """p50/p95/p99 of a sample, refusing any percentile the sample cannot support.
+def summarize_values(
+    values: Iterable[float], label: str = "", unit: str = ""
+) -> dict[str, Any]:
+    """p50/p95/p99 of any sample, refusing any percentile the sample cannot support.
 
-    A suppressed percentile comes back as ``None`` with its reason recorded in
-    ``suppressed``. Callers render "n/a (need N samples)" rather than a number.
+    Unit-agnostic sibling of :func:`summarize_latencies`: the pipeline benchmark
+    also has to summarize a dimensionless quantity (the parallel speed-up ratio)
+    and dollars, and those must be guarded by the same sample-count policy as a
+    latency. Keys are bare (``p50``, not ``p50_ms``) with the unit recorded
+    alongside, so a reader cannot mistake a ratio for milliseconds.
     """
     samples = sorted(float(v) for v in values)
     n = len(samples)
     out: dict[str, Any] = {
         "label": label,
+        "unit": unit,
         "n": n,
         "method": PERCENTILE_METHOD,
-        "min_ms": round(samples[0], 3) if n else None,
-        "max_ms": round(samples[-1], 3) if n else None,
-        "mean_ms": round(statistics.fmean(samples), 3) if n else None,
-        "p50_ms": None,
-        "p95_ms": None,
-        "p99_ms": None,
+        "min": samples[0] if n else None,
+        "max": samples[-1] if n else None,
+        "mean": statistics.fmean(samples) if n else None,
+        "p50": None,
+        "p95": None,
+        "p99": None,
         "suppressed": {},
     }
     for name, p in (("p50", 0.50), ("p95", 0.95), ("p99", 0.99)):
         need = PERCENTILE_MIN_SAMPLES[name]
         if n >= need:
-            out[f"{name}_ms"] = round(nearest_rank_percentile(samples, p), 3)
+            out[name] = nearest_rank_percentile(samples, p)
         else:
             out["suppressed"][name] = (
                 f"refused: {n} sample(s), need >= {need}. A {name} over {n} "
                 f"sample(s) is not a {name}."
             )
     return out
+
+
+def summarize_latencies(values: Iterable[float], label: str = "") -> dict[str, Any]:
+    """p50/p95/p99 of a millisecond sample, with ``_ms``-suffixed keys.
+
+    A suppressed percentile comes back as ``None`` with its reason recorded in
+    ``suppressed``. Callers render "n/a (need N samples)" rather than a number.
+    """
+    base = summarize_values(values, label=label, unit="ms")
+    return {
+        "label": base["label"],
+        "n": base["n"],
+        "method": base["method"],
+        "min_ms": round(base["min"], 3) if base["min"] is not None else None,
+        "max_ms": round(base["max"], 3) if base["max"] is not None else None,
+        "mean_ms": round(base["mean"], 3) if base["mean"] is not None else None,
+        "p50_ms": round(base["p50"], 3) if base["p50"] is not None else None,
+        "p95_ms": round(base["p95"], 3) if base["p95"] is not None else None,
+        "p99_ms": round(base["p99"], 3) if base["p99"] is not None else None,
+        "suppressed": base["suppressed"],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1056,6 +1093,1336 @@ async def run_live(
 
 
 # ---------------------------------------------------------------------------
+# Pipeline mode: the shipped fan-out + the shipped synthesizer, over every fixture
+#
+# WHY THIS IS A SEPARATE MODE FROM --live. ``run_live`` above builds its own
+# ``strands.Agent`` per specialist and its own synthesis call. That was enough to
+# prove the measurement path works, but it is NOT the code AgentCore runs: it does
+# not go through ``agents.fanout``'s semaphore, widened executor or shared botocore
+# pool, it does not go through ``agents.synthesize``'s structured-output validation
+# or its bounded repair, and it cannot reach the mantle synthesizer at all (GPT-5.x
+# is not on Converse). A latency published from it would be a latency for a
+# different program.
+#
+# ``--pipeline`` calls ``fan_out`` and ``synthesize`` and measures what they report
+# about themselves, so the headline number describes the shipped pipeline.
+# ---------------------------------------------------------------------------
+
+#: The customer's stated target, and the only form of it this harness can answer.
+#: "Sub-minute per application" is a wall-clock statement about one adjudication,
+#: so the report counts runs under this threshold rather than claiming a
+#: distribution-wide guarantee no sample size here could support.
+TARGET_E2E_SECONDS: Final = 60.0
+
+#: Default repetitions per application for ``--pipeline``. Three is chosen from the
+#: cost, not from statistics: 14 applications x 3 x ~$0.245 is ~$10 of inference,
+#: and 42 samples is the smallest set that clears PERCENTILE_MIN_SAMPLES["p95"]=20
+#: for the pooled end-to-end figure. It does NOT clear p95 per application (3
+#: samples each), and the report suppresses those rather than printing them.
+PIPELINE_DEFAULT_REPETITIONS: Final = 3
+
+
+@dataclass
+class SpecialistMeasurement:
+    """One specialist within one pipeline run, copied off its SpecialistResult.
+
+    Every field here is read from what ``agents.fanout`` measured; nothing is
+    recomputed and nothing is defaulted. ``usage`` is the raw Bedrock dict so all
+    four token classes survive into the JSON.
+    """
+
+    domain: str
+    agent_name: str
+    model_id: str
+    tier: str
+    wall_ms: float
+    latency_ms: float | None
+    usage: dict[str, int] | None
+    cost_usd: float | None
+    stop_reason: str | None
+    error: str | None
+    analysis_chars: int
+    source: str
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "domain": self.domain,
+            "agent_name": self.agent_name,
+            "model_id": self.model_id,
+            "tier": self.tier,
+            "wall_ms": round(self.wall_ms, 3),
+            "latency_ms": self.latency_ms,
+            "usage": self.usage,
+            "cost_usd": self.cost_usd,
+            "stop_reason": self.stop_reason,
+            "error": self.error,
+            "analysis_chars": self.analysis_chars,
+            "source": self.source,
+        }
+
+
+@dataclass
+class PipelineRun:
+    """One full adjudication: eight specialists fanned out, then one synthesis.
+
+    ``failure_kinds`` classifies every error string this run produced. A run that
+    lost a specialist is reported as such -- it stays in the latency sample (it
+    really did take that long) and is EXCLUDED from the per-application cost, which
+    would otherwise be an under-count wearing a total's name.
+    """
+
+    application_id: str
+    repetition: int
+    fanout_wall_ms: float
+    specialists: list[SpecialistMeasurement]
+    synthesis_wall_ms: float | None
+    synthesis_latency_ms: float | None
+    synthesis_usage: dict[str, int] | None
+    synthesis_cost_usd: float | None
+    synthesis_model_id: str
+    synthesis_stop_reason: str | None
+    repair_attempts: int | None
+    degraded_domains: list[str]
+    adjudication_validated: bool
+    adjudication_keys: int | None
+    overall_risk_decision: str | None
+    recommendation_decision: str | None
+    e2e_wall_ms: float
+    synthesis_error: str | None = None
+
+    # -- derived, all from measured members only ---------------------------
+
+    @property
+    def sum_of_eight_ms(self) -> float:
+        """The sequential counterfactual: what eight specialists cost one after another.
+
+        Uses each specialist's own measured wall clock. It is a counterfactual and
+        labelled as one -- run sequentially the calls might each be marginally
+        faster with no pool contention -- but every term in it was measured.
+        """
+        return sum(s.wall_ms for s in self.specialists)
+
+    @property
+    def slowest_specialist(self) -> str | None:
+        if not self.specialists:
+            return None
+        return max(self.specialists, key=lambda s: s.wall_ms).domain
+
+    @property
+    def slowest_specialist_wall_ms(self) -> float | None:
+        if not self.specialists:
+            return None
+        return max(s.wall_ms for s in self.specialists)
+
+    @property
+    def parallel_speedup(self) -> float | None:
+        """sum-of-eight / fan-out wall clock. None if the fan-out took no time."""
+        if self.fanout_wall_ms <= 0:
+            return None
+        return self.sum_of_eight_ms / self.fanout_wall_ms
+
+    @property
+    def failed_domains(self) -> list[str]:
+        return [s.domain for s in self.specialists if s.error]
+
+    @property
+    def complete(self) -> bool:
+        """All eight specialists answered AND the adjudication validated."""
+        return (
+            len(self.specialists) == len(DOMAINS)
+            and not self.failed_domains
+            and self.adjudication_validated
+        )
+
+    @property
+    def fully_priced(self) -> bool:
+        """Every one of the nine calls reported real usage and a real cost."""
+        return (
+            self.complete
+            and all(s.usage is not None and s.cost_usd is not None for s in self.specialists)
+            and self.synthesis_usage is not None
+            and self.synthesis_cost_usd is not None
+        )
+
+    @property
+    def cost_usd(self) -> float | None:
+        """Total measured cost of this adjudication, or None if anything is unpriced."""
+        if not self.fully_priced:
+            return None
+        return sum(s.cost_usd for s in self.specialists) + self.synthesis_cost_usd  # type: ignore[misc,operator]
+
+    @property
+    def failure_kinds(self) -> list[str]:
+        """Every error on this run, classified by exception name."""
+        kinds: list[str] = []
+        for spec in self.specialists:
+            if spec.error:
+                kinds.append(f"{spec.domain}: {classify_failure(spec.error)}")
+        if self.synthesis_error:
+            kinds.append(f"synthesis: {classify_failure(self.synthesis_error)}")
+        return kinds
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "application_id": self.application_id,
+            "repetition": self.repetition,
+            "fanout_wall_ms": round(self.fanout_wall_ms, 3),
+            "sum_of_eight_ms": round(self.sum_of_eight_ms, 3),
+            "parallel_speedup": (
+                round(self.parallel_speedup, 4) if self.parallel_speedup is not None else None
+            ),
+            "slowest_specialist": self.slowest_specialist,
+            "slowest_specialist_wall_ms": (
+                round(self.slowest_specialist_wall_ms, 3)
+                if self.slowest_specialist_wall_ms is not None
+                else None
+            ),
+            "synthesis_wall_ms": (
+                round(self.synthesis_wall_ms, 3) if self.synthesis_wall_ms is not None else None
+            ),
+            "synthesis_latency_ms": self.synthesis_latency_ms,
+            "synthesis_usage": self.synthesis_usage,
+            "synthesis_cost_usd": self.synthesis_cost_usd,
+            "synthesis_model_id": self.synthesis_model_id,
+            "synthesis_stop_reason": self.synthesis_stop_reason,
+            "synthesis_error": self.synthesis_error,
+            "repair_attempts": self.repair_attempts,
+            "degraded_domains": self.degraded_domains,
+            "adjudication_validated": self.adjudication_validated,
+            "adjudication_keys": self.adjudication_keys,
+            "overall_risk_decision": self.overall_risk_decision,
+            "recommendation_decision": self.recommendation_decision,
+            "e2e_wall_ms": round(self.e2e_wall_ms, 3),
+            "e2e_seconds": round(self.e2e_wall_ms / 1000.0, 3),
+            "under_target": self.e2e_wall_ms / 1000.0 < TARGET_E2E_SECONDS,
+            "failed_domains": self.failed_domains,
+            "failure_kinds": self.failure_kinds,
+            "complete": self.complete,
+            "fully_priced": self.fully_priced,
+            "cost_usd": self.cost_usd,
+            "specialists": [s.to_json() for s in self.specialists],
+        }
+
+
+#: Failure classes worth counting separately, because they mean different things to
+#: the customer. Throttling is a capacity/quota conversation; MaxTokens is a config
+#: bug in this repo; a 5xx is transient and argues for a retry policy. Lumping them
+#: into "errors: 3" hides which of those three conversations is needed.
+FAILURE_PATTERNS: Final[tuple[tuple[str, str], ...]] = (
+    ("ThrottlingException", "throttled"),
+    ("TooManyRequestsException", "throttled"),
+    ("ServiceQuotaExceededException", "throttled"),
+    ("MaxTokensReachedException", "max_tokens_truncation"),
+    ("ModelStreamErrorException", "stream_error"),
+    ("InternalServerException", "server_5xx"),
+    ("ServiceUnavailableException", "server_5xx"),
+    ("ModelTimeoutException", "timeout"),
+    ("ReadTimeoutError", "timeout"),
+    ("ConnectTimeoutError", "timeout"),
+    ("ValidationException", "validation"),
+    ("AccessDeniedException", "access_denied"),
+    ("SynthesisContractError", "contract_failure"),
+    ("MantleUnavailable", "mantle_unavailable"),
+)
+
+
+def classify_failure(error: str) -> str:
+    """Bucket one error string into a named failure class.
+
+    Substring matching on the exception name that ``agents.fanout`` already put at
+    the front of the string. An unrecognised error keeps its own exception name
+    rather than being filed as "other", so nothing disappears into a catch-all.
+    """
+    for needle, label in FAILURE_PATTERNS:
+        if needle in error:
+            return label
+    return error.split(":", 1)[0].strip() or "unknown"
+
+
+async def _run_one_pipeline(
+    application_id: str,
+    repetition: int,
+    *,
+    mock: bool,
+) -> PipelineRun:
+    """One adjudication through the shipped fan-out and the shipped synthesizer.
+
+    The payload is built OUTSIDE the timed window: signal projection is the
+    customer's own precomputed-signal layer (Agent_Underwriting_Process_Guide 2.2),
+    not part of the model latency being measured, and including it would make this
+    number incomparable with the per-call figures it is built from.
+    """
+    from agents.contracts import ADJUDICATION_FIELD_ORDER  # noqa: PLC0415
+    from agents.fanout import fan_out  # noqa: PLC0415
+    from agents.synthesize import synthesize  # noqa: PLC0415
+    from fixtures.loader import build_payload  # noqa: PLC0415
+
+    payload = build_payload(application_id)
+
+    e2e_start = time.perf_counter()
+    fanout_start = time.perf_counter()
+    results = await fan_out(payload, mock=mock)
+    fanout_wall_ms = (time.perf_counter() - fanout_start) * 1000.0
+
+    specialists = [
+        SpecialistMeasurement(
+            domain=domain,
+            agent_name=result.agent_name,
+            model_id=result.model_id,
+            tier=result.tier,
+            wall_ms=result.wall_ms,
+            latency_ms=result.latency_ms,
+            usage=result.usage,
+            cost_usd=result.cost_usd,
+            stop_reason=result.stop_reason,
+            error=result.error,
+            analysis_chars=len(result.analysis or ""),
+            source=result.source,
+        )
+        for domain, result in results.items()
+    ]
+
+    synthesis_wall_ms: float | None = None
+    synthesis_latency_ms: float | None = None
+    synthesis_usage: dict[str, int] | None = None
+    synthesis_cost: float | None = None
+    synthesis_stop: str | None = None
+    synthesis_error: str | None = None
+    repair_attempts: int | None = None
+    degraded: list[str] = []
+    validated = False
+    keys: int | None = None
+    overall: str | None = None
+    recommendation: str | None = None
+    synthesis_model = "unknown"
+
+    syn_start = time.perf_counter()
+    try:
+        synthesis = await synthesize(results, application_id=application_id, mock=mock)
+    except Exception as exc:  # a failed synthesis is data, not a crashed benchmark
+        synthesis_wall_ms = (time.perf_counter() - syn_start) * 1000.0
+        synthesis_error = f"{type(exc).__name__}: {exc}"
+        from agents.models import SYNTHESIZER_MODEL  # noqa: PLC0415
+
+        synthesis_model = SYNTHESIZER_MODEL
+    else:
+        synthesis_wall_ms = synthesis.wall_ms
+        synthesis_latency_ms = synthesis.latency_ms
+        synthesis_usage = synthesis.usage
+        synthesis_cost = synthesis.cost_usd
+        synthesis_stop = synthesis.stop_reason
+        synthesis_model = synthesis.model_id
+        repair_attempts = synthesis.repair_attempts
+        degraded = list(synthesis.degraded_domains)
+        dumped = synthesis.adjudication.model_dump()
+        keys = len(dumped)
+        # ``synthesize`` never returns an unvalidated object, so reaching here IS
+        # the validation result. The key count is re-checked anyway: it is the one
+        # assertion the customer's engineer will make first.
+        validated = keys == len(ADJUDICATION_FIELD_ORDER) and set(dumped) == set(
+            ADJUDICATION_FIELD_ORDER
+        )
+        overall = dumped.get("overall_risk_decision")
+        recommendation = dumped.get("recommendation_decision")
+
+    e2e_wall_ms = (time.perf_counter() - e2e_start) * 1000.0
+    return PipelineRun(
+        application_id=application_id,
+        repetition=repetition,
+        fanout_wall_ms=fanout_wall_ms,
+        specialists=specialists,
+        synthesis_wall_ms=synthesis_wall_ms,
+        synthesis_latency_ms=synthesis_latency_ms,
+        synthesis_usage=synthesis_usage,
+        synthesis_cost_usd=synthesis_cost,
+        synthesis_model_id=synthesis_model,
+        synthesis_stop_reason=synthesis_stop,
+        synthesis_error=synthesis_error,
+        repair_attempts=repair_attempts,
+        degraded_domains=degraded,
+        adjudication_validated=validated,
+        adjudication_keys=keys,
+        overall_risk_decision=overall,
+        recommendation_decision=recommendation,
+        e2e_wall_ms=e2e_wall_ms,
+    )
+
+
+def _under_target_accounting(runs: Sequence[PipelineRun]) -> dict[str, Any]:
+    """How many runs, and how many applications, came in under the target.
+
+    Two different questions, both asked, because they have different answers and
+    only one of them is "how many of the 14 came in under 60 seconds":
+
+      * ``runs_under_target`` -- of every measured adjudication.
+      * ``applications_all_reps_under_target`` -- applications where EVERY
+        repetition was under. This is the strict reading and the one to quote.
+      * ``applications_any_rep_under_target`` -- applications where at least one
+        was. The gap between the two is the applications that straddle the line,
+        and naming it is the point: a p50 under 60s is not a promise of 60s.
+    """
+    per_app: dict[str, list[bool]] = {}
+    for run in runs:
+        per_app.setdefault(run.application_id, []).append(
+            run.e2e_wall_ms / 1000.0 < TARGET_E2E_SECONDS
+        )
+    all_under = sorted(app for app, flags in per_app.items() if flags and all(flags))
+    any_under = sorted(app for app, flags in per_app.items() if any(flags))
+    straddling = sorted(set(any_under) - set(all_under))
+    return {
+        "target_seconds": TARGET_E2E_SECONDS,
+        "n_runs": len(runs),
+        "runs_under_target": sum(
+            1 for run in runs if run.e2e_wall_ms / 1000.0 < TARGET_E2E_SECONDS
+        ),
+        "n_applications": len(per_app),
+        "applications_all_reps_under_target": len(all_under),
+        "applications_any_rep_under_target": len(any_under),
+        "applications_never_under_target": sorted(set(per_app) - set(any_under)),
+        "applications_straddling_target": straddling,
+        "per_application_reps_under_target": {
+            app: {"n_reps": len(flags), "under": sum(flags)}
+            for app, flags in sorted(per_app.items())
+        },
+        "note": (
+            "A count of runs under a threshold is not a percentile and not an SLA. "
+            "It is the only form of a 'sub-minute per application' claim this "
+            "sample size can support."
+        ),
+    }
+
+
+def build_pipeline_report(
+    *,
+    env: dict[str, Any],
+    runs: Sequence[PipelineRun],
+    models: dict[str, str],
+    application_ids: Sequence[str],
+    repetitions: int,
+    mock: bool,
+    extra_caveats: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Aggregate pipeline runs into the committed report.
+
+    Everything here is derived from measured members of :class:`PipelineRun`. The
+    only judgements the aggregation makes are (a) which runs are complete enough to
+    contribute a cost, and (b) which percentiles the sample supports -- and both are
+    reported next to the number rather than applied silently.
+    """
+    e2e = [r.e2e_wall_ms for r in runs]
+    fanout = [r.fanout_wall_ms for r in runs]
+    synthesis = [r.synthesis_wall_ms for r in runs if r.synthesis_wall_ms is not None]
+    speedups = [r.parallel_speedup for r in runs if r.parallel_speedup is not None]
+    sums = [r.sum_of_eight_ms for r in runs]
+
+    per_application: dict[str, Any] = {}
+    for app_id in sorted({r.application_id for r in runs}):
+        rows = [r for r in runs if r.application_id == app_id]
+        costs = [r.cost_usd for r in rows if r.cost_usd is not None]
+        verdicts = sorted({r.overall_risk_decision for r in rows if r.overall_risk_decision})
+        recs = sorted({r.recommendation_decision for r in rows if r.recommendation_decision})
+        per_application[app_id] = {
+            "n_runs": len(rows),
+            "end_to_end": summarize_latencies((r.e2e_wall_ms for r in rows), f"{app_id} e2e"),
+            "fan_out": summarize_latencies(
+                (r.fanout_wall_ms for r in rows), f"{app_id} fan-out"
+            ),
+            "synthesis": (
+                summarize_latencies(
+                    (r.synthesis_wall_ms for r in rows if r.synthesis_wall_ms is not None),
+                    f"{app_id} synthesis",
+                )
+                if any(r.synthesis_wall_ms is not None for r in rows)
+                else {"n": 0, "note": "no synthesis wall clock recorded for this application"}
+            ),
+            "parallel_speedup": summarize_values(
+                (r.parallel_speedup for r in rows if r.parallel_speedup is not None),
+                f"{app_id} speed-up",
+                unit="x",
+            ),
+            "cost_usd": {
+                "n_priced_runs": len(costs),
+                "n_unpriced_runs": len(rows) - len(costs),
+                "min": min(costs) if costs else None,
+                "max": max(costs) if costs else None,
+                "mean": statistics.fmean(costs) if costs else None,
+                "note": (
+                    None
+                    if costs
+                    else "no run of this application produced real usage for all nine calls"
+                ),
+            },
+            "complete_runs": sum(1 for r in rows if r.complete),
+            "degraded_runs": sum(1 for r in rows if r.failed_domains),
+            "validated_runs": sum(1 for r in rows if r.adjudication_validated),
+            "overall_risk_decisions_observed": verdicts,
+            "recommendation_decisions_observed": recs,
+            "verdict_stable_across_repetitions": len(verdicts) <= 1 and len(recs) <= 1,
+        }
+
+    per_specialist: dict[str, Any] = {}
+    for domain in DOMAINS:
+        rows = [s for r in runs for s in r.specialists if s.domain == domain]
+        if not rows:
+            continue
+        ok = [s for s in rows if not s.error]
+        costs = [s.cost_usd for s in rows if s.cost_usd is not None]
+        reported = [s.latency_ms for s in rows if s.latency_ms is not None]
+        per_specialist[domain] = {
+            "model_id": rows[0].model_id,
+            "tier": rows[0].tier,
+            "n_calls": len(rows),
+            "n_failed": len(rows) - len(ok),
+            # Successful calls only: a call that failed after 200ms would otherwise
+            # drag the p50 DOWN and make the dimension look fast.
+            "wall_clock_successful_only": (
+                summarize_latencies((s.wall_ms for s in ok), f"{domain} wall clock")
+                if ok
+                else {"n": 0, "note": "no successful call for this specialist"}
+            ),
+            "sdk_reported_latency": (
+                summarize_latencies(reported, f"{domain} latencyMs")
+                if reported
+                else {"n": 0, "note": "no SDK-reported latencyMs (mock run, or omitted)"}
+            ),
+            "n_slowest_in_run": sum(1 for r in runs if r.slowest_specialist == domain),
+            "cost_usd": {
+                "n_priced_calls": len(costs),
+                "total": sum(costs) if costs else None,
+                "mean_per_call": statistics.fmean(costs) if costs else None,
+                "note": None if costs else "no real usage measured, so cost is null (not zero)",
+            },
+            "tokens": _token_totals(s.usage for s in rows),
+            "errors": [s.error for s in rows if s.error],
+        }
+
+    synthesis_usages = [r.synthesis_usage for r in runs]
+    synthesis_costs = [r.synthesis_cost_usd for r in runs if r.synthesis_cost_usd is not None]
+    synthesis_block = {
+        "model_id": runs[0].synthesis_model_id if runs else models.get("synthesis"),
+        "n_calls": len(runs),
+        "n_failed": sum(1 for r in runs if r.synthesis_error),
+        "wall_clock": (
+            summarize_latencies(synthesis, "synthesis wall clock")
+            if synthesis
+            else {"n": 0, "note": "no synthesis wall clock recorded"}
+        ),
+        "adapter_reported_latency": (
+            summarize_latencies(
+                [r.synthesis_latency_ms for r in runs if r.synthesis_latency_ms is not None],
+                "synthesis latency_ms",
+            )
+            if any(r.synthesis_latency_ms is not None for r in runs)
+            else {"n": 0, "note": "no adapter-reported latency (mock run)"}
+        ),
+        "cost_usd": {
+            "n_priced_calls": len(synthesis_costs),
+            "total": sum(synthesis_costs) if synthesis_costs else None,
+            "mean_per_call": (
+                statistics.fmean(synthesis_costs) if synthesis_costs else None
+            ),
+            "note": None if synthesis_costs else "no real usage measured, so cost is null",
+        },
+        "tokens": _token_totals(synthesis_usages),
+        "repair_attempts": {
+            "total": sum(r.repair_attempts or 0 for r in runs),
+            "runs_needing_a_repair": sum(1 for r in runs if (r.repair_attempts or 0) > 0),
+        },
+        "errors": [r.synthesis_error for r in runs if r.synthesis_error],
+    }
+
+    complete = [r for r in runs if r.complete]
+    priced = [r for r in runs if r.cost_usd is not None]
+    degraded_runs = [r for r in runs if r.failed_domains or r.synthesis_error]
+    failure_counter: dict[str, int] = {}
+    for run in runs:
+        for kind in run.failure_kinds:
+            label = kind.split(": ", 1)[1]
+            failure_counter[label] = failure_counter.get(label, 0) + 1
+
+    run_costs = [r.cost_usd for r in priced]
+    cost_summary = summarize_values(run_costs, "cost per adjudication", unit="usd")
+
+    caveats: list[str] = [
+        "MEASURED: this run called agents.fanout.fan_out and "
+        "agents.synthesize.synthesize -- the shipped code path -- once per "
+        "(application, repetition). Every latency, token count and cost below was "
+        "produced by those calls.",
+        "MEASURED: sum_of_eight_ms is the SEQUENTIAL COUNTERFACTUAL, the sum of the "
+        "eight specialists' own measured wall clocks in this run. It is what eight "
+        "calls cost one after another only if each would take the same time alone; "
+        "the terms are measured, the arrangement is hypothetical.",
+        "NOT MEASURED: AgentCore runtime overhead. These calls go to Bedrock (and to "
+        "bedrock-mantle for the synthesizer) directly from the host named in run.host, "
+        "so container cold start, session setup and SSE framing are NOT in the "
+        "end-to-end figures.",
+        "NOT MEASURED: signal generation. build_payload runs OUTSIDE the timed window "
+        "because the customer's architecture precomputes signals; an end-to-end figure "
+        "here is agent latency, not pipeline-including-ETL latency.",
+        "NOT MEASURED: throughput. Applications were run ONE AT A TIME, so nothing "
+        "here says what happens when N adjudications overlap.",
+        f"Percentiles are suppressed below {PERCENTILE_MIN_SAMPLES} samples. "
+        "Per-application percentiles are computed over "
+        f"{repetitions} repetition(s) each and are therefore mostly suppressed by "
+        "design; the pooled figures carry the sample count that supports them.",
+        "Every number in this file was produced by this run. No figure here is "
+        "illustrative, nominal, extrapolated or borrowed from a vendor datasheet.",
+    ]
+    if mock:
+        caveats.insert(
+            0,
+            "*** MOCK RUN. NO MODEL WAS CALLED. *** Latencies here are this repo's "
+            "orchestration overhead only, every cost is null, and no figure in this "
+            "file may be shown to the customer as an application-processing time.",
+        )
+    if degraded_runs:
+        caveats.append(
+            f"{len(degraded_runs)} of {len(runs)} run(s) lost a specialist or a "
+            "synthesis. They REMAIN in the latency samples -- the adjudication really "
+            "took that long -- and are EXCLUDED from cost_per_adjudication, which "
+            "would otherwise under-report. See failures.by_run."
+        )
+    if len(runs) < PERCENTILE_MIN_SAMPLES["p95"]:
+        caveats.append(
+            f"n={len(runs)} pooled run(s) is below the {PERCENTILE_MIN_SAMPLES['p95']} "
+            "needed for a p95. The pooled p95 in this report is null with its reason "
+            "recorded, and no p95 may be quoted from it."
+        )
+
+    return {
+        "schema": "pointpredictive.agentcore.pipeline-bench/1",
+        # The target is stamped here rather than at the call site so every report,
+        # however it was produced, records the threshold its under-target count was
+        # measured against. A count with no threshold beside it is not a fact.
+        "run": {**env, "target_e2e_seconds": TARGET_E2E_SECONDS},
+        "workload": {
+            "application_source": "fixtures.loader",
+            "application_ids": list(application_ids),
+            "repetitions_per_application": repetitions,
+            "domains": list(DOMAINS),
+            "models": models,
+            "calls_per_adjudication": len(DOMAINS) + 1,
+            "execution_order": (
+                "round-robin: repetition 1 over every application, then repetition 2, "
+                "and so on. One application in flight at a time, so an application's "
+                "repetitions are spread across the wall-clock window rather than "
+                "measured back to back."
+            ),
+            "mock": mock,
+        },
+        "totals": {
+            "runs": len(runs),
+            "expected_runs": len(application_ids) * repetitions,
+            "specialist_calls": sum(len(r.specialists) for r in runs),
+            "complete_runs": len(complete),
+            "degraded_runs": len(degraded_runs),
+            "validated_adjudications": sum(1 for r in runs if r.adjudication_validated),
+            "total_measured_cost_usd": (
+                sum(
+                    c
+                    for r in runs
+                    for c in [
+                        *(s.cost_usd for s in r.specialists if s.cost_usd is not None),
+                        *([r.synthesis_cost_usd] if r.synthesis_cost_usd is not None else []),
+                    ]
+                )
+                or None
+            ),
+        },
+        "end_to_end": summarize_latencies(e2e, "end-to-end, all applications pooled"),
+        "fan_out": summarize_latencies(fanout, "fan-out, all applications pooled"),
+        "synthesis": (
+            summarize_latencies(synthesis, "synthesis, all applications pooled")
+            if synthesis
+            else {"n": 0, "note": "no synthesis wall clock recorded"}
+        ),
+        "sum_of_eight_sequential_counterfactual": summarize_latencies(
+            sums, "sum of eight specialists (sequential counterfactual)"
+        ),
+        "parallel_speedup": {
+            **summarize_values(speedups, "fan-out vs sum-of-eight", unit="x"),
+            "distribution": [
+                {
+                    "application_id": r.application_id,
+                    "repetition": r.repetition,
+                    "speedup": round(r.parallel_speedup, 4),
+                    "fanout_ms": round(r.fanout_wall_ms, 1),
+                    "sum_of_eight_ms": round(r.sum_of_eight_ms, 1),
+                }
+                for r in runs
+                if r.parallel_speedup is not None
+            ],
+            "note": (
+                "One speed-up per run, not one number for the port. The spread is the "
+                "finding: the fan-out is bounded by its slowest dimension, so the "
+                "ratio moves with which specialist ran long."
+            ),
+        },
+        "target": _under_target_accounting(runs),
+        "cost_per_adjudication_usd": {
+            **cost_summary,
+            "n_priced_runs": len(priced),
+            "n_unpriced_runs": len(runs) - len(priced),
+            "variance_drivers": _cost_variance_drivers(priced),
+            "note": (
+                None
+                if priced
+                else "null: no run produced real usage for all nine calls, so no "
+                "per-application cost was measured"
+            ),
+        },
+        "per_application": per_application,
+        "per_specialist": per_specialist,
+        "synthesis_detail": synthesis_block,
+        "verdict_stability": _verdict_stability(runs),
+        "failures": {
+            "n_degraded_runs": len(degraded_runs),
+            "by_kind": dict(sorted(failure_counter.items())),
+            "by_run": [
+                {
+                    "application_id": r.application_id,
+                    "repetition": r.repetition,
+                    "failed_domains": r.failed_domains,
+                    "failure_kinds": r.failure_kinds,
+                    "synthesis_error": r.synthesis_error,
+                    "degraded_domains": r.degraded_domains,
+                    "adjudication_validated": r.adjudication_validated,
+                    "e2e_seconds": round(r.e2e_wall_ms / 1000.0, 3),
+                }
+                for r in degraded_runs
+            ],
+            "note": (
+                "A degraded run is reported, never averaged away. It stays in the "
+                "latency distribution and leaves the cost distribution."
+            ),
+        },
+        "caveats": [*caveats, *extra_caveats],
+        "raw_runs": [r.to_json() for r in runs],
+    }
+
+
+def _token_totals(usages: Iterable[dict[str, int] | None]) -> dict[str, Any]:
+    """Sum every token class over a set of calls, keeping absence visible.
+
+    All four classes are reported even when zero, because "0 cache reads" and "no
+    usage measured" are different statements and the customer's engineer will read
+    them differently. ``n_calls_without_usage`` is what separates them.
+    """
+    rows = list(usages)
+    present = [u for u in rows if u]
+    totals = {
+        "inputTokens": sum(int(u.get("inputTokens", 0) or 0) for u in present),
+        "outputTokens": sum(int(u.get("outputTokens", 0) or 0) for u in present),
+        "cacheReadInputTokens": sum(
+            int(u.get("cacheReadInputTokens", 0) or 0) for u in present
+        ),
+        "cacheWriteInputTokens": sum(
+            int(u.get("cacheWriteInputTokens", 0) or 0) for u in present
+        ),
+    }
+    return {
+        "n_calls_with_usage": len(present),
+        "n_calls_without_usage": len(rows) - len(present),
+        "totals": totals if present else None,
+        "mean_per_call": (
+            {k: v / len(present) for k, v in totals.items()} if present else None
+        ),
+        "note": None if present else "no call reported usage, so every total is null",
+    }
+
+
+def _verdict_stability(runs: Sequence[PipelineRun]) -> dict[str, Any]:
+    """Did repeated runs of the same application reach the same verdict?
+
+    NOT a latency figure and not an accuracy claim, but it is measured here and it
+    conditions everything else in the report: if the same input can yield two
+    different bands, a per-application latency is a latency for whichever answer the
+    model happened to give. It is also the number the customer's engineer will ask
+    for the moment a synthesizer swap is proposed, so recording it in the same file
+    is cheaper than discovering it later.
+
+    ``expected`` is the fixture's own pinned band. A disagreement here is reported,
+    never reconciled: whether the pin or the model is wrong is the customer's call,
+    and this harness only has standing to say the two differ.
+    """
+    per_app: dict[str, dict[str, Any]] = {}
+    for app_id in sorted({r.application_id for r in runs}):
+        rows = [r for r in runs if r.application_id == app_id]
+        observed = sorted({r.overall_risk_decision for r in rows if r.overall_risk_decision})
+        recs = sorted({r.recommendation_decision for r in rows if r.recommendation_decision})
+        expected: str | None = None
+        try:
+            from fixtures.loader import expected_for  # noqa: PLC0415
+
+            expected = expected_for(app_id).get("overall_risk_decision")
+        except Exception:
+            expected = None
+        # Counted per RUN, not per distinct value: "2 of 3 runs matched the pin" and
+        # "no run matched the pin" are different findings, and collapsing to a
+        # set-equality boolean would report both as a plain mismatch.
+        matching = (
+            sum(1 for r in rows if r.overall_risk_decision == expected)
+            if expected is not None
+            else None
+        )
+        per_app[app_id] = {
+            "n_runs": len(rows),
+            "expected_overall_risk_decision": expected,
+            "observed_overall_risk_decisions": observed,
+            "observed_recommendation_decisions": recs,
+            "n_runs_matching_expectation": matching,
+            "stable": len(observed) <= 1 and len(recs) <= 1,
+            "matches_expected": (
+                None if expected is None or not observed else observed == [expected]
+            ),
+        }
+    unstable = sorted(a for a, d in per_app.items() if not d["stable"])
+    mismatched = sorted(a for a, d in per_app.items() if d["matches_expected"] is False)
+    never_matched = sorted(
+        a
+        for a, d in per_app.items()
+        if d["n_runs_matching_expectation"] == 0
+    )
+    return {
+        "n_applications": len(per_app),
+        "stable_applications": len(per_app) - len(unstable),
+        "unstable_applications": unstable,
+        "applications_disagreeing_with_pinned_expectation": mismatched,
+        "applications_never_matching_pinned_expectation": never_matched,
+        "per_application": per_app,
+        "note": (
+            "Verdict agreement is reported, not adjudicated. An unstable application "
+            "means repeated runs of identical input reached different bands; a "
+            "disagreement means the run differs from the fixture's pinned expectation. "
+            "Neither is resolved here -- run the calibration judge in evals/evaluators/ "
+            "before drawing an accuracy conclusion from either."
+        ),
+    }
+
+
+def _cost_variance_drivers(runs: Sequence[PipelineRun]) -> dict[str, Any]:
+    """What actually moves the per-application cost, measured rather than asserted.
+
+    Cost is linear in tokens at fixed rates, so the only things that can move it are
+    how many tokens each class carried. This reports the token spread of the most and
+    least expensive priced runs side by side, so the reader can see which class
+    differs instead of taking an explanation on trust.
+    """
+    if not runs:
+        return {"note": "no priced run, so nothing to attribute"}
+    cheapest = min(runs, key=lambda r: r.cost_usd)  # type: ignore[arg-type,return-value]
+    dearest = max(runs, key=lambda r: r.cost_usd)  # type: ignore[arg-type,return-value]
+
+    def _profile(run: PipelineRun) -> dict[str, Any]:
+        spec_in = sum(int((s.usage or {}).get("inputTokens", 0)) for s in run.specialists)
+        spec_out = sum(int((s.usage or {}).get("outputTokens", 0)) for s in run.specialists)
+        syn = run.synthesis_usage or {}
+        return {
+            "application_id": run.application_id,
+            "repetition": run.repetition,
+            "cost_usd": run.cost_usd,
+            "specialist_input_tokens": spec_in,
+            "specialist_output_tokens": spec_out,
+            "synthesis_input_tokens": int(syn.get("inputTokens", 0)),
+            "synthesis_output_tokens": int(syn.get("outputTokens", 0)),
+            "synthesis_cache_read_tokens": int(syn.get("cacheReadInputTokens", 0)),
+            "synthesis_cache_write_tokens": int(syn.get("cacheWriteInputTokens", 0)),
+            "specialist_cost_usd": sum(
+                s.cost_usd for s in run.specialists if s.cost_usd is not None
+            ),
+            "synthesis_cost_usd": run.synthesis_cost_usd,
+        }
+
+    return {
+        "cheapest_run": _profile(cheapest),
+        "most_expensive_run": _profile(dearest),
+        "spread_usd": (dearest.cost_usd or 0.0) - (cheapest.cost_usd or 0.0),
+        "note": (
+            "Rates are fixed per model, so the only driver is token volume. Compare "
+            "the two profiles: the class that differs is the driver."
+        ),
+    }
+
+
+async def run_pipeline(
+    application_ids: Sequence[str],
+    repetitions: int,
+    *,
+    mock: bool,
+    region: str,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Run the shipped pipeline over every application, ``repetitions`` times each.
+
+    Round-robin over applications rather than repeating one application before
+    moving on: repeating back to back measures one moment of Bedrock's day per
+    application, while round-robin spreads each application's repetitions across
+    the whole window. Neither removes time-of-day variance; only one of them stops
+    it from being confounded with the application id.
+    """
+    models = resolve_specialist_models()
+    runs: list[PipelineRun] = []
+    for rep in range(1, repetitions + 1):
+        for app_id in application_ids:
+            if progress:
+                progress(f"rep {rep}/{repetitions}  {app_id} ...")
+            run = await _run_one_pipeline(app_id, rep, mock=mock)
+            runs.append(run)
+            if progress:
+                failed = ",".join(run.failed_domains) or "-"
+                cost = "n/a" if run.cost_usd is None else f"${run.cost_usd:.4f}"
+                progress(
+                    f"rep {rep}/{repetitions}  {app_id}  "
+                    f"e2e {run.e2e_wall_ms / 1000.0:6.2f}s  "
+                    f"fanout {run.fanout_wall_ms / 1000.0:6.2f}s  "
+                    f"syn {(run.synthesis_wall_ms or 0.0) / 1000.0:5.2f}s  "
+                    f"{cost}  slowest={run.slowest_specialist}  failed={failed}"
+                )
+
+    synth_region = region
+    try:
+        from agents import mantle  # noqa: PLC0415
+
+        if mantle.is_mantle_model(models.get("synthesis", "")):
+            synth_region = mantle.resolve_mantle_region(models["synthesis"], region)
+    except Exception:
+        pass
+
+    env = run_environment(
+        "pipeline-mock" if mock else "pipeline-live",
+        region=("n/a (no AWS calls made)" if mock else region),
+        model_ids=models,
+    )
+    # Recorded separately from aws_region: the synthesizer is on bedrock-mantle and
+    # its variant may not be available in the specialists' region, so the two can
+    # legitimately differ and a report that showed only one would be misleading.
+    env["synthesizer_region"] = "n/a" if mock else synth_region
+    return build_pipeline_report(
+        env=env,
+        runs=runs,
+        models=models,
+        application_ids=application_ids,
+        repetitions=repetitions,
+        mock=mock,
+    )
+
+
+def pipeline_run_from_json(row: dict[str, Any]) -> PipelineRun:
+    """Rebuild a :class:`PipelineRun` from a committed report's ``raw_runs`` row.
+
+    WHY THIS EXISTS: live Bedrock calls cost real money, so improving the
+    *aggregation* must never require re-running the *measurement*. ``raw_runs``
+    carries every measured field, so a new aggregate can be recomputed from the
+    same numbers. Only measured fields are read; every derived field
+    (``sum_of_eight_ms``, ``parallel_speedup``, ``cost_usd``, ``under_target``) is
+    recomputed from them rather than trusted, so a stale derivation in an old file
+    cannot survive into a new report.
+    """
+    specialists = [
+        SpecialistMeasurement(
+            domain=s["domain"],
+            agent_name=s["agent_name"],
+            model_id=s["model_id"],
+            tier=s["tier"],
+            wall_ms=float(s["wall_ms"]),
+            latency_ms=s.get("latency_ms"),
+            usage=s.get("usage"),
+            cost_usd=s.get("cost_usd"),
+            stop_reason=s.get("stop_reason"),
+            error=s.get("error"),
+            analysis_chars=int(s.get("analysis_chars", 0)),
+            source=s.get("source", "bedrock"),
+        )
+        for s in row["specialists"]
+    ]
+    return PipelineRun(
+        application_id=row["application_id"],
+        repetition=int(row["repetition"]),
+        fanout_wall_ms=float(row["fanout_wall_ms"]),
+        specialists=specialists,
+        synthesis_wall_ms=row.get("synthesis_wall_ms"),
+        synthesis_latency_ms=row.get("synthesis_latency_ms"),
+        synthesis_usage=row.get("synthesis_usage"),
+        synthesis_cost_usd=row.get("synthesis_cost_usd"),
+        synthesis_model_id=row.get("synthesis_model_id", "unknown"),
+        synthesis_stop_reason=row.get("synthesis_stop_reason"),
+        synthesis_error=row.get("synthesis_error"),
+        repair_attempts=row.get("repair_attempts"),
+        degraded_domains=list(row.get("degraded_domains") or []),
+        adjudication_validated=bool(row.get("adjudication_validated")),
+        adjudication_keys=row.get("adjudication_keys"),
+        overall_risk_decision=row.get("overall_risk_decision"),
+        recommendation_decision=row.get("recommendation_decision"),
+        e2e_wall_ms=float(row["e2e_wall_ms"]),
+    )
+
+
+def reaggregate_pipeline_report(report: dict[str, Any]) -> dict[str, Any]:
+    """Recompute every aggregate of a committed report from its own raw runs.
+
+    The provenance block is carried through unchanged: the numbers still belong to
+    the run that measured them, and re-aggregating must not restamp them with
+    today's git sha or a new timestamp. ``reaggregated_at_utc`` records that the
+    derivation, and only the derivation, is newer than the measurement.
+    """
+    runs = [pipeline_run_from_json(row) for row in report["raw_runs"]]
+    env = dict(report["run"])
+    rebuilt = build_pipeline_report(
+        env=env,
+        runs=runs,
+        models=dict(report["workload"]["models"]),
+        application_ids=list(report["workload"]["application_ids"]),
+        repetitions=int(report["workload"]["repetitions_per_application"]),
+        mock=bool(report["workload"]["mock"]),
+    )
+    rebuilt["run"]["reaggregated_at_utc"] = datetime.now(timezone.utc).isoformat(
+        timespec="seconds"
+    )
+    rebuilt["caveats"].append(
+        "Aggregates in this file were recomputed from raw_runs by "
+        "evals.bench.reaggregate_pipeline_report. The measurements are unchanged and "
+        "still belong to the run recorded in `run`; only the derived statistics were "
+        "rebuilt. No model was called to produce this file."
+    )
+    return rebuilt
+
+
+def render_pipeline_human(report: dict[str, Any]) -> str:
+    """The table a human reads for a pipeline run."""
+    run = report["run"]
+    lines: list[str] = ["=" * 96]
+    lines.append(f"AgentCore PIPELINE bench -- mode: {run['mode']}")
+    if report["workload"]["mock"]:
+        lines.append("")
+        lines.append("  *** MOCK RUN: NO MODEL WAS CALLED. Latencies are orchestration ***")
+        lines.append("  *** overhead on this host only. Every cost is n/a, not zero.   ***")
+    lines.append("=" * 96)
+    lines.append(f"  timestamp   : {run['timestamp_utc']}")
+    lines.append(
+        f"  git sha     : {run['git_sha']} ({run['git_branch']})"
+        + ("  [WORKING TREE DIRTY]" if run.get("git_dirty") else "")
+    )
+    lines.append(f"  region      : {run['aws_region']}  "
+                 f"(synthesizer: {run.get('synthesizer_region')})")
+    lines.append(f"  applications: {len(report['workload']['application_ids'])} x "
+                 f"{report['workload']['repetitions_per_application']} repetition(s) "
+                 f"= {report['totals']['runs']} run(s)")
+    lines.append(f"  complete    : {report['totals']['complete_runs']} of "
+                 f"{report['totals']['runs']}   degraded: "
+                 f"{report['totals']['degraded_runs']}   validated 21-key: "
+                 f"{report['totals']['validated_adjudications']}")
+    lines.append("")
+
+    lines.append(f"Pooled latency (seconds), n={report['end_to_end']['n']}")
+    lines.append(f"  {'stage':<26}{'n':>5}{'min':>9}{'p50':>9}{'p95':>9}{'max':>9}{'mean':>9}")
+    for label, key in (
+        ("end to end", "end_to_end"),
+        ("fan-out (8 specialists)", "fan_out"),
+        ("synthesis", "synthesis"),
+        ("sum-of-eight (counterfactual)", "sum_of_eight_sequential_counterfactual"),
+    ):
+        block = report[key]
+        if not block.get("n"):
+            lines.append(f"  {label:<26}{0:>5}   {block.get('note', 'not measured')}")
+            continue
+        lines.append(
+            f"  {label:<26}{block['n']:>5}"
+            + "".join(
+                _fmt_seconds(block.get(k), 9)
+                for k in ("min_ms", "p50_ms", "p95_ms", "max_ms", "mean_ms")
+            )
+        )
+    for name, reason in sorted(report["end_to_end"]["suppressed"].items()):
+        lines.append(f"  end-to-end {name}: {reason}")
+    lines.append("")
+
+    target = report["target"]
+    lines.append(f"Under the {target['target_seconds']:.0f}s target")
+    lines.append(f"  runs under target        : {target['runs_under_target']} of "
+                 f"{target['n_runs']}")
+    lines.append(f"  applications, every rep  : "
+                 f"{target['applications_all_reps_under_target']} of "
+                 f"{target['n_applications']}")
+    lines.append(f"  applications, any rep    : "
+                 f"{target['applications_any_rep_under_target']} of "
+                 f"{target['n_applications']}")
+    if target["applications_straddling_target"]:
+        lines.append(f"  straddling the line      : "
+                     f"{', '.join(target['applications_straddling_target'])}")
+    if target["applications_never_under_target"]:
+        lines.append(f"  NEVER under target       : "
+                     f"{', '.join(target['applications_never_under_target'])}")
+    lines.append("")
+
+    speed = report["parallel_speedup"]
+    lines.append(f"Parallel speed-up, fan-out vs sum-of-eight (n={speed['n']})")
+    if speed["n"]:
+        lines.append(
+            f"  min {speed['min']:.2f}x   p50 "
+            f"{('%.2fx' % speed['p50']) if speed['p50'] is not None else 'n/a'}   "
+            f"p95 {('%.2fx' % speed['p95']) if speed['p95'] is not None else 'n/a'}   "
+            f"max {speed['max']:.2f}x   mean {speed['mean']:.2f}x"
+        )
+    lines.append("")
+
+    cost = report["cost_per_adjudication_usd"]
+    lines.append(f"Cost per adjudication, priced runs only "
+                 f"(n={cost['n_priced_runs']}, unpriced {cost['n_unpriced_runs']})")
+    if cost["n_priced_runs"]:
+        lines.append(
+            f"  min ${cost['min']:.4f}   p50 "
+            f"{('$%.4f' % cost['p50']) if cost['p50'] is not None else 'n/a'}   "
+            f"p95 {('$%.4f' % cost['p95']) if cost['p95'] is not None else 'n/a'}   "
+            f"max ${cost['max']:.4f}   mean ${cost['mean']:.4f}"
+        )
+    else:
+        lines.append(f"  {cost['note']}")
+    lines.append("")
+
+    lines.append("Per-specialist wall clock (seconds), successful calls only")
+    lines.append(f"  {'domain':<12}{'model':<46}{'n':>4}{'fail':>5}"
+                 f"{'min':>8}{'p50':>8}{'p95':>8}{'max':>8}{'slowest':>8}")
+    for domain, data in report["per_specialist"].items():
+        wall = data["wall_clock_successful_only"]
+        lines.append(
+            f"  {domain:<12}{data['model_id']:<46}{wall.get('n', 0):>4}"
+            f"{data['n_failed']:>5}"
+            + "".join(
+                _fmt_seconds(wall.get(k), 8) for k in ("min_ms", "p50_ms", "p95_ms", "max_ms")
+            )
+            + f"{data['n_slowest_in_run']:>8}"
+        )
+    lines.append("  ('slowest' = how many runs this dimension was the fan-out's tail)")
+    lines.append("")
+
+    lines.append("Per-application end-to-end (seconds)")
+    lines.append(f"  {'app':<12}{'n':>4}{'min':>9}{'p50':>9}{'max':>9}"
+                 f"{'cost mean':>11}  {'verdict':<14}{'stable':>5}")
+    for app_id, data in report["per_application"].items():
+        e2e = data["end_to_end"]
+        cost_mean = data["cost_usd"]["mean"]
+        verdict = (data["overall_risk_decisions_observed"] or ["n/a"])[0]
+        lines.append(
+            f"  {app_id:<12}{e2e['n']:>4}"
+            + "".join(_fmt_seconds(e2e.get(k), 9) for k in ("min_ms", "p50_ms", "max_ms"))
+            + (f"{cost_mean:>11.4f}" if cost_mean is not None else f"{'n/a':>11}")
+            + f"  {verdict:<14}"
+            + f"{'yes' if data['verdict_stable_across_repetitions'] else 'NO':>5}"
+        )
+    lines.append("")
+
+    stability = report["verdict_stability"]
+    lines.append(
+        f"Verdict agreement across repetitions "
+        f"({stability['stable_applications']} of {stability['n_applications']} stable)"
+    )
+    if stability["unstable_applications"]:
+        for app_id in stability["unstable_applications"]:
+            data = stability["per_application"][app_id]
+            lines.append(
+                f"  UNSTABLE {app_id}: "
+                f"{' / '.join(data['observed_overall_risk_decisions'])} "
+                f"(pinned {data['expected_overall_risk_decision']})"
+            )
+    if stability["applications_disagreeing_with_pinned_expectation"]:
+        for app_id in stability["applications_disagreeing_with_pinned_expectation"]:
+            data = stability["per_application"][app_id]
+            lines.append(
+                f"  DIFFERS FROM PIN {app_id}: matched pinned "
+                f"{data['expected_overall_risk_decision']} in "
+                f"{data['n_runs_matching_expectation']}/{data['n_runs']} runs "
+                f"(observed {' / '.join(data['observed_overall_risk_decisions'])})"
+            )
+    lines.append(f"  {stability['note']}")
+    lines.append("")
+
+    failures = report["failures"]
+    lines.append(f"Failures: {failures['n_degraded_runs']} degraded run(s)")
+    if failures["by_kind"]:
+        for kind, count in failures["by_kind"].items():
+            lines.append(f"  {kind:<28}{count}")
+        for row in failures["by_run"]:
+            lines.append(
+                f"  {row['application_id']} rep {row['repetition']}: "
+                f"{', '.join(row['failure_kinds']) or row['synthesis_error']}"
+            )
+    else:
+        lines.append("  none")
+    lines.append("")
+
+    lines.append("CAVEATS (also in the JSON, verbatim)")
+    for caveat in report["caveats"]:
+        lines.append(f"  - {caveat}")
+    lines.append("=" * 96)
+    return "\n".join(lines)
+
+
+def _fmt_seconds(ms: Any, width: int) -> str:
+    """Render a millisecond figure as seconds, or a right-aligned n/a."""
+    if ms is None:
+        return "n/a".rjust(width)
+    return f"{float(ms) / 1000.0:,.2f}".rjust(width)
+
+
+def render_pipeline_markdown(report: dict[str, Any]) -> str:
+    """A README-pasteable summary containing only numbers this run produced."""
+    run = report["run"]
+    e2e = report["end_to_end"]
+    fan = report["fan_out"]
+    syn = report["synthesis"]
+    target = report["target"]
+    speed = report["parallel_speedup"]
+    cost = report["cost_per_adjudication_usd"]
+    n = report["totals"]["runs"]
+
+    def sec(block: dict[str, Any], key: str) -> str:
+        value = block.get(key)
+        return "**refused**" if value is None else f"{value / 1000.0:.2f}s"
+
+    def ratio(block: dict[str, Any], key: str) -> str:
+        value = block.get(key)
+        return "**refused**" if value is None else f"{value:.2f}x"
+
+    def money(block: dict[str, Any], key: str) -> str:
+        value = block.get(key)
+        return "**refused**" if value is None else f"${value:.4f}"
+
+    lines: list[str] = []
+    lines.append(
+        f"### Measured pipeline benchmark — {len(report['workload']['application_ids'])} "
+        f"applications x {report['workload']['repetitions_per_application']} "
+        f"repetitions, n={n} adjudications"
+    )
+    lines.append("")
+    lines.append(
+        f"`{run['mode']}`, region `{run['aws_region']}` "
+        f"(synthesizer `{run.get('synthesizer_region')}`), git "
+        f"`{(run['git_sha'] or '')[:12]}`, {run['timestamp_utc']}."
+    )
+    lines.append("")
+    lines.append("| stage | n | min | p50 | p95 | max |")
+    lines.append("|---|---:|---:|---:|---:|---:|")
+    for label, block in (
+        ("end to end", e2e),
+        ("fan-out (8 specialists)", fan),
+        ("synthesis", syn),
+        ("sum-of-eight (sequential counterfactual)",
+         report["sum_of_eight_sequential_counterfactual"]),
+    ):
+        if not block.get("n"):
+            continue
+        lines.append(
+            f"| {label} | {block['n']} | {sec(block, 'min_ms')} | {sec(block, 'p50_ms')} "
+            f"| {sec(block, 'p95_ms')} | {sec(block, 'max_ms')} |"
+        )
+    lines.append("")
+    if e2e.get("p95_ms") is None and "p95" in e2e.get("suppressed", {}):
+        lines.append(f"p95 is refused, not omitted: {e2e['suppressed']['p95']}")
+        lines.append("")
+    lines.append(
+        f"**Under the {target['target_seconds']:.0f}s target:** "
+        f"{target['runs_under_target']} of {target['n_runs']} runs; "
+        f"{target['applications_all_reps_under_target']} of "
+        f"{target['n_applications']} applications on every repetition, "
+        f"{target['applications_any_rep_under_target']} on at least one."
+    )
+    if target["applications_never_under_target"]:
+        lines.append("")
+        lines.append(
+            "Never under target: "
+            + ", ".join(f"`{a}`" for a in target["applications_never_under_target"])
+            + "."
+        )
+    lines.append("")
+    lines.append(
+        f"**Parallel speed-up** (fan-out vs sum-of-eight, n={speed['n']}): "
+        f"min {speed['min']:.2f}x, p50 {ratio(speed, 'p50')}, "
+        f"p95 {ratio(speed, 'p95')}, max {speed['max']:.2f}x. "
+        "One ratio per run — the fan-out is bounded by its slowest dimension, "
+        "so the spread moves with which specialist ran long."
+        if speed["n"]
+        else "**Parallel speed-up:** not measured in this run."
+    )
+    lines.append("")
+    if cost["n_priced_runs"]:
+        lines.append(
+            f"**Cost per adjudication** (n={cost['n_priced_runs']} fully priced runs, "
+            f"{cost['n_unpriced_runs']} excluded): min ${cost['min']:.4f}, "
+            f"p50 {money(cost, 'p50')}, max ${cost['max']:.4f}."
+        )
+    else:
+        lines.append(f"**Cost per adjudication:** {cost['note']}")
+    lines.append("")
+    lines.append("| specialist | model | n ok | n failed | p50 | p95 | max | tail in N runs |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---:|")
+    for domain, data in report["per_specialist"].items():
+        wall = data["wall_clock_successful_only"]
+        lines.append(
+            f"| `{domain}` | `{data['model_id']}` | {wall.get('n', 0)} | "
+            f"{data['n_failed']} | {sec(wall, 'p50_ms')} | {sec(wall, 'p95_ms')} | "
+            f"{sec(wall, 'max_ms')} | {data['n_slowest_in_run']} |"
+        )
+    lines.append("")
+    stability = report["verdict_stability"]
+    lines.append(
+        f"**Verdict agreement:** {stability['stable_applications']} of "
+        f"{stability['n_applications']} applications returned the same "
+        f"`overall_risk_decision` on every repetition."
+    )
+    if stability["unstable_applications"]:
+        lines.append("")
+        for app_id in stability["unstable_applications"]:
+            data = stability["per_application"][app_id]
+            lines.append(
+                f"- `{app_id}` was unstable: "
+                + " / ".join(data["observed_overall_risk_decisions"])
+                + f" across {data['n_runs']} runs (fixture pins "
+                f"{data['expected_overall_risk_decision']})."
+            )
+    if stability["applications_disagreeing_with_pinned_expectation"]:
+        lines.append("")
+        for app_id in stability["applications_disagreeing_with_pinned_expectation"]:
+            data = stability["per_application"][app_id]
+            lines.append(
+                f"- `{app_id}` matched its pinned "
+                f"{data['expected_overall_risk_decision']} in "
+                f"{data['n_runs_matching_expectation']} of {data['n_runs']} runs "
+                "(observed "
+                + " / ".join(data["observed_overall_risk_decisions"])
+                + ")."
+            )
+    lines.append("")
+    lines.append(
+        "This is reported, not adjudicated. Whether the pin or the model is wrong is "
+        "the customer's call; run the calibration judge in `evals/evaluators/` before "
+        "drawing an accuracy conclusion."
+    )
+    lines.append("")
+    failures = report["failures"]
+    if failures["by_kind"]:
+        lines.append(
+            f"**Failures:** {failures['n_degraded_runs']} degraded run(s) — "
+            + ", ".join(f"{k} x{v}" for k, v in failures["by_kind"].items())
+            + ". Degraded runs stay in the latency distribution and are excluded "
+            "from the cost distribution."
+        )
+    else:
+        lines.append(
+            f"**Failures:** none. {report['totals']['specialist_calls']} specialist "
+            f"calls and {n} synthesis calls, no throttling, no truncation, "
+            f"{report['totals']['validated_adjudications']} of {n} adjudications "
+            "validated against the 21-key contract."
+        )
+    lines.append("")
+    lines.append(
+        "Not measured: AgentCore runtime overhead (these calls leave this host "
+        "directly), signal generation (precomputed, outside the timed window), and "
+        "throughput (one application in flight at a time)."
+    )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
 
@@ -1337,6 +2704,30 @@ def build_parser() -> argparse.ArgumentParser:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--offline", action="store_true", help="no Bedrock calls; overhead only")
     mode.add_argument("--live", action="store_true", help=f"real Bedrock calls; needs {LIVE_ENV_GATE}=1")
+    mode.add_argument(
+        "--reaggregate",
+        dest="reaggregate_path",
+        default=None,
+        help=(
+            "recompute a committed pipeline report's aggregates from its own raw_runs. "
+            "Calls no model and spends nothing; use it when the aggregation changes but "
+            "the measurements have not."
+        ),
+    )
+    mode.add_argument(
+        "--pipeline",
+        action="store_true",
+        help=(
+            "run the SHIPPED pipeline (agents.fanout + agents.synthesize) over every "
+            f"fixture; live unless --mock, and live needs {LIVE_ENV_GATE}=1"
+        ),
+    )
+    parser.add_argument("--mock", action="store_true",
+                        help="pipeline only: MOCK_MODE, no model call, no spend")
+    parser.add_argument("--repetitions", type=int, default=PIPELINE_DEFAULT_REPETITIONS,
+                        help=f"pipeline only: runs per application (default {PIPELINE_DEFAULT_REPETITIONS})")
+    parser.add_argument("--markdown", dest="markdown_path", default=None,
+                        help="pipeline only: write the README-pasteable summary here")
     parser.add_argument("--concurrency", type=_parse_concurrency, default=[1, 4, 16],
                         help="comma-separated concurrency levels (default 1,4,16)")
     parser.add_argument("--iterations", type=int, default=None,
@@ -1353,8 +2744,145 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def pipeline_plan(
+    application_ids: Sequence[str],
+    repetitions: int,
+    *,
+    mock: bool,
+    region: str,
+    models: dict[str, str],
+    per_application_usd: float | None,
+) -> str:
+    """The plan and the estimated spend, printed BEFORE anything is called.
+
+    ``per_application_usd`` is a PRIOR from an earlier measured run, not a
+    prediction of this one, and the text says so. It exists so a human can approve
+    or refuse the spend; the report never carries it.
+    """
+    runs = len(application_ids) * repetitions
+    calls = runs * (len(DOMAINS) + 1)
+    lines = [
+        "PIPELINE BENCH PLAN",
+        f"  mode           : {'MOCK (no model called, no spend)' if mock else 'LIVE Bedrock + bedrock-mantle'}",
+        f"  applications   : {len(application_ids)} ({application_ids[0]}..{application_ids[-1]})",
+        f"  repetitions    : {repetitions} per application, round-robin",
+        f"  adjudications  : {runs}",
+        f"  model calls    : {calls}  ({len(DOMAINS)} specialists + 1 synthesis per adjudication)",
+        f"  region         : {region}",
+        "  models         :",
+    ]
+    for agent, model_id in models.items():
+        lines.append(f"    {agent:<13}{model_id}")
+    if mock:
+        lines.append("  estimated spend: $0.00 -- no model is called in mock mode")
+    elif per_application_usd is None:
+        lines.append("  estimated spend: UNKNOWN -- no prior per-application measurement to scale")
+    else:
+        lines.append(
+            f"  estimated spend: ~${per_application_usd * runs:.2f} "
+            f"({runs} x ${per_application_usd:.3f}/application). This is a PRIOR from a "
+            "previously measured run, used only to size the budget. The report will "
+            "carry the cost THIS run measures, not this figure."
+        )
+    lines.append(
+        "  percentiles    : "
+        f"pooled n={runs}; p50 needs {PERCENTILE_MIN_SAMPLES['p50']}, "
+        f"p95 needs {PERCENTILE_MIN_SAMPLES['p95']}, p99 needs "
+        f"{PERCENTILE_MIN_SAMPLES['p99']}. "
+        f"Per application n={repetitions}, so per-application percentiles will be "
+        "suppressed."
+    )
+    return "\n".join(lines)
+
+
+#: A prior from the single measured APP-1004 live run recorded in the repo README,
+#: used ONLY to size the budget line in the plan above. It is never copied into a
+#: report and never presented as a measurement of a new run.
+PRIOR_MEASURED_COST_PER_APPLICATION_USD: Final = 0.245
+
+
+def _main_pipeline(args: argparse.Namespace) -> int:
+    """``--pipeline``: print the plan, gate the spend, run, write both reports."""
+    from fixtures.loader import list_application_ids  # noqa: PLC0415
+
+    ids = list(args.applications or list_application_ids())
+    if not ids:
+        print("no application ids to run", file=sys.stderr)
+        return 2
+    if args.repetitions < 1:
+        print("--repetitions must be >= 1", file=sys.stderr)
+        return 2
+
+    mock = bool(args.mock)
+    if not mock:
+        gate = live_gate_error(args_live=True)
+        if gate:
+            print(f"refusing to run the live pipeline: {gate}", file=sys.stderr)
+            print("  (pass --mock for a no-spend structural run)", file=sys.stderr)
+            return 2
+
+    # MOCK_MODE is read at import time by agents.fanout, so it must be set before
+    # the first import of that module -- which is why run_pipeline imports lazily.
+    os.environ["MOCK_MODE"] = "1" if mock else "0"
+    if not mock:
+        os.environ.setdefault("AWS_REGION", args.region)
+
+    models = resolve_specialist_models()
+    print(
+        pipeline_plan(
+            ids,
+            args.repetitions,
+            mock=mock,
+            region=args.region,
+            models=models,
+            per_application_usd=(
+                None if mock else PRIOR_MEASURED_COST_PER_APPLICATION_USD
+            ),
+        ),
+        flush=True,
+    )
+    print("", flush=True)
+
+    def progress(line: str) -> None:
+        print(f"  {line}", flush=True)
+
+    report = asyncio.run(
+        run_pipeline(ids, args.repetitions, mock=mock, region=args.region, progress=progress)
+    )
+    print("")
+    print(render_pipeline_human(report))
+    if args.json_path:
+        Path(args.json_path).write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(f"\nwrote machine-readable report to {args.json_path}")
+    if args.markdown_path:
+        Path(args.markdown_path).write_text(
+            render_pipeline_markdown(report) + "\n", encoding="utf-8"
+        )
+        print(f"wrote markdown summary to {args.markdown_path}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.reaggregate_path:
+        source = Path(args.reaggregate_path)
+        report = reaggregate_pipeline_report(
+            json.loads(source.read_text(encoding="utf-8"))
+        )
+        print(render_pipeline_human(report))
+        target = Path(args.json_path) if args.json_path else source
+        target.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(f"\nrebuilt aggregates from {source} -> {target} (no model was called)")
+        if args.markdown_path:
+            Path(args.markdown_path).write_text(
+                render_pipeline_markdown(report) + "\n", encoding="utf-8"
+            )
+            print(f"wrote markdown summary to {args.markdown_path}")
+        return 0
+
+    if args.pipeline:
+        return _main_pipeline(args)
 
     if args.offline:
         iterations = args.iterations if args.iterations is not None else 40

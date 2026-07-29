@@ -1,0 +1,229 @@
+---
+title: Cross-family study
+description: 4 agents x 6 applications x 5 models = 120 blind-judged analyses, 240 verdicts, two oppositely-biased judges, $16.89 measured. Latency and cost favoured GPT overwhelmingly and were overruled by one deterministic compliance measurement.
+---
+
+*For the customer's engineer first, and for the account team second — because the headline is a measured 47.8% projected cost reduction being declined.*
+
+**Eight specialists stay on Claude.** GPT-5.6 measured 4x faster and 3x cheaper pooled, wrote a fifth of the words, and produced **zero** output-contract violations against Claude's 34. It was held anyway, on one deterministic measurement in which no judge takes part: `_context` grounding, **0.642 for Claude (n=48) against 0.357 for GPT (n=72)**, lower on **4 of 4** agents.
+
+<Mermaid
+  title="Six axes, one of them decisive"
+  chart={`
+flowchart LR
+  G["GPT-5.6 wins:<br/>4.0x faster<br/>2.9x cheaper<br/>0 vs 34 contract violations<br/>substance on BOTH judges"] --> D{"Any deterministic<br/>margin against it?"}
+  D -->|"_context grounding<br/>0.357 vs 0.642,<br/>lower on 4 of 4"| H["HOLD on Claude,<br/>−47.8% declined"]
+  D -->|"if grounding closes"| M["Migrate: one value<br/>in SPECIALIST_MODELS"]
+`}
+/>
+
+## Claude set versus GPT set, per agent
+
+Every cell below is a field of `per_set_verdict` in `evals/results/set_comparison.json`, reproduced rather than recomputed. Grounded fraction is `grounded_fraction_median`; contract violations come from `agents.output_contract.check`; wall clock and cost are per-cell medians over 6 applications.
+
+| Agent | Model | Set | Band | Grounded | Contract viol | Wall p50 | $/call p50 | Verdict |
+|---|---|---|---|---:|---:|---:|---:|---|
+| `rings` | `opus-5` | Claude | 5/6 | **0.875** | 6 | 26.22 s | $0.0583 | incumbent |
+| `rings` | `luna` | GPT | 5/6 | 0.500 | **0** | **3.20 s** | **$0.0050** | **AS GOOD ON THIS SAMPLE** |
+| `rings` | `terra` | GPT | 5/6 | 0.625 | **0** | 8.04 s | $0.0105 | **AS GOOD ON THIS SAMPLE** |
+| `rings` | `sol` | GPT | 4/6 | 0.500 | **0** | 4.86 s | $0.0206 | NOT AS GOOD — band 4/6 below 5/6 |
+| `bustout` | `sonnet-5` | Claude | 3/6 | **0.571** | 6 | 15.90 s | $0.0173 | incumbent |
+| `bustout` | `luna` | GPT | 4/6 | 0.286 | **0** | **3.21 s** | **$0.0053** | **AS GOOD ON THIS SAMPLE** |
+| `bustout` | `terra` | GPT | 4/6 | 0.3575 | **0** | 7.90 s | $0.0103 | **AS GOOD ON THIS SAMPLE** |
+| `bustout` | `sol` | GPT | 4/6 | 0.2145 | **0** | 6.06 s | $0.0231 | NOT AS GOOD — grounding below half the incumbent's |
+| `identity` | `sonnet-5` | Claude | 3/3 (3 of 6 unreadable) | **0.429** | 0 | 13.49 s | $0.0164 | incumbent |
+| `identity` | `luna` | GPT | 6/6 | 0.3575 | **0** | **2.60 s** | **$0.0045** | **AS GOOD ON THIS SAMPLE** |
+| `identity` | `terra` | GPT | 4/5 | 0.3575 | **0** | 8.92 s | $0.0118 | NOT AS GOOD — band 4/5, one analysis declared no band |
+| `identity` | `sol` | GPT | 2/6 | 0.143 | **0** | 5.50 s | $0.0269 | NOT AS GOOD — 2 anti-FP false positives, 1 dismissal, band 2/6, grounding |
+| `synthetic` | `opus-5` | Claude | 5/6 | **0.550** | 2 | 8.59 s | $0.0318 | incumbent (1 false negative of 2) |
+| `synthetic` | `terra` | GPT | 5/6 | 0.350 | **0** | 7.05 s | $0.0106 | **AS GOOD ON THIS SAMPLE** |
+| `synthetic` | `luna` | GPT | 5/6 | **0.150** | **0** | **2.28 s** | **$0.0047** | NOT AS GOOD — grounding below half the incumbent's |
+| `synthetic` | `sol` | GPT | 5/6 | 0.100 | **0** | 2.82 s | $0.0210 | NOT AS GOOD — grounding below half the incumbent's |
+
+Read that table one column at a time and the decision falls out. GPT wins **contract violations 0 against 34**, wins **latency on every row**, wins **cost on every row**, and matches or beats the incumbent's band on 9 of 12 candidate rows. It loses **grounding on 12 of 12**. Grounding is the only axis with no judge in it and the only one the customer's prompts state as a requirement, so grounding decides.
+
+<Callout type="warn" title="What this study did NOT find">
+It did **not** find that GPT-5.6 is worse at the fraud judgement. On band agreement the two
+families sit within one case of each other on every swept agent except `identity`/Sol — and at
+n=6, one case is 17 points. The hold rests on a measured compliance gap plus half the fan-out
+being unswept, **not** on a finding that GPT reasons less well.
+</Callout>
+
+## Pooled, over 120 analyses
+
+| Axis | Claude (n=48) | GPT (n=72) | Direction |
+|---|---:|---:|---|
+| `_context` grounding, mean of per-analysis values | **0.642** | **0.357** | Lower on **4 of 4** agents |
+| Wall clock p50 | 18.88 s | **4.73 s** | **4.0x faster** |
+| $/call p50 | $0.03125 | **$0.01066** | **2.9x cheaper** |
+| Output tokens p50 | 1422.5 | 288.0 | GPT writes a fifth of the words |
+| Output-contract violations, total | **34** | **0** | deterministic, `agents.output_contract.check` |
+| Output-contract clean rows | 17 / 48 | **72 / 72** | |
+| Judged substance margin (GPT − Claude) | — | **+0.398 / +0.684** | **better on BOTH judges** |
+
+Widest single cell: `rings` Luna at **3.201 s / $0.0050** against the Opus 5 incumbent's **26.2175 s / $0.0583** — **8.2x faster and 11.7x cheaper** for the same band agreement, 5/6 each.
+
+## Design of the study
+
+`evals/results/set_comparison.json`, generated `2026-07-28T21:32:24+00:00`, `aws_region` `us-east-1`, `mantle_region` `us-east-1`.
+
+| | Value |
+|---|---|
+| Agents (`run.domains`) | `rings`, `synthetic`, `bustout`, `identity` — **4 of 8** |
+| Applications (`run.applications`) | APP-1004, APP-1009, APP-1010, APP-1012, APP-1013, APP-1014 — **6** |
+| Anti-false-positive fixtures in the sample | **APP-1009, APP-1010** — 2 |
+| Claude set | `global.anthropic.claude-opus-5`, `global.anthropic.claude-sonnet-5` |
+| GPT set | `openai.gpt-5.6-luna`, `openai.gpt-5.6-terra`, `openai.gpt-5.6-sol` |
+| Cells / analyses / verdicts | 20 / **120** / **240** |
+| `specialist_max_output_tokens` | 4096 |
+| Shuffle seed | `20260728` |
+| Judges | `global.anthropic.claude-opus-5` (claude family, **also a candidate**) and `openai.gpt-5.5` (gpt family, not a candidate) |
+| Measured spend | specialists **$2.7526**, judges **$14.1343**, total **$16.8869** |
+| `live_calls` in this report | 0 specialist calls, 0 judge calls — all reused from the committed sidecars |
+
+Blinding, quoted from `run.blinding`: *"model/provider identifiers stripped from the analysis text before judging (`evals.tier_quality.anonymise`); judge order shuffled under the fixed seed; both judges see the same anonymised text and the same rubric."*
+
+Judging cost **5.1x** the analyses it judged. That is what two judges at high reasoning effort over 120 analyses costs, and it is why this study exists once rather than per sprint. Sidecars `set_comparison_analyses.json` (120 analyses) and `set_comparison_verdicts.json` (240 verdicts) make the aggregate re-derivable at zero spend:
+
+```bash
+PYTHONPATH=. python3 -m evals.set_comparison --rescore
+```
+
+Two judges biased in opposite directions is the whole instrument, and the combination rule is on its own page: [judge methodology](/docs/model-selection/judge-methodology).
+
+## Deciding metric: `_context` grounding [#what-decided-it-_context-grounding]
+
+Mean `grounded_fraction` per (agent, model), computed over the 120 `per_analysis` rows. **No judge is involved in any cell.**
+
+| Agent | Opus 5 | Sonnet 5 | Luna | Terra | Sol |
+|---|---:|---:|---:|---:|---:|
+| `rings` | 0.875 | 0.792 | 0.625 | 0.625 | 0.583 |
+| `identity` | 0.738 | 0.476 | 0.357 | 0.381 | 0.238 |
+| `bustout` | 0.833 | 0.524 | 0.286 | 0.310 | 0.214 |
+| `synthetic` | 0.517 | 0.383 | **0.150** | 0.350 | 0.167 |
+| **Pooled mean** | **Claude 0.642** (n=48) | | **GPT 0.357** (n=72) | | |
+
+Three properties make this the deciding axis rather than one more column. GPT is lower on **4 of 4** agents against both Claude incumbents, so it is not one bad cell dragging an average. Scoring is **deterministic** — `grounded_fraction` counts how many of the signals in an agent's own domain view appear in the analysis alongside their paired `_context` evidence, and no model scores it. And every specialist prompt states the requirement: the `rings` prompt tells the model it must validate signals using the columns whose names end in `_context`. A model that meets that less often is less compliant with her contract, whatever its band agreement says.
+
+<Callout type="info" title="Mean here, median in the verdict cells">
+Cells above are the **mean** of the six `per_analysis.grounding.grounded_fraction` values in
+each cell. Verdict rows quote `measured.grounded_fraction_median` from the same artifact, and on
+some cells the two differ — `identity`/Sonnet 5 is 0.476 mean against 0.429 median,
+`synthetic`/Opus 5 is 0.517 mean against 0.550 median. Both are in the file; neither is
+recomputed into the other. The study's disqualification rule ("less than half the incumbent's")
+is evaluated on the **medians**, which is what the verdict strings quote.
+</Callout>
+
+`deterministic_cross_check`, GPT minus Claude, computed with no judge at all:
+
+| Metric | Margin | Reading |
+|---|---:|---|
+| Band agreement | **−0.054** | inside this sample's resolution |
+| Contract violations | **−0.756** | GPT better |
+| Grounded fraction | **−0.284** | GPT worse — the only deterministic margin against it |
+
+Quoted from the artifact: *"A judge-scored margin unaccompanied by a deterministic margin in the same direction is more likely preference than quality."* The judge-scored substance margin (+0.398 / +0.684 for GPT) has **no** deterministic margin behind it in the same direction, so grounding is the reading.
+
+<Callout type="error" title="The Claude judge scored GPT higher on substance, against its own family">
+`judge_self_preference.per_judge`: `global.anthropic.claude-opus-5` scored its **own** family
+**+0.226** on calibration and **−0.398** on substance; `openai.gpt-5.5` scored its own family
+**−0.239** on calibration and **+0.684** on substance.
+
+So on substance *both* judges preferred GPT — including the one whose family that penalises.
+That is much harder to dismiss than a single-judge win, and it is why "GPT writes a fifth of the
+words, so it must be thinner" does not survive this study.
+</Callout>
+
+## Verdict grid, condensed
+
+n=6 clears the study's own bar for a band claim (`MIN_APPS_FOR_A_BAND_CLAIM` = 5), so these verdicts *are* claimable. "As good" means the candidate lost on **none** of: band agreement, escalation on an anti-false-positive fixture, dismissal of a corroborated application, or grounded fraction below half the incumbent's.
+
+| Agent | Luna | Terra | Sol |
+|---|---|---|---|
+| `rings` | **as good** | **as good** | not — band 4/6 vs 5/6 |
+| `bustout` | **as good** | **as good** | not — grounding |
+| `identity` | **as good** | not — band 4/5, one analysis declared no band | not — 2 anti-FP false positives, 1 false negative, band 2/6 |
+| `synthetic` | not — grounded 0.150 vs 0.550 | **as good** | not — grounded 0.100 vs 0.550 |
+
+Terra is the one GPT variant graded AS GOOD on **all four** swept agents. Luna is "as good" on 3 of 4 and is still not taken — the per-agent evidence would support moving `rings`, `bustout` and `identity` to Luna today, and it is not being done because the grounding gap is real on all three and because moving three of eight leaves a split fan-out whose *remaining* agents have **less** evidence than the ones that moved.
+
+Two incumbent rows deserve naming while the grid is on screen. `bustout`/Sonnet 5 is the **worst** band cell in the whole study at 3/6, and all three GPT variants reached 4/6. And `identity`/Sonnet 5 has a band denominator of **3, not 6** — three of its analyses had no band the regex reader and the judge agreed on, which is a fidelity defect of the incumbent's own: *"6 application(s) answered per cell, 3 with a readable band; a band claim needs 5."*
+
+## Sol: worst variant on quality at 4x Luna's price [#gpt-56-sol-is-the-worst-variant-on-quality-at-4x-lunas-price]
+
+Worth stating plainly because the naming does not suggest it and because Sol is the variant a buyer would reach for.
+
+| | Luna | Terra | Sol |
+|---|---:|---:|---:|
+| Published in-region rate, input / cache-read / output per 1M | $1.10 / $0.11 / $6.60 | $2.75 / $0.28 / $16.50 | **$5.50 / $0.55 / $33.00** |
+| Agents graded AS GOOD | 3 / 4 | **4 / 4** | **0 / 4** |
+| Anti-FP false positives on `identity` | 0/2 | 0/2 | **2/2** |
+| Dismissals of a corroborated application | 0 | 0 | **1 (APP-1014)** |
+
+Sol on `identity` is this study's live demonstration of what an unswept agent could hide: it escalated **both** anti-false-positive fixtures against the incumbent's zero, dismissed a corroborated application, and banded 2/6 against Sonnet's 3/3 — at $0.0269/call, 4x Luna's price. Paying more did not buy calibration.
+
+Sol is nevertheless the right GPT **judge** in the sibling study, precisely because it is the only 5.6 variant that is not a candidate for a specialist slot. See `evals/judge_sol.py` and [judge methodology](/docs/model-selection/judge-methodology).
+
+## Coverage gap is half the fan-out
+
+**4 of 8 agents were swept.** `dealer`, `straw`, `employment` and `income` were never run on GPT at all. Worse for the false-positive question, quoted from the artifact's caveats: *"Only 2 of the 5 anti-false-positive fixtures (APP-1009, APP-1010) exercise the four agents swept here; APP-1006/1007/1008 target employment, dealer and income, which were not swept. The false-positive finding is therefore narrow and a wider anti-FP sweep is the obvious next measurement."*
+
+So the three fixtures designed to catch a specific false-positive failure mode target exactly the three agents with the least evidence.
+
+## Price of holding [#what-holding-costs]
+
+A hold with an unstated price is not a decision. Both figures are **PROJECTIONS** from the measured per-agent tokens, not benchmarks.
+
+| | Hold on Claude | Move the four swept agents to Luna | Recommendation |
+|---|---:|---:|---|
+| $/adjudication, projected at 2026-07-28 rates | $0.1247 | **$0.0651** | hold |
+| Delta | — | **−$0.0596 (−47.8%)** | forgone, and stated as forgone |
+| Fan-out floor lower bound | 22.05 s (`rings`) | **8.09 s (`income`)** | hold |
+
+Two things the second column exposes. A projected **47.8%** cost reduction and roughly **14 s** of fan-out floor are being declined. And after such a move the binding agent becomes `income` — **which has no quality evidence of any kind**, so the agent with the least evidence would set the pipeline's latency. That is an argument for sweeping it, and a second argument against a partial migration.
+
+Floor figures are **lower bounds**, not predicted end-to-ends: fan-out is bounded by a per-run *maximum*, which per-agent medians cannot reconstruct.
+
+`agents/models.py:projected_cost_if_gpt_specialists` computes the counterfactual and labels itself `PROJECTION OF A REJECTED COUNTERFACTUAL` — a weaker object than an ordinary projection, because **no benchmark run would confirm it without changing the assignment first.** It also *understates* the GPT case deliberately: the other four agents are priced at Claude in that figure, because no measured GPT token count exists for them. A full-fan-out GPT figure would be lower and is **not offered**.
+
+## Two calibration failures reproduce across families
+
+`known_failure_reproduction`:
+
+| Fixture / agent | Pinned | Opus 5 | Sonnet 5 | Luna | Terra | Sol |
+|---|---|---|---|---|---|---|
+| APP-1014 / `rings` (`RNG-020`) | LOW RISK | POSSIBLE | POSSIBLE | POSSIBLE | POSSIBLE | POSSIBLE |
+| APP-1004 / `bustout` (`BST-020`) | POSSIBLE RISK | HIGH | HIGH | HIGH | HIGH | HIGH |
+
+Quoted verbatim: *"GPT reproduced it 3/3; Claude 2/2. Correct band: GPT 0/3, Claude 0/2."*
+
+This is the study's most consequential *negative* result: it upgrades the finding from "no *tier* fixes it" to **"no model choice fixes it."** Five models, two families, every one wrong the same way — a second alert firing off the same underlying behaviour treated as independent corroboration. That is the signature of a shared prompt defect. [Open questions](/docs/open-questions#3-the-calibration-failures-no-model-choice-fixes).
+
+## Still unknown
+
+Every caveat the artifact carries, reproduced rather than summarised, because the study's credibility is in its limits.
+
+| Limit | Detail |
+|---|---|
+| One judge cannot settle this | Nothing is "bias-corrected" — subtracting a bias estimate would produce a number that looks adjusted and was never measured. [Judge methodology](/docs/model-selection/judge-methodology) |
+| Recommendation rests on the deterministic layers only | Band agreement, anti-FP escalation, `_context` grounding, `agents.output_contract.check`. Judged calibration and substance are subjective, reported separately, and an axis where the judges disagree yields no finding |
+| 6 applications per cell | A band-agreement difference of one case is **17 points**, so a one-case gap is inside this sample's resolution by construction |
+| `signals_cited` is style-sensitive | Pooled, Claude cites **4.56** signals per analysis to GPT's **2.86**; a looser stemming matcher moves GPT to **3.60** and Claude only to **4.65**, so about **0.7 of the ~1.7 gap is paraphrasing**. The looser matcher was rejected because it cannot keep `ssn_apps_last_7d` and `ssn_apps_last_30d` distinct. [Length versus evidence](/docs/model-selection/length-vs-evidence) |
+| Only 2 of 5 anti-FP fixtures exercise the swept four | APP-1006/1007/1008 target the unswept agents |
+| No p95 anywhere | `evals.bench.summarize_values` refuses a p95 below 20 samples and every cell records the refusal string rather than a number |
+| An unremovable asymmetry | GPT specialists receive the verbatim prompt **concatenated with the user turn** (the mantle Responses shape); Claude specialists receive it as a **cached system prompt**. That cannot be removed while GPT-5.x is off Bedrock Converse |
+| Latency and cost here are single serial calls | The end-to-end consequence of a swap belongs to the [pipeline benchmark](/docs/measured-results) |
+
+## What would change the answer
+
+| Experiment | Cost | What it settles |
+|---|---|---|
+| One prompt-engineering attempt on grounding — instruct the model to quote the paired `_context` row it validated against, then re-measure `grounded_fraction` | small | The only thing standing between this evidence and a migration |
+| Extend the sweep to the other four agents, including APP-1006 / 1007 / 1008 | a second $17-scale study | Whether the anti-false-positive result covers the whole fan-out rather than half of it |
+
+**If grounding closes, the latency and cost case is already made and this assignment should change.** Plumbing is not the blocker: `agents/fanout.py` routes a GPT specialist today (`transport_for('openai.gpt-5.6-luna') == 'bedrock-mantle'`), so reversing the decision is one value in `SPECIALIST_MODELS`. The hold is a measurement result, not a missing code path.
+
+<Cards>
+  <Card title="Judge methodology" href="/docs/model-selection/judge-methodology" description="Two judges biased in opposite directions, and NOT ESTABLISHED as a real outcome." />
+  <Card title="Length versus evidence" href="/docs/model-selection/length-vs-evidence" description="Whether a fifth of the words is a fifth of the analysis. Mostly not — except on bustout." />
+</Cards>

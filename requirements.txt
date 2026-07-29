@@ -4,28 +4,44 @@
 # runtimes; the CLI's own default is PYTHON_3_14, so keep the two in sync).
 #
 # Every pin below is EXACT for the three libraries whose API surface this repo
-# reads directly. Loose floors are the failure mode we are guarding against: a
-# `>=` on strands-agents resolves to 1.35.x, which renamed/added constructor
-# kwargs (plugins, concurrent_invocation_mode, service_tier) and -- worse --
-# BedrockModel silently accepts unknown **model_config keys with only a
-# UserWarning, so a kwarg that moved does not raise. It just stops taking effect.
+# reads directly. Loose floors are the failure mode we guard against: BedrockModel
+# silently accepts unknown **model_config keys with only a UserWarning, so a kwarg
+# that moved between releases does not raise -- it just stops taking effect.
+#
+# UPGRADED 1.26.0 -> 1.50.2 on 2026-07-28, and the upgrade was verified rather than
+# assumed. The full suite was run against BOTH versions in isolated venvs and both
+# reported the identical 1206 passed / 0 failed, after one real incompatibility was
+# found and fixed: a test asserted BedrockModel._supports_caching, a private
+# attribute 1.50 refactored into _cache_strategy. It now asserts our own public
+# guard (agents.models.supports_prompt_caching) instead, which holds on both.
+#
+# The reason to upgrade at all: strands.models.openai_responses.OpenAIResponsesModel
+# is absent from 1.26.x and is the NATIVE way to reach GPT-5.6 on Bedrock's
+# bedrock-mantle endpoint. With it, a GPT specialist is an ordinary strands.Agent --
+# same fan-out, same hooks, the customer's verbatim prompt in a real system_prompt
+# rather than concatenated into one Responses input string. Everything the repo used
+# on 1.26.0 still exists (Agent kwargs were added, none removed; every symbol we
+# import resolves), so this is an additive move, not a migration.
 
 # ---- Agent framework -------------------------------------------------------
-# 1.26.0 is the version every API decision in agents/ and app/ was verified
-# against: BedrockModel's flat **model_config (there is no `params` kwarg), the
-# `structured_output_model=` kwarg on Agent(...) (Agent.structured_output() is
-# deprecated), ModelRetryStrategy, and the threading.Lock in stream_async that
-# raises ConcurrencyException on a concurrently reused Agent instance.
-strands-agents==1.26.0
+# 1.50.2 carries strands.models.openai_responses (the native Bedrock Mantle
+# provider) and keeps everything this repo verified on 1.26.0: BedrockModel's flat
+# **model_config (there is still no `params` kwarg), the `structured_output_model=`
+# kwarg on Agent(...) (Agent.structured_output() remains deprecated),
+# ModelRetryStrategy, and the threading.Lock in stream_async that raises
+# ConcurrencyException on a concurrently reused Agent instance.
+strands-agents==1.50.2
 # Pinned in lockstep with strands-agents: the tools package imports framework
 # internals, so a floor here can drag in a build made against a different core.
-strands-agents-tools==0.2.20
+strands-agents-tools==0.8.5
 
 # ---- AgentCore Runtime SDK -------------------------------------------------
-# 1.14.0 is what the entrypoint contract was verified against: _takes_context()
-# matching the second parameter literally by the name `context`, and an
-# async-generator entrypoint being auto-converted to text/event-stream.
-bedrock-agentcore==1.14.0
+# 1.19.0, upgraded from 1.14.0 on 2026-07-28 alongside strands. The entrypoint
+# contract this repo depends on is unchanged and re-verified on it: _takes_context()
+# still matches the second parameter literally by the name `context`, and an
+# async-generator entrypoint is still auto-converted to text/event-stream.
+# tests/test_runtime_contract.py (60 tests) passes on both versions.
+bedrock-agentcore==1.19.0
 #
 # DELIBERATELY ABSENT: bedrock-agentcore-starter-toolkit.
 # It is deprecated, and it installs a console script also named `agentcore`
@@ -54,6 +70,14 @@ aws-opentelemetry-distro>=0.18.0
 # structured_output_model=, which needs pydantic v2 JSON-schema generation.
 # 2.13 is the verified floor; strands-agents==1.26.0 already requires pydantic>=2.
 pydantic>=2.13
+
+# ---- OpenAI SDK (required by the Strands Responses provider) ----------------
+# The native provider needs openai>=2.0.0; 1.107.3 was installed and could not
+# satisfy it. This is also the SDK agents/mantle.py uses directly on its fallback
+# path, and the client that carries the /openai/v1 base URL -- note the path: /v1
+# on the same host serves only the open-weight gpt-oss family and returns 400 for
+# every gpt-5.6 id (measured; see agents/mantle.py).
+openai>=2.49.0
 
 # ---- Test / CI -------------------------------------------------------------
 # deploy/ci.sh gates on pytest. Floor only; test-time dependency.

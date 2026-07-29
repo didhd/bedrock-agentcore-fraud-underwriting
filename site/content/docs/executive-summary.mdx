@@ -1,0 +1,185 @@
+---
+title: Executive summary
+description: For the account and executive audience — what was proven on Amazon Bedrock, what it costs, the one question that blocks the cost comparison, and the Friday recommendation.
+---
+
+*For the executive and account audience. Every figure names the artifact it came from; the engineering detail behind each claim is one link away.*
+
+Sub-minute forensic underwriting on Amazon Bedrock is **proven**. A lower cost than the
+incumbent is **not** — and that gap is one missing customer input, not a missing measurement.
+
+The eight-specialist pipeline runs end to end in **31.45 seconds at p50 and 46.55 seconds at
+p95**, with **40 of 42 measured runs under the 60-second target**. Live measurement over 42
+adjudications and 336 specialist model calls, not a projection.
+
+## Proven versus unproven
+
+| Claim | Status | Evidence |
+|---|---|---|
+| Sub-minute forensic underwriting on Bedrock | **Proven** | 40 of 42 runs under 60 s; p50 31.45 s (n=42) |
+| Fidelity to the customer's own prompts and contracts | **Proven** | Byte-identical prompts, sha256-verified; 21-key object validated on 42 of 42 runs |
+| 7-of-8 graceful degradation under partial failure | **Proven** | One degraded run finished in 21.2 s and still validated all 21 keys |
+| Lower cost than the incumbent | **Undecided** | Needs the daily volume figure. [Detail](#one-question-decides-the-cost-case) |
+| Behaviour when adjudications overlap | **Not measured** | One application in flight at a time throughout |
+| Any p99 | **Refused by the harness** | Needs 100 samples; the run has 42 |
+
+## What was measured
+
+Every figure in this section: `evals/results/pipeline_14x3_us-east-1.json`, run
+`2026-07-28T07:42:42+00:00` in `us-east-1`, git `9bb569bac801`. 14 applications x 3
+repetitions = **42 live adjudications**, **336 specialist calls**, **$6.4659 of measured
+Bedrock spend**.
+
+| | n | p50 | p95 | max |
+|---|---:|---:|---:|---:|
+| **End to end** | 42 | **31.45 s** | **46.55 s** | 74.97 s |
+| Eight specialists in parallel (fan-out) | 42 | 24.93 s | 41.05 s | 70.62 s |
+| Master synthesis | 42 | 4.20 s | 5.59 s | 15.21 s |
+| Same eight run sequentially (counterfactual) | 42 | 85.62 s | 157.14 s | 173.00 s |
+
+<Mermaid
+  title="Where the 60-second budget goes at p50"
+  chart={`
+flowchart LR
+  A["8 specialists in parallel<br/>24.93 s p50"] --> B["Master synthesis<br/>4.20 s p50"]
+  B --> C["End to end<br/>31.45 s p50"]
+  C --> D["Target<br/>60 s"]
+`}
+/>
+
+Each box is an independent percentile over its own 42 samples, so the first two do not add to
+the third — the medians come from different runs.
+
+**Cost per adjudication:** $0.1177 min, **$0.1440 p50**, $0.2536 max (n=41 fully priced runs;
+the one degraded run is excluded from cost and retained in latency).
+
+**Parallel speed-up** over the sequential counterfactual: 1.85x min, **3.64x p50**, 5.11x max
+(n=42). It appears as a distribution rather than one number because a fan-out is bounded by
+its slowest member, so the ratio moves with which specialist ran long.
+
+No p99 appears anywhere on this site. Percentiles are refused below 100 samples for a p99 and 20
+for a p95, and at n=42 it recorded the refusal in the artifact verbatim: *"refused: 42
+sample(s), need >= 100. A p99 over 42 sample(s) is not a p99."* Nothing here converts that
+refusal into a number.
+
+## What the customer's engineer checks first
+
+Fidelity is the product, not a detail. She wrote all nine production agents.
+
+| Fidelity claim | Status |
+|---|---|
+| Her nine prompts | **Byte-identical**, sha256-verified at import, CI-diffed against source. Five mutation attempts, including regenerating the manifest, were all caught. |
+| The adjudication object | **Exactly 21 keys in her order.** Validated on 42 of 42 runs, including the degraded one. |
+| Her 29 numbered General Rules | **27 enforced as tested code**, 2 enforced by the verbatim prompt text. |
+| Ten alert-ID categories | Data, not prose: 166 list entries, 148 distinct IDs, 18 multi-category. |
+| Bust-out and rings output shape | Her prompts define **no title** for those two, and the port does not invent one. |
+
+Detail: [Prompt fidelity](/docs/fidelity/prompt-fidelity) and
+[Output contracts](/docs/fidelity/adjudication-contract).
+
+<Callout type="error" title="What the port replaced">
+Prior code in this repository **paraphrased all nine prompts** and invented a
+`RISK:` / `FINDINGS:` output format. Its parser defaulted to `LOW RISK` whenever it could not
+find that invented `RISK:` line — so feeding it the real prompts would have cleared every
+application silently. That is the first defect a fidelity review would have found, and it is
+gone.
+</Callout>
+
+## One question decides the cost case
+
+AnyCompany reports a projected **$700K–$1M** annual Snowflake AI spend. Measured cost
+here is **$0.1440 per adjudication** (p50, n=41). Annualising needs one number nobody has
+given us: **applications per day through the full eight-agent forensic path.**
+
+| Applications/day through full 8-agent underwriting | Annualised at measured p50 |
+|---|---|
+| ~3,000 | **~$158K** |
+| ~300,000 | **~$15.8M** |
+
+Arithmetic: volume x 365 x $0.14395847. The p50 is measured; the volumes are illustrative
+brackets, not the customer's figures.
+
+Same architecture, opposite conclusion. **This is the most important open item in the
+engagement** and it cannot be closed from our side. Detail and the exact question to ask:
+[Snowflake comparison](/docs/cost/snowflake-comparison).
+
+One thing to keep off a cost slide: **per-agent model tiering saves $0.00 structurally.**
+Haiku-to-Sonnet is a $2/$10-per-million-token step down and Sonnet-to-Opus is the identical
+step up, so two light agents fund exactly two heavy agents at equal token counts. A test
+asserts that arithmetic so the claim cannot come back. Real levers are on
+[cost levers](/docs/cost/levers); tiering is not one of them.
+
+## Where the model choices came from
+
+Two blind studies, both with measured spend recorded in the artifact.
+
+| Study | Scope | Judges | Measured spend | Artifact |
+|---|---|---|---|---|
+| Claude-only tier study | 48 blind-judged analyses | Claude Opus 5 | **$4.9088** | `evals/results/tier_quality.json` |
+| Cross-family study | 4 agents x 6 applications x 5 models = **120 analyses, 240 verdicts** | Claude Opus 5 and GPT-5.5 | **$16.8869** | `evals/results/set_comparison.json` |
+
+Three results deserve executive attention.
+
+1. **Specialists stay on Claude, and that was a decision rather than a default.** GPT-5.6
+   measured faster and cheaper. It was held on one deterministic metric — how often an
+   analysis validates a signal against the paired `_context` column its own prompt requires:
+   Claude **0.642**, GPT **0.357**, lower on 4 of 4 agents. No judge involved.
+   [Detail](/docs/model-selection/cross-family-study).
+2. **Synthesizer selection also went to measurement, and Claude lost it.** On the same eight
+   narratives, Claude Sonnet 5 took 55.2 s and GPT-5.6 Luna took 6.1 s for the same verdict —
+   the substitution that brings end-to-end under a minute. n=1 each on that comparison; the
+   42-run figure for Luna in the pipeline is 4.20 s p50.
+   [Detail](/docs/model-selection/synthesizer).
+3. **Measurement overturned a reasoning-based tier assignment on two agents.** Reading the
+   prompts said fraud rings and synthetic identity needed the largest model. Measurement
+   contradicted that on both. [Detail](/docs/model-selection/tier-rederivation).
+
+## Risks, stated plainly
+
+| Risk | Severity | Status |
+|---|---|---|
+| Volume figure that decides the cost comparison is unknown | **Blocking the cost case** | Customer input required |
+| Two fixtures are mis-banded by **every model in both families** | High — a prompt defect, not a model choice | Fix is a sentence in her prompts; unmeasured |
+| `master_agent_prompt.txt` and her process-guide PDF disagree on the mid-band enum | Medium — anything keying off the band string is wrong for one of them | Surfaced, not silently resolved |
+| `full_underwriting_signal_dictionary.xlsx` never received | Medium | The 60-signal registry is reconstructed from the nine prompts |
+| A ~0.6%-per-call server-side generation stall produced the two runs over 60 s | Medium | Irreducible; no client-side change removes it |
+
+All of them, with the exact questions to ask: [Open questions](/docs/open-questions).
+
+## Friday recommendation
+
+**Demo on an application with a measured-stable latency profile.** Three of the fourteen
+fixtures ran three repetitions within a sub-two-second spread — shown sorted ascending:
+**APP-1010** (27.95 / 28.38 / 28.59 s), **APP-1002** (22.32 / 22.92 / 23.18 s) and **APP-1011**
+(21.21 / 22.40 / 22.79 s). Against those, APP-1007 ran 23.52 / 34.58 / **74.97** s and APP-1001 ran
+18.93 / 24.25 / **70.24** s — spreads over 51 seconds on byte-identical input. Source:
+`evals/results/tail_analysis.json`. Stated with its limit: **n=3 per application makes this a
+low-variance observation, not a guarantee**, because the stall rate is per *call* and a run
+makes eight of them.
+
+Four more things for the room:
+
+1. **Lead with fidelity, not latency.** The customer's engineer is the gate, and byte-identical
+   prompts plus a 21-of-21-key contract on 42 of 42 runs is the strongest thing here.
+2. **Raise the two calibration failures before she finds them.** APP-1014 rings and APP-1004
+   bustout are mis-banded by all five models across both families, every one wrong the same
+   way. Presenting it as a shared prompt defect we diagnosed lands very differently from her
+   discovering it live.
+   [Detail](/docs/open-questions#3-the-calibration-failures-no-model-choice-fixes).
+3. **Ask the volume question in the room.** One number converts the cost slide from
+   unresolvable to decided.
+4. **Promise no p99 and no throughput figure.** Neither was measured. Applications ran one at a
+   time, so nothing here says what happens when N adjudications overlap.
+
+## Explicitly not measured
+
+Carried from the artifact's own `caveats` array, so this is the benchmark's list rather than
+ours.
+
+- **AgentCore Runtime overhead.** Benchmarked calls went to Bedrock directly from the host
+  recorded in `run.host`, so container cold start, session setup and SSE framing are **not** in
+  the end-to-end figures.
+- **Signal generation.** Precomputed and outside the timed window, matching the customer's own
+  architecture. End to end here is agent latency, not pipeline-including-ETL latency.
+- **Throughput.** One application in flight at a time.
+- **Any p99, anywhere.**
