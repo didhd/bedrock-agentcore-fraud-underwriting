@@ -1,0 +1,240 @@
+---
+title: Model assignment
+description: Which model each of the nine agents runs on, the measurement behind each choice with its n and its artifact, and the four agents for which no quality evidence exists in either direction.
+---
+
+*For the customer's engineer, and for anyone who has to defend a model choice in a room. Every row names its evidence grade, including the grade that means "nothing was measured".*
+
+Eight Claude specialists, one GPT-5.6 synthesizer, and **four of the eight specialists have never had their analysis quality compared against anything.** That last fact is the one most model-selection tables hide, so it is graded in the code (`agents/models.py:QUALITY_SWEPT_AGENTS`) rather than left to prose.
+
+## How a role reached its model
+
+<Mermaid
+  title="Decision path behind the shipped assignment"
+  chart={`
+flowchart TD
+  A["Nine roles"] --> B{"Output machine-checkable<br/>on every call?"}
+  B -->|yes| S["Synthesizer: GPT-5.6 Luna,<br/>taken on latency"]
+  B -->|"no, a fraud judgement"| C{"Blind quality sweep run?"}
+  C -->|"n=5"| M["MEASUREMENT: rings and synthetic,<br/>moved down to Sonnet 5"]
+  C -->|"n=3"| H["HELD at the incumbent:<br/>bustout, identity"]
+  C -->|never| D{"Latency and cost evidence?"}
+  D -->|"fastest, cheapest, never the floor"| L["LIGHT Haiku 4.5:<br/>dealer, straw"]
+  D -->|"none either way"| U["UNPROVEN, MID by default:<br/>income, employment"]
+`}
+/>
+
+## Shipped assignment
+
+| Role | Model | Endpoint | `max_tokens` | Evidence grade |
+|---|---|---|---:|---|
+| `identity` | Claude Sonnet 5 | Bedrock Converse | 4096 | **HELD** |
+| `dealer` | Claude Haiku 4.5 | Bedrock Converse | 3072 | MEASUREMENT (latency/cost only) |
+| `straw` | Claude Haiku 4.5 | Bedrock Converse | 3072 | MEASUREMENT (latency/cost only) |
+| `employment` | Claude Sonnet 5 | Bedrock Converse | 4096 | **UNPROVEN** |
+| `income` | Claude Sonnet 5 | Bedrock Converse | 4096 | **UNPROVEN** |
+| `synthetic` | Claude Sonnet 5 | Bedrock Converse | 4096 | MEASUREMENT |
+| `bustout` | Claude Sonnet 5 | Bedrock Converse | 4096 | **HELD** |
+| `rings` | Claude Sonnet 5 | Bedrock Converse | 4096 | MEASUREMENT |
+| master synthesizer | **GPT-5.6 Luna** | `bedrock-mantle` | 4096 | MEASUREMENT |
+
+Two structural facts sit inside that table. **No agent runs on Opus 5** — `synthetic` and `rings` were there until 2026-07-28 and measurement moved both down ([tier re-derivation](/docs/model-selection/tier-rederivation)). And **the one non-Claude model is the synthesizer**, placed there on a latency measurement rather than on price ([synthesizer selection](/docs/model-selection/synthesizer)).
+
+Source of truth in code: `agents/models.py` (`SPECIALIST_MODELS`, `TIER_RATIONALE`, `QUALITY_SWEPT_AGENTS`, `MAX_TOKENS_BY_AGENT`, `DEFAULT_SYNTHESIZER_MODEL`), asserted by `tests/test_models.py`. Narrative version at `docs/model-selection.md`.
+
+**The 42-run benchmark predates two of those rows.** `evals/results/pipeline_14x3_us-east-1.json` records `synthetic` and `rings` on `global.anthropic.claude-opus-5`, so the [measured end-to-end](/docs/measured-results) describes the previous assignment and this one's end-to-end cost is a projection that labels itself one. One command converts it, at roughly $5 of spend:
+
+```bash
+AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.bench --pipeline --repetitions 3
+```
+
+## What the three evidence grades mean
+
+`agents/models.py:evidence_grade` reads the grade out of the rationale text rather than re-deciding it, so a rendered table and its prose cannot disagree.
+
+| Grade | What it asserts | Agents |
+|---|---|---|
+| **MEASUREMENT** | A measurement on this agent decided the assignment. Latency, cost, the quality verdict and n are all quoted in `TIER_RATIONALE`. | `rings`, `synthetic`, `dealer`, `straw`, synthesizer |
+| **HELD** | A comparison ran and was deliberately not acted on, because n was too small to move a fraud dimension. The cheaper candidate and what it would save are recorded. | `bustout`, `identity` |
+| **UNPROVEN** | No quality comparison exists for this agent at all. The entry says so instead of borrowing a neighbour's result. | `income`, `employment` |
+
+<Callout type="error" title="A latency grade is not a quality grade, and the two are tracked separately">
+`dealer` and `straw` are graded **MEASUREMENT** — on n=42 latency and cost — and appear in
+`QUALITY_SWEPT_AGENTS` **not at all**. No blind judge has ever compared their analyses against
+a larger model. Conflating "we measured it" with "we measured its quality" is how a cost win
+gets presented as an accuracy result, so the code keeps two separate structures:
+
+```python
+QUALITY_SWEPT_AGENTS = {"rings": 5, "synthetic": 5, "bustout": 3, "identity": 3}
+MIN_APPLICATIONS_FOR_A_BAND_CLAIM = 5
+```
+</Callout>
+
+## Every rationale, with its n and its artifact
+
+Three artifacts do all the work below.
+
+| Artifact | What it holds | Measured spend |
+|---|---|---:|
+| `evals/results/tier_quality.json` | 48 blind-judged analyses, judge Claude Opus 5, identifiers stripped and order shuffled under seed `20260728`, scored against each agent's own verbatim calibration text and the fixture's pinned band | **$4.9088** (specialists $1.3586, judge $3.5501) |
+| `evals/results/pipeline_14x3_us-east-1.json` | 42 live pipeline runs, 336 specialist calls — source of every figure quoted at n=42 | **$6.4659** |
+| `evals/results/set_comparison.json` | Cross-family study, 120 analyses, 240 verdicts, two judges, four agents only | **$16.8869** |
+
+### `rings` — MID, moved down from HEAVY
+
+| | Opus 5 | Sonnet 5 |
+|---|---|---|
+| Band agreement vs pinned expectation (n=5) | 4/5 | **4/5** |
+| Judge-confirmed false positives | 1 | **1** |
+| Judge calibration mean | 4.20 | 4.00 |
+| Wall clock p50 | 32.81 s | **22.05 s** |
+| $/call p50 | $0.0696 | **$0.0241** |
+| Output tokens p50 | 2448 | 2026 |
+
+Opus keeps one edge, **+0.20 judge calibration**, and the judge is Opus 5 scoring its own family. On its own 16 rows that judge scored calibration **+0.31** and substance **+0.78** versus the other 32, while the band-agreement margin it cannot influence moved **−0.026**. A +0.20 lead inside a +0.31 self-preference margin is refused as indistinguishable from bias.
+
+Why this row is worth more than any other: `rings` was the slowest agent in **25 of 42** pipeline runs and the fan-out floor is **96.3%** of fan-out time (`evals/results/tail_analysis.json`). Ceiling on the fix, also measured — slowest-minus-second-slowest is **6.34 s p50**, so even an instantaneous `rings` leaves the next agent as the floor. [Critical path](/docs/performance/critical-path).
+
+### `synthetic` — MID, moved down from HEAVY, accepting a latency loss
+
+| | Opus 5 | Sonnet 5 | Haiku 4.5 |
+|---|---|---|---|
+| Band agreement (n=5) | 4/5 | **5/5** | **5/5** |
+| Judge calibration mean | 4.20 | **4.80** | 4.40 |
+| False negatives | **1** | 0 | 0 |
+| Output-contract violations | 5 | 5 | **8** |
+| Wall clock p50 | **8.51 s** | 13.54 s | 9.56 s |
+| $/call p50 | $0.0293 | $0.0194 | **$0.0059** |
+
+Sonnet 5 is **slower** here — slower on 4 of 5 paired applications — and it is taken anyway, because Opus produced the sweep's only **false negative**: on APP-1014 it declared LOW RISK against a pinned POSSIBLE RISK (`SYN-008`) and the judge scored it "dismisses".
+
+Two things this row proves about the table as a whole. **It is not cost-driven** — a cost-driven table takes Haiku here at 5/5 band, $0.0059 and 9.56 s, and Haiku was rejected on the customer's own output contract: 8 violations against Sonnet's 5, including citing numeric alert IDs on 3 of 5 calls, which her `synthetic` prompt forbids. And **it is the one cell with no bias caveat available**, because the margin runs *against* the judge's own family.
+
+### `bustout` and `identity` — HELD at n=3
+
+n=3 cannot support a band claim; one application moves the rate 33 points. On that thin sample Haiku 4.5 lost on no axis:
+
+| Agent | Incumbent Sonnet 5 | Haiku 4.5 | Verdict |
+|---|---|---|---|
+| `bustout` | band 1/3, calibration 2.67, 2 judge-confirmed false positives, $0.0254, 25.31 s | band 2/3, calibration 2.67, 1 false positive, **$0.0087, 13.65 s** | **HELD** — n too small |
+| `identity` | band 2/2 readable, calibration 5.00, 2 contract violations, $0.0171, 13.65 s | band 3/3, calibration 4.00, **7 contract violations**, **$0.0051, 8.04 s** | **HELD** — n too small, and a fidelity cost |
+
+Moving either would save roughly **$0.017/application** and ~11 s of critical path. Three applications do not buy that decision. `identity`'s Haiku rows also carry 7 output-contract violations against Sonnet's 2 — alert IDs its prompt forbids, plus a risk label in a section header on all three calls — so the swap has a fidelity cost as well as a statistical one.
+
+`bustout` is the one most worth resolving: at n=42 it is 14.46 s p50 / 35.71 s p95 at $0.01699 and was the slowest agent in **7 of 42** runs, second only to `rings`.
+
+### `dealer` and `straw` — LIGHT, corroborated on latency and cost only
+
+| Agent | p50 | p95 | $/call | Slowest in N of 42 | Output tokens mean |
+|---|---:|---:|---:|---:|---:|
+| `straw` | 4.40 s | 8.76 s | $0.00352 | **0** | 224 |
+| `dealer` | 6.56 s | 14.56 s | $0.00541 | **0** | 379 |
+
+Two fastest and two cheapest agents, and neither ever set the fan-out floor. Their case is n=42 latency and cost plus the scope their own prompts define — `straw` keeps a no-co-borrower analysis to two or three sentences, which measurement corroborates at 672 chars p50. **Moving either up would need a quality argument nobody has measured. So would keeping them down, strictly speaking.**
+
+### `income` and `employment` — UNPROVEN
+
+Never quality-swept, within family or across families. Their rationales say exactly that instead of inferring from a neighbour.
+
+| Agent | p50 | p95 | $/call | Slowest in N of 42 | Note |
+|---|---:|---:|---:|---:|---|
+| `income` | 8.09 s | **31.44 s** | $0.01537 | 5 | Owned one of the two 60 s+ tail runs (APP-1001 rep 2: 66.0 s of a 66.5 s fan-out, generating at 4.7 output tok/s against a 66 tok/s median). Second-widest p95/p50 spread of the eight. |
+| `employment` | 7.48 s | 17.64 s | $0.01022 | **0** | Cheapest and fastest of the six MID agents, so a plausible LIGHT candidate on cost — which is exactly why it needs a judged sweep rather than a guess. A LIGHT move saves ~$0.005/app. |
+
+A coverage gap sits behind that table and it matters more than it looks. Three of the customer's five anti-false-positive fixtures — **APP-1006, APP-1007, APP-1008** — target exactly `employment`, `dealer` and `income`. Those are the three agents with the least evidence, and the fixtures built to catch their specific failure mode were never run against an alternative model in either study.
+
+### `synthesizer` — GPT-5.6 Luna on `bedrock-mantle`
+
+Not a Claude tier, so LIGHT/MID/HEAVY do not apply. Measured at n=42 live runs: **4.20 s p50 / 5.59 s p95** at **$0.010640/call**, 715.9 output tokens mean, **0 failures and 0 repair attempts** across 42 adjudications — 14.4% of end-to-end against fan-out's 85.6%. Full derivation, including the one-run comparison that decided it: [synthesizer selection](/docs/model-selection/synthesizer).
+
+## Projected cost of this assignment
+
+`agents/models.py:projected_cost_per_adjudication` sums nine per-agent costs, each priced at the token counts **that model actually produced**. It is a **PROJECTION** and every return value says so.
+
+| Role | Model | Recorded tokens in / out / cacheRead | n | $/call |
+|---|---|---|---:|---:|
+| `identity` | Sonnet 5 | 3110 / 1105 / 0 | 42 | $0.01727 |
+| `dealer` | Haiku 4.5 | 3518 / 379 / 0 | 42 | $0.00541 |
+| `straw` | Haiku 4.5 | 2400 / 224 / 0 | 42 | $0.00352 |
+| `employment` | Sonnet 5 | 2363 / 527 / 1091 | 42 | $0.01021 |
+| `income` | Sonnet 5 | 3184 / 900 / 0 | 42 | $0.01537 |
+| `bustout` | Sonnet 5 | 1786 / 1316 / 1297 | 42 | $0.01699 |
+| **`synthetic`** | **Sonnet 5** | 3793 / 1518 / 0 | **5** | $0.02276 |
+| **`rings`** | **Sonnet 5** | 1621 / 1863 / 705 | **5** | $0.02259 |
+| `synthesizer` | GPT-5.6 Luna | 2 / 716 / 0 (+4300 cache write) | 42 | $0.01063 |
+| **Projected total** | | | **smallest n = 5** | **$0.12475** |
+
+Specialists $0.11412, synthesizer $0.01063.
+
+<Callout type="info" title="Why token counts cannot be held constant across a model swap">
+A different model writes a different amount. On the same five applications, `rings` on Opus
+wrote **1568.8** output tokens mean; on Sonnet, **1862.6**. `synthetic` on Opus wrote
+**581.5**; on Sonnet, **1517.8**. Pricing one model's rates against the other's token counts
+is fiction, so `RECORDED_USAGE_PER_CALL` and `RECORDED_USAGE_PER_CALL_PRIOR_ASSIGNMENT` each
+carry their own model's measured tokens.
+</Callout>
+
+Against the prior assignment, with both sides repriced at the same date so the Sonnet 5 promotional rate cannot be charged to one side only:
+
+| Priced as of | This assignment (projected) | Prior assignment (projected) | Delta | What to claim |
+|---|---:|---:|---:|---|
+| 2026-07-28, promo live | $0.12475 | $0.15571 | **−$0.03096 (−19.9%)** | A latency and quality decision that is also cheaper today |
+| 2026-09-01, promo lapsed | $0.17734 | $0.18563 | **−$0.00829 (−4.5%)** | A latency and quality decision, full stop |
+
+**Do not put −20% on a slide dated after 2026-09-01.** Sonnet 5's $2/$10 is introductory and reverts to $3/$15; six of the eight specialists sit on it. Repricing only the new side while holding the old side at the fixed measured constant manufactures a fake cost *increase* of ~$0.021, and `test_the_post_expiry_comparison_reprices_both_sides_not_just_one` asserts against exactly that. [Cost levers](/docs/cost/levers).
+
+Prior assignment's own **measured** figures, for reference: **$0.14396 p50 / $0.15616 mean**, n=41 priced runs. A projection is a sum of per-agent means, so it is comparable to the **mean**, not the p50 — and `projected_cost_per_adjudication` returns that comparison as a string field rather than leaving it to the reader. Applying the identical arithmetic to the prior assignment's own recorded tokens reproduces the benchmark's measured mean to within **$0.0005** (`test_the_same_method_reproduces_the_measured_cost_under_the_old_assignment`). The *method* is sound; only this configuration's end-to-end result is unconfirmed.
+
+## Output caps as a property of the agent
+
+Caps moved from `MAX_TOKENS_BY_TIER` to `MAX_TOKENS_BY_AGENT` on 2026-07-28, because under the old table moving `rings` from HEAVY to MID would silently have changed which cap it inherited — on one of only two agents ever measured to truncate.
+
+| Agent | Max output observed | Cap | Headroom | Its prompt says |
+|---|---:|---:|---:|---|
+| `straw` | 989 | 3072 | 3.1x | max 4000 chars |
+| `dealer` | 1464 | 3072 | 2.1x | max 4000 chars |
+| `employment` | 1647 | 4096 | 2.5x | max 4000 chars |
+| `synthetic` | 2737 | 4096 | 1.5x | max 4000 chars |
+| `income` | 2783 | 4096 | 1.5x | max 4000 chars |
+| `rings` | 2876 | 4096 | 1.4x | **nothing** |
+| `bustout` | 3257 | 4096 | 1.3x | **nothing** |
+| `identity` | 3582 | 4096 | 1.1x | max 4000 chars |
+| synthesizer | 1005 | 4096 | 4.1x | ~1200 chars per summary |
+
+"Max output observed" counts every live call on disk **at the model that agent is now assigned** — the 42-run benchmark, the tier sweep's Sonnet 5 cells, and the cap sweep. Opus 5 rows are excluded on purpose: including them would size `bustout`'s cap against 3385 tokens from a model this assignment does not use.
+
+`identity`'s 1.1x is the thinnest margin and is deliberately **not** tightened. Its 3,582-token call carried only **1,191 characters** of analysis, so it is the agent whose token usage is least predictable from its visible output. A cap computed as 4000/4 = 1024 would truncate it at a third of its own contract.
+
+No cap was lowered, and the sweep says why: `max_tokens` was measured as a brevity instrument and **failed all three criteria** — no latency gain, 14 of 30 cells truncated, 13 of 30 kept the same band. A truncated call is the worst outcome available: full wall clock, fully billed, text discarded, fraud dimension lost. [What does not reduce cost](/docs/cost/what-does-not-work#max_tokens-failed-all-three-criteria).
+
+## Calibration failures no assignment fixed
+
+Two failures survive every model in both families, and every model gets them wrong the same way.
+
+| Fixture / agent | Pinned | Every model said | Requirement |
+|---|---|---|---|
+| APP-1014 / `rings` | `LOW RISK` | `POSSIBLE RISK` — Opus 5, Sonnet 5, Luna, Terra, Sol. **0 of 5.** | `RNG-020` |
+| APP-1004 / `bustout` | `POSSIBLE RISK` | `HIGH RISK` — same five. **0 of 5.** | `BST-020` |
+
+Judges named the same fault every time: alerts arising from **one underlying behaviour** treated as independent corroboration. That is a prompt-and-guardrail problem, not a model-selection one, and buying a bigger model does not buy the fix. [Open questions](/docs/open-questions#3-the-calibration-failures-no-model-choice-fixes).
+
+Also untouched by any assignment: **the latency tail.** 61.0% of end-to-end variance is *within*-application, across repetitions of byte-identical input, and the two runs over 60 s were single calls generating at 16.1 and 4.7 output tok/s against a 66 tok/s median — inside Bedrock's own reported latency, zero throttles. [Latency tail](/docs/performance/the-tail).
+
+## Still unknown
+
+Ordered by how likely the customer's engineer is to ask.
+
+| Open item | Why it is open | What would close it |
+|---|---|---|
+| End-to-end latency and cost of this exact assignment | Projected, not measured | `evals.bench --pipeline --repetitions 3`, ~$5 |
+| `bustout` and `identity` at n≥5 | Haiku lost on no axis at n=3 and is ~3x cheaper | Extend the tier sweep; real money sits on it |
+| `income` and `employment` quality | Never swept in either study, no evidence in either direction | A judged sweep including APP-1006/1007/1008 |
+| `dealer` and `straw` quality | LIGHT rests on n=42 latency and cost plus their prompts' own scope | Same |
+| Luna's fraud *reasoning* vs a Claude synthesizer | 42 runs validated 21 keys and 12 of 14 applications were verdict-stable, but no blind judge scored the two | `evals/evaluators/pp_calibration_judge.json` across the fixture set on both |
+| Whether a grounding instruction closes GPT's `_context` gap | One prompt experiment stands between the evidence and a projected 47.8% specialist cost reduction | [Cross-family study](/docs/model-selection/cross-family-study) |
+
+<Cards>
+  <Card title="Tier re-derivation" href="/docs/model-selection/tier-rederivation" description="How reading the prompts put two agents on Opus 5, and how measurement contradicted it on both." />
+  <Card title="Cross-family study" href="/docs/model-selection/cross-family-study" description="Claude set versus GPT set, per agent, with the verdict column and the metric that decided it." />
+  <Card title="Cost levers" href="/docs/cost/levers" description="What this assignment costs, and the three levers that survive arithmetic." />
+</Cards>

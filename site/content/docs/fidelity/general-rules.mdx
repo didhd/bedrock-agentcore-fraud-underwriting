@@ -1,0 +1,192 @@
+---
+title: General Rules coverage
+description: 29 numbered General Rules, rule by rule — 27 enforced as tested deterministic code, 2 by the verbatim prompt text, with the enforcement layer and test name for each.
+---
+
+*For the customer's engineer. This page answers, rule by rule, the risk she named herself. Every count is read from `signal_layer/rules/catalog.py:CATALOG` at import and matches the generated table in `docs/general_rules_coverage.md`.*
+
+**29 numbered rules: 27 enforced by deterministic tested code, 2 by the verbatim prompt text.**
+Replicating the semantic layer's guardrails was named as the biggest risk in the migration — in her
+words, *"replicating the SQL guardrails built into snowflake cortex by the semantic layer"* — so the
+rules became code with one module per rule, not prose in a prompt.
+
+## Where each rule is enforced
+
+<Mermaid
+  title="Four enforcement layers, 29 rules"
+  chart={`
+flowchart LR
+  C["CATALOG<br/>29 numbered rules"] --> S["signal_layer/rules/<br/>21 rules"]
+  C --> B["signal_layer/bands.py<br/>4 rules: 0.5, 6, 21, 24"]
+  C --> A["alert_categories.py<br/>1 rule: 3"]
+  C --> P["prompt+code<br/>1 rule: 12"]
+  C --> V["prompt-verbatim only<br/>2 rules: 20, 22"]
+`}
+/>
+
+| Layer | Count | Rules | Meaning |
+|---|---:|---|---|
+| `signal-layer-code` | **21** | 1, 1.5, 2, 4, 5, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 23, 25, 26, 27 | A deterministic function in `signal_layer/rules/` runs it |
+| `bands` | **4** | 0.5, 6, 21, 24 | Already implemented in `signal_layer/bands.py`; imported, not duplicated |
+| `alert-categories` | **1** | 3 | Already implemented in `signal_layer/alert_categories.py` |
+| `prompt+code` | **1** | 12 | Interpretive in the prompt, with a code-side validator as well |
+| `prompt-verbatim` | **2** | 20, 22 | Interpretive guidance enforced by the verbatim prompt text; a test asserts the text is present in the loaded prompts |
+
+Summing the first four gives the 27 enforced in code. `tests/test_rules.py` collects **67 tests**
+(`MOCK_MODE=1 python3 -m pytest tests/test_rules.py -q --collect-only`).
+
+Why exactly two rules are prompt-enforced, and why that is correct rather than a gap. **Rule 20** is
+score *interpretation* — what an IncomePass score means, and that income overstatement in isolation
+is not correlated to early payment default while overstatement combined with other misrepresentation
+is. That belongs in the model's context, not in a function; `signal_layer.bands.INCOMEPASS_SEMANTICS`
+carries the verbatim semantics and `test_rule_20_incomepass_semantics_in_prompts` asserts the text
+reached the loaded prompts. **Rule 22** is a **ban on a statistic**, not a computation to perform: do
+not average fraud scores, because they are standard-scaled. Nothing exists to implement, so what is
+asserted instead is that nothing in this repository computes `AVG(fraud_score)`, plus that the caveat
+text is present in the prompts. A function that "enforced" either one would be theatre.
+
+<Callout type="info" title="Why the rules had to become code">
+The prior revision represented the entire rule set as **six prose display strings**. A rule expressed
+only as prose in a prompt is enforced by the model's attention budget; a rule expressed as a tested
+function is enforced by the process.
+
+Two of these rules make the difference concrete. Rule 17 is a null-safe exclusion filter whose naive
+form silently deletes every legitimate application with no email on file. Rule 23 is an absolute
+prohibition on raw SSN values.
+</Callout>
+
+## Rule by rule
+
+Titles and enforcement layers are read from `signal_layer/rules/catalog.py`. The full table
+*including her verbatim rule text for every row* is in `docs/general_rules_coverage.md` — that column
+is read out of the verbatim orchestration document at generation time rather than retyped, so it
+cannot drift from her document. It is not reproduced here because it is confidential.
+
+| Rule | Title | Layer | Test |
+|---|---|---|---|
+| **0.5** | Fraud score bands and the meaning of 999 | `bands` | `test_rule_0_5_fraud_score_bands` |
+| **1** | INNER join to `delink_lender_table` on `hash_lender_id`, DISTINCT, excluding TEST lenders | `signal-layer-code` | `test_rule_1_lender_join` |
+| **1.5** | Lender name normalisation and the 12-row / 14-nickname mapping table | `signal-layer-code` | `test_rule_1_5_lender_nicknames` |
+| **2** | `UPPER(TRIM(x))` on borrower strings, and the `123_WALN_92101` address key | `signal-layer-code` | `test_rule_2_normalisation_and_address_key` |
+| **3** | The ten alert-ID categories | `alert-categories` | `test_rule_3_alert_categories` |
+| **4** | Join `tbl_afa_alerts_clean` on `application_id` AND `hash_lender_id` | `signal-layer-code` | `test_rule_4_alert_join_composite_key` |
+| **5** | All application retrieval joins on `application_id` plus a lender identifier | `signal-layer-code` | `test_rule_5_application_grain` |
+| **6** | Fraud score bands (restatement of 0.5) | `bands` | `test_rule_6_restates_rule_0_5` |
+| **7** | Exclude pure chargeoffs from default calculations | `signal-layer-code` | `test_rule_7_chargeoff_exclusion` |
+| **8** | Deprecated all-records tables must not be queried | `signal-layer-code` | `test_rule_8_deprecated_tables` |
+| **9** | Co-borrower data from `tbl_auto_consortium` first, then all-records | `signal-layer-code` | `test_rule_9_coborrower_source_precedence` |
+| **10** | Only active dealers (`consortium_number_of_apps_last_1_year > 0`) | `signal-layer-code` | `test_rule_10_active_dealers` |
+| **11** | `submitted_to_prod_at` only for "submitted"; never `<= CURRENT_TIMESTAMP()` | `signal-layer-code` | `test_rule_11_date_field_routing` |
+| **12** | No unsolicited recommendations; never auto-decline; never criminal penalty | `prompt+code` | `test_rule_12_recommendation_constraints` |
+| **13** | Retro: never filter by default, null-safe predicate, no `submitted_to_prod_at` | `signal-layer-code` | `test_rule_13_retro_handling` |
+| **14** | `ppi_dealer_id` + `dealer_name` together identify a dealer | `signal-layer-code` | `test_rule_14_dealer_identity_key` |
+| **15** | NULL `borr_ssn` is not a distinct SSN | `signal-layer-code` | `test_rule_15_null_ssn_not_distinct` |
+| **16** | `PRIME` and `SUBPRIME` are both Stellantis lenders | `signal-layer-code` | `test_rule_16_prime_subprime_stellantis` |
+| **17** | Null-safe fake-record exclusion (fake emails, common VINs, common phones) | `signal-layer-code` | `test_rule_17_fake_record_exclusion` |
+| **18** | Check `TBL_AUTO_CONSORTIUM` when all-records returns nothing | `signal-layer-code` | `test_rule_18_source_fallback` |
+| **19** | Crescent Bank is `CRESCENTBANK`, never `FCRACRESCENTBANK` | `signal-layer-code` | `test_rule_19_crescent_bank` |
+| **20** | IncomePass (`income_misrep_score`) is distinct from fraud score | `prompt-verbatim` | `test_rule_20_incomepass_semantics_in_prompts` |
+| **21** | `dealer_risk_score` (lender-scoped) vs `dealer_consortium_score` (consortium-scoped) | `bands` | `test_rule_21_dealer_score_binding` |
+| **22** | Do not average fraud scores — they are standard-scaled | `prompt-verbatim` | `test_rule_22_no_fraud_score_averaging` |
+| **23** | NEVER include raw SSN values or any parts of them | `signal-layer-code` | `test_rule_23_no_raw_ssn` |
+| **24** | `PRODUCT` concatenates PPI acronyms; match with wildcards on both sides | `bands` | `test_rule_24_product_decode` |
+| **25** | Ignore invalid credit data: time in file ≤ 0 or 9999, oldest tradeline null/zero | `signal-layer-code` | `test_rule_25_invalid_credit_data` |
+| **26** | 11-digit and 10-digit forms of a phone are the same phone | `signal-layer-code` | `test_rule_26_phone_equivalence` |
+| **27** | Max 5 SQL calls per request; batches > 5 applications summarise incrementally | `signal-layer-code` | `test_rule_27_query_budget` |
+
+## Rules where the naive reading is a real defect
+
+Twenty-nine rules do not carry equal weight. These are the ones where implementing the obvious
+version produces a wrong answer, with the failure each one causes. Notes taken from
+`docs/general_rules_coverage.md`.
+
+| Rule | Naive implementation | What it produces | Implemented by |
+|---|---|---|---|
+| **17** | `<> ALL (...)` without the `or ... is null` disjunct she explicitly writes | **Silently deletes every legitimate application with no email on file** — in SQL, `NULL <> ALL (...)` is NULL, not true. Highest-risk rule in the set | `exclude_fake_records`, `phone_excluded`, `validate_exclusion_sql` in `signal_layer/rules/r17_fake_records.py` |
+| **15** | Count NULL `borr_ssn` as a distinct SSN | Inflates every reuse count by one and manufactures a shared-identifier cluster out of a missing value — a **false positive** against the anti-false-positive discipline the whole prompt set is built around | `count_distinct_ssns`, `is_present_ssn` |
+| **26** | Compare phone strings without normalising to the last 10 digits | The opposite failure, a **false negative**: `14724933572` and `4724933572` are the same phone, so reuse counts undercount and a real shared-phone ring is missed. Also required upstream of rule 17's phone exclusion, so getting it wrong corrupts two rules | `norm_phone`, `same_phone` |
+| **7** | Blanket `AND chargeoff_flag = false` | **Under-counts defaults.** The rule excludes *pure* chargeoffs — the flag set with **neither** EPD flag. The full chargeoff × (epd, epd6) truth table is tested | `is_default`, `is_pure_chargeoff`, `default_rate` |
+| **9** | Two-valued co-borrower resolution | Turns a data gap into a finding. PRESENT / ABSENT / UNKNOWN must stay three-valued because the identity agent escalates on "no co-borrower" but not on "not sourced" | `resolve_coborrower` |
+| **10** | Treat NULL activity as active | The customer does not state the NULL branch. `NULL` is not `> 0`, so unknown activity is excluded, and the decision is recorded as `ACTIVE_DEALER_NULL_NOTE` rather than left implicit | — |
+| **19** | `%CRESCENT%` wildcard | **Double-counts two institutions.** Rule 1.5 itself supplies `CRESCENT` as a nickname, which matches both Crescent Bank and `FCRACRESCENTBANK`. Rules 1.5, 16 and 19 are resolved together by one lender resolver for that reason | one lender resolver; rule 16 is the mirror case — Stellantis resolves to **two** names, so `LenderResolution.lender_names` is a tuple and `.lender_name` raises on a multi-name result |
+| **27** | Trust a prompt instruction to "limit to 5" | A prompt instruction is a request. `QueryBudget` is a ceiling: the budget is spent **before** a call is issued, so the sixth call cannot be made. Shared with rules 13 and 18, since a rule-18 retry costs a rule-27 call | `QueryBudget` |
+
+Rules 0.5 and 6 are the same rule under two ids, and both appear deliberately. Rule 6 is
+byte-identical to rule 0.5 in the identity document, and one implementation serves both. Quoting the
+coverage doc: *"deduplicating in code is correct, deduplicating in the inventory is not"* — so both
+ids are listed, and the count of 29 is the customer's count rather than a tidied one.
+
+## Rule 23 and the one hard compliance boundary
+
+Rule 23 is the only rule she **capitalises**: never include raw SSN values or any parts of them, only
+hashed values. It is enforced as a **recursive gate** over the payload —
+`assert_no_raw_ssn` / `find_raw_ssn` in `signal_layer/rules/r23_no_raw_ssn.py` — rather than as a
+prompt instruction, because a prompt instruction is not a compliance control.
+
+<Callout type="error" title="Known gap: rules 12 and 23 both want a Bedrock Guardrail, and none is configured">
+Quoting `docs/general_rules_coverage.md` directly: *"No `guardrailIdentifier` or `apply_guardrail`
+call exists anywhere in it."*
+
+Rule 23 is enforced by the recursive payload gate and rule 12 by a post-generation validator. Both
+are real and both are tested. Neither is the platform-level block the customer's compliance posture
+should ultimately have, **because a validator in the same process can be bypassed by a code path that
+forgets to call it.**
+
+Recorded as a gap in `r23_no_raw_ssn.ENFORCEMENT_LAYERS` and in the coverage document, and
+`bedrock-guardrail` is deliberately never used as the *sole* layer for any rule. It is a platform
+configuration item for the migration, not a code change.
+</Callout>
+
+## What "enforced in code" does and does not mean
+
+Three honest boundaries, stated because a review will look for them.
+
+1. **Rules are extracted from one document of eight.** The identity orchestration document carries
+   the longest form of all 29. The other seven differ — rule 6 is absent from some, and rules 11, 13,
+   17, 18, 20 and 24 are worded differently or truncated per agent.
+   `signal_layer.rules._source.variants_of()` reports the differences and
+   `test_rule_variants_across_documents` pins them.
+2. **Several rules govern SQL this repository does not execute.** Rules 1, 4, 5, 8, 11 and 13 are
+   about query construction. What exists for them is a **resolver plus a SQL validator** —
+   `validate_lender_join_sql`, `validate_join_sql`, `validate_date_sql`, `validate_retro_sql`,
+   `validate_no_deprecated_tables` — so each rule is checkable against whatever generates the query,
+   whether that is this signal layer or the customer's existing pipeline. That is a genuine
+   difference from "the rule runs in production", and it should be said in the room.
+3. **Rule 1.5 does not guess.** The rule's own words are *"don't hallucinate."* An unresolved lender
+   input returns `resolved=False` rather than a best-effort match.
+
+## Regenerating the coverage document
+
+```bash
+python -m signal_layer.rules.catalog > docs/general_rules_coverage.md
+MOCK_MODE=1 python3 -m pytest tests/test_rules.py -q          # 67 tests
+```
+
+The second command asserts the generated file matches the catalog, so the document cannot be edited
+into agreement with a claim the code does not support.
+
+## Still unknown
+
+- **Whether the per-agent rule variants matter.** Seven documents differ from the identity document
+  in six rules, and which wording the customer considers authoritative is her call.
+- **Whether a Bedrock Guardrail is wanted.** Rules 12 and 23 both point at one; none is configured.
+- **Whether the SQL validators match her production query generator.** They are checkable against it;
+  they have not been run against it.
+
+<Cards>
+  <Card
+    title="Alert categories"
+    href="/docs/fidelity/alert-categories"
+    description="General Rule 3 as data: ten categories, 166 entries, 148 distinct IDs, 18 in more than one."
+  />
+  <Card
+    title="Signal layer"
+    href="/docs/reference/signal-layer"
+    description="The 60 signals, the DomainView projection, and why a specialist has no data tool."
+  />
+  <Card
+    title="Semantic layer"
+    href="/docs/platform/semantic-layer"
+    description="What replaces Cortex Analyst, and the Lambda Gateway design behind SIGNAL_MODE."
+  />
+</Cards>

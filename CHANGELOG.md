@@ -1,8 +1,94 @@
 # Changelog
 
+## 2026-07-28 — Cross-family set comparison: the specialists stay on Claude, and the hold has a price
+
+The master synthesizer already runs on GPT-5.6 Luna on a measurement. Nobody had tested
+whether the eight **specialists** should follow it. A first latency probe said GPT was
+dramatically better on both latency and cost. It is. **They are held on Claude anyway.**
+
+**What was measured.** `evals/results/set_comparison.json` — 4 agents (rings, synthetic,
+bustout, identity) x 6 applications x 5 models (Claude Opus 5, Sonnet 5; GPT-5.6 Luna,
+Terra, Sol) = **120 blind-judged analyses**, identifiers stripped, order shuffled.
+**$16.8869 of measured spend**, $14.1343 of it judging. Scored by **two judges biased in
+opposite directions** — Claude Opus 5 (*also a candidate*) and GPT-5.5 — because the prior
+tier study measured a single judge preferring its own family by +0.31 calibration / +0.78
+substance while the band margin it could not influence moved −0.026.
+
+**The case for GPT, none of it disputed:**
+
+| Axis | Claude | GPT |
+|---|---|---|
+| Wall clock p50, pooled | 18.88 s | **4.73 s** (rings: 3.20 s vs Opus 5's 26.22 s) |
+| $/call p50, pooled | $0.03125 | **$0.01066** (rings: $0.0050 vs $0.0583) |
+| Output-contract clean | 17/48 | **72/72** |
+| Judged substance, pooled | — | **+0.398 / +0.684 — better on BOTH judges** |
+
+The Claude judge scored GPT higher on substance (−0.398 **against its own family**), which
+is much harder to dismiss than a single-judge win. And **the length gap is padding, not lost
+evidence**: paired on identical payloads Opus writes 2.83x Luna's characters on rings while
+naming 1.00x the payload's signals, same band in 23 of 24 pairs. The intuitive objection —
+"GPT writes a fifth of the words and this is fraud detection" — does not survive pairing.
+
+**What decided it: `_context` grounding.** Every specialist prompt requires signals to be
+validated against the paired `*_context` columns. GPT grounds **0.357** of the signals in
+its view against Claude's **0.642** pooled, and is lower on **4 of 4** agents against both
+Claude incumbents — deterministic, no judge involved, and invisible in the band, the latency
+and the cost. On synthetic it collapses to 0.150 against Opus's 0.517.
+
+**Plus coverage.** 4 of 8 agents swept; dealer, straw, employment and income never ran on
+GPT, and **APP-1006/1007/1008 — three of the five anti-false-positive fixtures — target
+exactly those three.** The study contains a demonstration of why that matters: GPT-5.6 Sol
+on identity escalated **both** anti-FP fixtures, dismissed a corroborated application, and
+banded 2/6 — at 4x Luna's price. Paying more did not buy calibration.
+
+**The hold is not free, and the page says so.** Moving the four swept agents to Luna
+projects **$0.0651/adjudication against $0.1247 — a 47.8% reduction** — and would drop the
+fan-out floor lower bound from 22.05 s to 8.09 s. Both are PROJECTIONS from measured
+per-agent tokens (`projected_cost_if_gpt_specialists`, labelled `PROJECTION OF A REJECTED
+COUNTERFACTUAL`); `python -m evals.bench --pipeline` is what would confirm either.
+
+**Luna is graded "as good" on 3 of 4 agents at n=6 and still not taken.** That is the honest
+shape of it: the per-agent evidence would support moving rings, bustout and identity today.
+It is declined because the grounding gap is real on all three, and because a partial
+migration would leave `income` — which has **no** quality evidence — as the binding
+fan-out agent.
+
+**What no model choice fixes, now a stronger claim than before.** APP-1014 rings (pinned
+LOW) and APP-1004 bustout (pinned POSSIBLE) are wrong on **all five models across both
+families, 0 of 5 correct each**, every one of them wrong the same way: alerts arising from
+one underlying behaviour treated as independent corroboration. That upgrades "no tier fixes
+it" to **"no model choice fixes it"** — it is a prompt defect, and it is the most important
+thing to raise with the customer before Friday. The 23 invented titles on bustout/rings
+*are* model-sensitive (GPT invents none), but the fix is still the prompt.
+
+### Changed
+
+- **`agents/models.py`** — `SPECIALIST_MODELS` unchanged in value and no longer unexamined:
+  new `CROSS_FAMILY_COMPARISON` (the decision, the rejected option's numbers, the disclosed
+  judge conflict quantified for both judges, and the price of holding),
+  `CROSS_FAMILY_SWEPT_AGENTS`, `KNOWN_FAILURES_NO_MODEL_CHOICE_FIXES`,
+  `RECORDED_USAGE_PER_CALL_GPT_ALTERNATIVE` and `projected_cost_if_gpt_specialists`. All
+  four swept agents' `TIER_RATIONALE` entries cite the study, its n, and where its evidence
+  runs out; all four unswept ones state that they were **not** swept and name the anti-FP
+  fixture that was therefore never run.
+- **`docs/model-selection.md`** — leads with the cross-family question, separates
+  "Claude-tier swept" from "GPT-swept" in the assignment table, and adds
+  **What the customer has to decide**: the two prompts with no character cap, the enum
+  conflict between her process guide (`POSSIBLE RISK`, four values) and her master prompt
+  file (`MEDIUM RISK`, three values), the calibration rule, and whether to fund one more
+  eval cycle.
+- **`tests/test_models.py`, `tests/test_pricing.py`** — 12 new guards, including one that
+  re-reads the study's shape from the artifact. That test exists because a draft of this
+  work claimed "130 analyses over 8 domains, judged by GPT-5.6 Sol, band 23/26 per model,
+  12.3 s end-to-end at $0.0508" — **none of which appears in any artifact on disk.** The
+  grounding margin, the contract counts, the per-agent figures and both judges'
+  self-preference numbers are now all re-derived from the 120 rows rather than trusted.
+
+---
+
 ## 2026-07-27 — 1:1 fidelity pass, real measurement, and a sub-minute adjudication
 
-The goal of this pass was to make the repo a **1:1 replacement** of Point Predictive's
+The goal of this pass was to make the repo a **1:1 replacement** of AnyCompany's
 production agents rather than a demo that resembles them, and to replace every asserted
 number with a measured one.
 
@@ -130,9 +216,10 @@ Per-agent cost came from hard-coded `NOMINAL_TOKENS`. All of it is deleted;
 
 ### Things learned the hard way (all verified, details in CLAUDE.md)
 
-- **`agentcore configure` and `agentcore launch` do not exist** in the current CLI. They
-  print root help and **exit 0** — a CI script calling them looks successful while
-  deploying nothing.
+- **`agentcore configure` and `agentcore launch` do not exist** in the current CLI. The npm
+  CLI rejects them and exits 1; the deprecated pip starter toolkit installs a *different*
+  binary of the same name on which they parse and no-op, so a CI script can look successful
+  while deploying nothing. Which binary is first on `PATH` decides.
 - **A Strands `Agent` cannot be invoked concurrently** (`ConcurrencyException`). Build a
   fresh one per invocation. `BedrockModel` also defaults to `max_pool_connections=10`,
   which throttles an eight-way fan-out.

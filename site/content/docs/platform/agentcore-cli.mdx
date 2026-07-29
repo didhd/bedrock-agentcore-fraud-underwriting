@@ -1,0 +1,287 @@
+---
+title: AgentCore CLI
+description: What @aws/agentcore 1.0.0-preview.22 supports — the two verbs that do not exist, which of the two colliding binaries silently no-ops, the real deploy order, and the rename rule that destroys resources.
+---
+
+*For the customer's engineer and whoever owns the deployment pipeline. Everything here was verified against the installed CLI, not read from a doc page.*
+
+Two commands that appear in older AgentCore instructions — `configure` and `launch` — do not
+exist in this CLI, and one of the two programs named `agentcore` on a typical machine accepts
+them anyway and does nothing. Verified against **`@aws/agentcore` 1.0.0-preview.22** with
+`bedrock-agentcore` 1.14.0, Node v22.22.0, npm 10.9.4, Python 3.12.9. Sources: `deploy/deploy.md`
+and `deploy/ci.sh`, both committed.
+
+## Deploy pipeline
+
+<Mermaid
+  title="The order that actually deploys this project"
+  chart={`
+flowchart LR
+  A["create"] --> B["add agent"]
+  B --> C["npm install<br/>in agentcore/cdk"]
+  C --> D["validate"]
+  D --> E["package"]
+  E --> F["deploy --dry-run"]
+  F --> G["deploy"]
+`}
+/>
+
+Step 3 is the one most likely to be skipped, and the only one whose omission fails inside a
+TypeScript build rather than in an AWS call. Step 6 is spelled `--dry-run`, not `--plan`.
+
+## Which binary is which
+
+Both programs answer to `agentcore`, and `PATH` order decides which one a CI job invoked. Only
+one is the real CLI, and only one is dangerous.
+
+| Behaviour on `agentcore configure` / `launch` | npm `@aws/agentcore` (real) | pip `bedrock-agentcore-starter-toolkit` (deprecated) | Verdict |
+|---|---|---|---|
+| Does the verb parse? | **No** — `error: unknown command 'configure'` | **Yes** | npm CLI |
+| Exit code | **1** | **0** | npm CLI: a non-zero code stops a `set -e` script |
+| AWS resources created | none, and it says so | **none, and it says nothing** | npm CLI |
+| Effect on a green CI run | job fails, correctly | **job passes having deployed nothing** | npm CLI |
+| Recommended action | keep | `pip uninstall -y bedrock-agentcore-starter-toolkit` | remove the pip package |
+
+<Callout type="error" title="A pipeline built on those verbs reports success while deploying zero infrastructure">
+Failure shape: `agentcore configure --entrypoint …` prints something resembling help,
+`agentcore launch` prints something similar, the shell reports **exit 0**, the job goes green,
+and nothing was created, updated or contacted. Discovery happens when someone tries to invoke a
+runtime that does not exist.
+
+`deploy/ci.sh` step 0 closes both halves before anything else runs. It greps every
+tracked-or-untracked-but-not-ignored file for the literal strings `agentcore configure` and
+`agentcore launch` and fails the build if either appears — with four documented exemptions, the
+files whose purpose is to warn about them. It then fails if
+`bedrock-agentcore-starter-toolkit` is installed at all, because with that package on `PATH`
+every later `agentcore` call in the script is ambiguous.
+
+That guard exists because **this repository shipped with the failure**: the earlier
+`deploy/deploy.md` instructed two commands that do not exist. `requirements.txt` now lists the
+pip package under a heading reading DELIBERATELY ABSENT rather than simply omitting it.
+</Callout>
+
+## Real verb set
+
+```
+create   add      remove   validate   package   deploy
+dev      invoke   logs     traces     status
+fetch    exec     import   run
+```
+
+<Steps>
+
+<Step>
+**Install the toolchain, and remove the collider.**
+
+```bash
+npm install -g @aws/agentcore      # requires Node >= 20
+agentcore --version                # expect 1.0.0-preview.22
+pip uninstall -y bedrock-agentcore-starter-toolkit
+```
+
+Telemetry ships **on by default**, which matters for a regulated customer. Opt out per machine
+with `agentcore config telemetry.enabled false`, then confirm with `agentcore telemetry status`.
+</Step>
+
+<Step>
+**Install the CDK app's dependencies. Not optional.**
+
+```bash
+(cd agentcore/cdk && npm install)
+```
+
+Skip it and `agentcore deploy` dies inside the TypeScript build:
+
+```console
+tsconfig.json(5,25): error TS5107: Option 'moduleResolution=node10' is deprecated
+and will stop functioning in TypeScript 7.0.
+```
+
+Cause: `deploy` runs `npm run build` (bare `tsc`) inside `agentcore/cdk/`, and the vended
+project pins `typescript: ~5.9.3` as a devDependency. With no local install, `tsc` resolves to
+whatever is global and the vended `tsconfig.json` fails under a newer compiler. Install the
+pinned compiler; do **not** edit the vended tsconfig.
+</Step>
+
+<Step>
+**Validate.**
+
+```bash
+agentcore validate --json --directory "$REPO_ROOT"
+```
+
+Non-interactive and machine-readable. Exits 1 with `{"success":false,…}` on any Zod failure.
+Creates nothing, needs no credentials.
+</Step>
+
+<Step>
+**Package, then dry-run.**
+
+```bash
+agentcore package                        # writes agentcore/<runtime>.zip
+agentcore deploy --dry-run --target default --json
+```
+
+`--dry-run`, **not** `--plan`. AWS's docs' `--plan` flag does not exist here:
+`error: unknown option '--plan'`. Internally the CLI maps `--dry-run` onto a `plan` option,
+which is probably the origin of the docs bug. A dry run returns after the deployability check
+and before `deployStack`, so it synthesizes CloudFormation and touches nothing.
+</Step>
+
+<Step>
+**Deploy.**
+
+```bash
+agentcore deploy --target default --yes
+```
+</Step>
+
+</Steps>
+
+## Project layout, and what the config demands of the code
+
+`agentcore/` here is hand-authored, declares two runtimes and one memory, and
+`agentcore validate` passes on it.
+
+<Files>
+  <Folder name="agentcore" defaultOpen>
+    <File name="agentcore.json" />
+    <File name="aws-targets.json" />
+    <Folder name=".cli">
+      <File name="deployed-state.json" />
+    </Folder>
+    <Folder name="cdk">
+      <File name="package.json" />
+      <Folder name="bin"><File name="cdk.ts" /></Folder>
+      <Folder name="lib"><File name="cdk-stack.ts" /></Folder>
+      <Folder name="test"><File name="cdk.test.ts" /></Folder>
+    </Folder>
+  </Folder>
+</Files>
+
+| Declared in `agentcore.json` | What `app/` must supply |
+|---|---|
+| `codeLocation: app/underwriter/`, `entrypoint: main.py` | `app/underwriter/main.py` **and** `app/underwriter/pyproject.toml`. Without the second, `agentcore package` fails with `Required project file not found: …/pyproject.toml` — the config alone is not enough. |
+| Same for `app/francis/` | Same two files. |
+| `runtimeVersion: PYTHON_3_12` | `requires-python = ">=3.12"` in each `pyproject.toml`. |
+| `instrumentation.enableOtel: true` | `aws-opentelemetry-distro>=0.18.0` in **each** `pyproject.toml`, not only in `requirements.txt` — packaging builds each runtime's closure from its own pyproject. |
+| `protocol: HTTP` | An `@app.entrypoint` whose second parameter is literally named `context`. See [Runtime entrypoint contract](/docs/platform/agentcore-runtime). |
+| `memories[].name: francisMemory` | Deploy injects the id as **`MEMORY_FRANCISMEMORY_ID`** — the name upper-cased. The session manager must read exactly that name and no-op when unset, so `agentcore dev` still works. |
+
+### Naming constraints the schema enforces
+
+All four are checked before any AWS call, and they contradict each other.
+
+| Thing | Pattern | Note |
+|---|---|---|
+| Project name | `^[A-Za-z][A-Za-z0-9]{0,22}$` | Alphanumeric only, max 23. No hyphens, no underscores. `ppFraud` is 7. |
+| Runtime / memory name | `^[a-zA-Z][a-zA-Z0-9_]{0,47}$` | Underscores allowed, **hyphens are not**. `under-writer` fails. |
+| Deployed runtime name | `<project>_<runtime>`, ≤ 48 chars | `ppFraud_underwriter` is 19. |
+| Deployment target name | `^[a-zA-Z][a-zA-Z0-9-]*$`, max 64 | Exactly the inverse: hyphens allowed, **underscores are not**. `pp-prod` passes, `pp_prod` fails. |
+
+### Validation is strict at the root and lax one level down
+
+Root spec is Zod `.strict()`, so one unknown top-level key fails outright and names itself:
+
+```console
+$ agentcore validate --json
+{"success":false,"error":"…/agentcore/agentcore.json:\n  - root: unknown keys (remove): \"canaryKey\""}
+```
+
+Nested objects are **not** all strict — an unknown key inside a `runtimes[]` entry is silently
+accepted. Do not rely on validate to catch a typo inside a runtime block.
+
+Two documentation sources disagree with the schema and were checked against it. The vended
+`agentcore/.llm-context/agentcore.ts` declares only 15 of the root's 20 keys, and the generated
+`AGENTS.md` advertises `onlineInsightsConfigs` and `runtimeEndpoints` as root arrays, which the
+strict root **rejects** — declare either and validate fails. Authority is the compiled Zod schema
+at `$(npm root -g)/@aws/agentcore/dist/schema/schemas/agentcore-project.js`, nothing else.
+
+## Where region and account come from
+
+`agentcore create` writes `aws-targets.json` as `[]`, and this repo ships it that way. That file
+is the **only** place region and account are configured.
+
+```json
+[
+  {
+    "name": "default",
+    "description": "AnyCompany fraud underwriting - primary",
+    "account": "123456789012",
+    "region": "us-east-1"
+  }
+]
+```
+
+- `account` must be exactly **12 digits**; validate rejects anything else.
+- `region` is a closed enum of 20 AgentCore regions. Memory is region-restricted *beyond* that
+  enum, so a valid target does not guarantee `francisMemory` can be created there.
+- **`agentcore deploy` has no `--region`, no `--profile`, no `--agent`.** Credentials come from
+  the ambient chain; region and account come from this file only.
+
+Export `AWS_REGION` explicitly, and never rely on `AWS_DEFAULT_REGION`. Python SDK region
+fallback is `os.getenv("AWS_REGION") or boto3.Session().region_name or "us-west-2"`
+(`bedrock_agentcore/identity/auth.py:339`); it **ignores `AWS_DEFAULT_REGION`** and lands in
+us-west-2. `MemoryClient` and `GatewayClient` do the same. A cross-region surprise here presents
+as an authorization failure rather than as a configuration failure, which is what makes it
+expensive to diagnose.
+
+```bash
+export AWS_REGION=us-east-1
+export AWS_PROFILE=your-bedrock-profile
+```
+
+## Committed state that looks disposable and is not
+
+`agentcore/.cli/deployed-state.json` is a build artifact that must be committed.
+`agentcore/.gitignore` ignores `.cli/*` and then negates this one path; do not tidy up that
+negation.
+
+Reason: credential providers are created **before** CloudFormation runs, out of band, in an
+identity pre-step. Their ARNs are recorded **only** in that file, and the CDK app reads them
+back on the next synth. Losing the file orphans the providers and breaks the next deploy.
+
+## Renaming a resource destroys it [#renaming-a-resource-destroys-it]
+
+**A resource's `name` is its CloudFormation logical id.** Renaming a runtime or a memory in
+`agentcore.json` **destroys and recreates** it — new ARN, new endpoint, and for a memory,
+contents gone. Changing any *other* field updates in place.
+
+<Callout type="warn" title="This is a data-loss event, not an untidy diff">
+`deploy/iam_policy.json`'s `deployingPrincipal` carries `bedrock-agentcore:Delete*` actions
+specifically because a rename produces Delete+Create rather than Update. If those actions look
+over-broad in a review, that is the reason they are there.
+</Callout>
+
+## Other verified behaviours
+
+| Behaviour | Detail |
+|---|---|
+| **Deploy exit code 2 is a pass** | 0 = deployed, **2 = deployed with post-deploy warnings**, 1 = failed with a log path under `agentcore/.cli/logs/deploy/`. A CI script testing `-ne 0` fails a successful deploy; `deploy/ci.sh` treats 2 as success. |
+| `agentcore import` is not local | It publishes CDK assets to S3 **before** it can fail. Do not run it to see what it would do. This repo's runbook lists it under what it deliberately does not use. |
+| Container builds are ARM64-only | Both runtimes use `"build": "CodeZip"` to sidestep needing an ARM64 Docker builder; the packaged closure is already `aarch64` (`cpython-312-aarch64-linux-gnu.so` is visible inside the zip). Switching to `Container` requires an ARM64 build path, and CodeBuild in a VPC then needs an explicit `vpcId`. |
+| `runtimeVersion` defaults to `PYTHON_3_14` | Not to your interpreter. `agentcore.json` pins `PYTHON_3_12` to match the local interpreter and the tested venv. Regenerate the config and you must re-pin, or the deployed interpreter diverges from the one the 1,238 collected tests ran on. |
+| `agentcore package` breaks bare pytest | `agentcore/<runtime>/staging/` is the full dependency closure, and several third-party wheels there ship test modules with colliding basenames (two copies of `annotated_types/test_cases.py`). Bare `pytest` aborts during collection with `import file mismatch` before reaching a single project test, so `deploy/ci.sh` passes `--ignore=agentcore`. Zips and staging trees are gitignored. |
+| `agentcore dev --runtime` is required in scripts | With more than one runtime, `agentcore dev --logs` alone stops with `Error: Multiple runtimes found. Use --runtime to specify which one.` Bare `agentcore dev` opens an interactive picker, so the omission only bites in automation. Default port is 8080 offset by runtime index, so `francis` (index 1) lands on 8081 unless you pass `-p`. |
+| There is no `agentcore destroy` | Teardown is: empty the config, then deploy the emptiness — `agentcore remove all --dry-run`, `agentcore remove all --yes`, then `agentcore deploy --target default --yes`. `--yes` is **required** on that last call: deploy detects "no resources defined" as a teardown and refuses without it. |
+
+## Still unknown
+
+**No deploy of this project has been run against a live AWS account.** `agentcore validate`
+passes and `agentcore package` produces both zips, but `agentcore/aws-targets.json` ships as an
+empty list, so `deploy/ci.sh` skips its dry-run step and no CloudFormation stack exists.
+Everything above the dry-run line is verified by execution; `deploy` itself is verified by
+reading the CLI's own source and compiled schema.
+
+<Cards>
+  <Card
+    title="Deployment"
+    href="/docs/platform/deployment"
+    description="IAM for both principals, the one-time CloudWatch Transaction Search setup, and the five-step CI gate."
+  />
+  <Card
+    title="Runtime entrypoint contract"
+    href="/docs/platform/agentcore-runtime"
+    description="The literally-named context parameter, async-generator SSE, and errors that arrive after HTTP 200."
+  />
+</Cards>

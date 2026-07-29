@@ -57,9 +57,11 @@ drives risk**.
 
 ## See it run
 
-![Live adjudication on Amazon Bedrock](media/demo.gif)
+[![Live adjudication on Amazon Bedrock — click to play](media/demo-poster.png)](media/demo.mp4)
 
-Full recording: [`media/demo.mp4`](media/demo.mp4) — a real run against live Bedrock, not a mockup.
+**▶ [media/demo.mp4](media/demo.mp4)** — a real run against live Bedrock, recorded at
+1920x1080. Not a mockup and not a reconstruction: the latencies, token counts and costs
+on screen are the ones that run produced.
 
 ## Measured, live on Amazon Bedrock
 
@@ -240,9 +242,12 @@ agentcore validate --json
 agentcore deploy --dry-run
 ```
 
-`agentcore configure` and `agentcore launch` do **not** exist in the current CLI —
-they print help and exit 0, so any script calling them silently deploys nothing.
-`deploy/ci.sh` greps for them and fails the build. Full details, including the
+`agentcore configure` and `agentcore launch` do **not** exist in the current CLI.
+The npm CLI rejects them and exits 1, but the deprecated pip
+`bedrock-agentcore-starter-toolkit` installs a *different* binary of the same name
+on which they parse and then no-op — so a script calling them can deploy nothing
+and still report success, depending on which binary is first on `PATH`.
+`deploy/ci.sh` greps for both strings and fails if the pip toolkit is installed. Full details, including the
 one-time CloudWatch Transaction Search setup for GenAI observability, are in
 `deploy/deploy.md`.
 

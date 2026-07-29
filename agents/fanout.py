@@ -44,23 +44,73 @@ from it. The old code scanned for a line starting ``RISK:`` and defaulted to
 a clean verdict. Band extraction, where a UI genuinely needs one, is a separate
 concern with a separate cost; it is not a string split with a silent default.
 
+WHY THERE ARE TWO TRANSPORTS, AND WHY THE MODEL ID PICKS ONE. Six of the nine
+agents' model ids address Claude on Bedrock Converse; ``openai.gpt-5.*`` ids are
+NOT on Converse at all (``converse`` rejects them with ``ValidationException: The
+provided model identifier is invalid``) and are only reachable through the
+``bedrock-mantle`` Responses endpoint. So a specialist assignment alone decides the
+transport, exactly as it already does for the synthesizer:
+``agents.mantle.is_mantle_model(model_id)`` routes to
+:func:`_invoke_specialist_mantle`, everything else to Strands. There is no flag and
+no second switch - ``agents.models.SPECIALIST_MODELS`` is the only place the
+decision is expressed, and :func:`transport_for` is the one function that reads it.
+
+This is the same pattern ``agents.synthesize._invoke_master_mantle`` uses, including
+its ``_MantleResult`` adapter: the mantle response is wrapped in an object carrying
+the surface the Converse path already returns (``message``, ``usage``,
+``latency_ms``, ``stop_reason``) so ``_usage_from`` / ``_latency_from`` /
+``_analysis_text`` and the whole result-assembly path are SHARED between the two
+families rather than duplicated per family.
+
+Three things the mantle path cannot honestly report, and does not:
+
+* ``stop_reason``. ``mantle.complete`` returns ``{text, usage, latency_ms, ...}``
+  and does not surface the Responses ``status``, so there is no stop reason to
+  read. It is ``None`` (unknown), never a plausible ``"end_turn"``.
+* a Converse cache verdict. ``cached_system_prompt`` / ``cache_prefix_report`` are
+  Converse concepts - a ``cachePoint`` block and a per-model minimum cacheable
+  prefix. The Responses API uses explicit breakpoints instead and GPT-5.6 also
+  caches implicitly, and this path sends no breakpoint either way. So a mantle
+  specialist carries :func:`_mantle_cache_report`, whose ``will_cache`` is ``None``
+  (unknown by construction) and which records the MEASURED
+  ``cacheRead``/``cacheWrite`` tokens once the call has returned. Reporting
+  ``will_cache: False`` with a "cache points are dropped" reason - which is what
+  ``cache_prefix_report`` says about a non-Claude id - would be a Converse verdict
+  about a request that never contained a cachePoint.
+* a free call. Cost comes from ``agents.mantle.cost_usd``, which prices
+  cache-WRITE tokens at 1.25x input; ``agents.pricing`` delegates GPT ids to the
+  same function, so the two agree, and going straight to mantle keeps one rate
+  table per family. An unpriced GPT id raises there, which surfaces here as a
+  recorded specialist error rather than as a call reported at $0.
+
 WHAT DEGRADES. ``asyncio.gather(..., return_exceptions=True)`` plus a per-agent
 try/except means one failed dimension does not lose the other seven: the failure
 is recorded on the result as ``error`` and the adjudication proceeds with a
-documented gap. Seven of eight still adjudicates.
+documented gap. Seven of eight still adjudicates. That holds for both transports:
+``mantle.complete`` is synchronous, so it is awaited through
+``asyncio.to_thread`` - which keeps the single ``asyncio.gather`` and its semaphore
+intact rather than serialising the fan-out behind a blocking call - and a
+``MantleUnavailable`` from it is recorded exactly like a Bedrock exception.
 
 Every number on a :class:`SpecialistResult` is measured. ``usage`` is Bedrock's
 own ``accumulated_usage`` (cache keys read with ``.get()``, because they are
 optional in the TypedDict), ``latency_ms`` is
 ``accumulated_metrics['latencyMs']``, ``wall_ms`` is this process's clock, and
-``cost_usd`` comes from ``agents.pricing`` applied to those tokens. In MOCK_MODE
-``usage`` is ``None`` and ``cost_usd`` is ``None`` - never a plausible-looking
-guess.
+``cost_usd`` comes from ``agents.pricing`` applied to those tokens. On the mantle
+path the same three fields carry the same meanings from ``mantle.complete``'s own
+return value: its ``usage`` is already normalised to the Converse convention
+(``inputTokens`` EXCLUDES cached tokens, so a cached token is billed once at the
+cache rate) and its ``latency_ms`` is the endpoint round trip, which is the closest
+available analogue of Converse's model latency and is narrower than ``wall_ms`` for
+the same reason. In MOCK_MODE ``usage`` is ``None`` and ``cost_usd`` is ``None`` -
+never a plausible-looking guess. ``source`` says which transport produced the row
+(``bedrock`` / ``bedrock-mantle`` / ``mock``) so a report can separate them.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 import weakref
@@ -76,6 +126,7 @@ from agents.models import (
     build_retry_strategy,
     cache_prefix_report,
     cached_system_prompt,
+    estimate_prompt_tokens,
     model_for,
     tier_label,
 )
@@ -86,6 +137,9 @@ __all__ = [
     "ANALYSIS_TITLES",
     "DEFAULT_MAX_CONCURRENCY",
     "EXECUTOR_MAX_WORKERS",
+    "SOURCE_BEDROCK",
+    "SOURCE_MANTLE",
+    "SOURCE_MOCK",
     "FanOutError",
     "MOCK_MODE",
     "SpecialistResult",
@@ -93,8 +147,11 @@ __all__ = [
     "fan_out_streaming",
     "mock_analysis",
     "render_domain_input",
+    "transport_for",
     "widen_default_executor",
 ]
+
+log = logging.getLogger("pp.fanout")
 
 #: Offline by default: nothing in this repo may require AWS to run its tests.
 MOCK_MODE: Final[bool] = os.environ.get("MOCK_MODE", "1") == "1"
@@ -129,6 +186,16 @@ EXECUTOR_MAX_WORKERS: Final[int] = int(os.environ.get("FANOUT_EXECUTOR_WORKERS",
 #: rewrite of any instruction: the prompts already say what to do, and this only
 #: names what follows.
 _INPUT_HEADER: Final[str] = "APPLICATION DATA:"
+
+#: ``SpecialistResult.source`` values. Three, not two: a report that pools a Converse
+#: call and a Responses call under one "bedrock" label cannot tell which family
+#: produced a row, and the two differ in what they can even measure (no
+#: ``stop_reason`` and no Converse cache verdict on the mantle path). ``evals`` and the
+#: UI already carry this field through to their JSON, so distinguishing it here is
+#: enough for a report to separate the sets.
+SOURCE_BEDROCK: Final[str] = "bedrock"
+SOURCE_MANTLE: Final[str] = "bedrock-mantle"
+SOURCE_MOCK: Final[str] = "mock"
 
 
 class FanOutError(RuntimeError):
@@ -367,6 +434,36 @@ def _latency_from(result: Any) -> float | None:
     return None
 
 
+def _specialist_cost(model_id: str, result: Any, usage: dict[str, int] | None) -> float | None:
+    """Cost of one specialist call, from whichever family answered.
+
+    ``agents.pricing`` now DELEGATES a GPT id to ``agents.mantle`` (``pricing._is_mantle``
+    -> ``_mantle_rates``), so ``cost_usd_or_none`` and ``mantle.cost_usd`` agree to the
+    cent on a mantle usage dict - checked by
+    ``test_mantle_cost_agrees_with_the_pricing_module``. That makes the choice here a
+    question of which one is CORRECT to call rather than which number is right:
+
+    * ``mantle.complete`` already priced the call and put it in the response, so reading
+      that back is one computation per call instead of two that could drift.
+    * ``pricing.cost_usd_or_none`` only swallows ``MissingUsageError``. For an unpriced
+      GPT id it would propagate ``MantleUnavailable`` from ``mantle.rates_for`` - correct
+      behaviour (refusing to guess a rate) but it would turn a priced-analysis question
+      into a lost fraud dimension. The adapter's value is already computed before we get
+      here, so that failure surfaces at the call, not at costing time.
+
+    Falls back to recomputing from ``usage`` when the adapter carried no cost, so a
+    ``None`` here always means "usage unknown" and never "we forgot to price it".
+    """
+    direct = getattr(result, "cost_usd", None)
+    if isinstance(direct, (int, float)):
+        return float(direct)
+    if transport_for(model_id) == SOURCE_MANTLE:
+        from agents import mantle  # noqa: PLC0415
+
+        return mantle.cost_usd(model_id, usage)
+    return cost_usd_or_none(model_id, usage)
+
+
 def _analysis_text(result: Any) -> str:
     """Concatenate the text blocks of the agent's final message."""
     message = getattr(result, "message", None) or {}
@@ -376,6 +473,212 @@ def _analysis_text(result: Any) -> str:
         if isinstance(block, dict) and isinstance(block.get("text"), str)
     ]
     return "\n".join(parts).strip() if parts else str(result).strip()
+
+
+def _max_output_tokens(model_id: str) -> int:
+    """Output cap for one specialist call, resolved identically for both transports.
+
+    Factored out of ``_build_agent`` so the mantle path cannot drift from the Converse
+    one. A GPT id is not in ``TIER_OF``, so ``tier_label`` returns ``"custom"`` and the
+    cap is ``MAX_TOKENS_BY_TIER['custom']`` - the same 4096 the standalone probe used.
+    """
+    return MAX_TOKENS_BY_TIER.get(tier_label(model_id), 2048)
+
+
+def transport_for(model_id: str) -> str:
+    """Which transport ``model_id`` must use: :data:`SOURCE_MANTLE` or :data:`SOURCE_BEDROCK`.
+
+    The single decision point. ``agents.mantle.is_mantle_model`` owns the predicate (it
+    matches ``openai.gpt-5*`` and deliberately NOT ``openai.gpt-oss-*``, which really is
+    on Converse), and this function exists so the routing is one importable thing a test
+    and a report can both read rather than an ``if`` buried in the call path.
+    """
+    from agents import mantle  # noqa: PLC0415 - keeps the openai SDK off the import path
+
+    return SOURCE_MANTLE if mantle.is_mantle_model(model_id) else SOURCE_BEDROCK
+
+
+def _mantle_cache_report(
+    model_id: str, prompt: str, usage: Mapping[str, int] | None = None
+) -> dict[str, Any]:
+    """Honest prompt-cache record for a mantle specialist. ``will_cache`` is None.
+
+    ``agents.models.cache_prefix_report`` answers a CONVERSE question - "does the
+    ``cachePoint`` block in this system prompt clear the model's minimum cacheable
+    prefix?" - and for a non-Claude id it answers ``will_cache: False, reason: 'cache
+    points are dropped'``. Reporting that for a GPT-5.6 call would be wrong twice over:
+    this path sends no ``cachePoint`` at all (the Responses API takes explicit
+    breakpoints instead), and GPT-5.6 additionally caches IMPLICITLY, so "False" would
+    contradict the ``cacheWriteInputTokens`` the endpoint really reports - a measured
+    Luna call returned 6740 of them.
+
+    So ``will_cache`` is ``None`` (unknown, and unknowable before the call) rather than a
+    verdict, ``cache_applied`` states plainly that no breakpoint was sent, and once the
+    call has returned the MEASURED cache token counts are recorded here from ``usage``.
+    They are the only trustworthy statement available about caching on this path.
+    """
+    report: dict[str, Any] = {
+        "model_id": model_id,
+        "transport": SOURCE_MANTLE,
+        "prompt_tokens": estimate_prompt_tokens(prompt),
+        "prompt_tokens_estimated": True,
+        # Both None because both are Converse concepts that do not apply, not because
+        # they are zero: there is no cachePoint minimum for a Responses call.
+        "min_cacheable_tokens": None,
+        "will_cache": None,
+        "cache_applied": False,
+        "cache_mechanism": "responses-api-explicit-breakpoint",
+        "reason": (
+            "prompt caching is NOT applied on this call. cachePoint blocks and the "
+            "minimum cacheable prefix are Bedrock Converse concepts; GPT-5.6 on the "
+            "bedrock-mantle Responses endpoint uses explicit cache breakpoints, and this "
+            "path sends none. GPT-5.6 also caches implicitly, so any cacheRead/"
+            "cacheWrite tokens below are the endpoint's own measurement and are priced "
+            "by agents.mantle.cost_usd (cache WRITE at 1.25x input)."
+        ),
+    }
+    if usage is not None:
+        report["measured_cache_read_tokens"] = int(usage.get("cacheReadInputTokens", 0) or 0)
+        report["measured_cache_write_tokens"] = int(usage.get("cacheWriteInputTokens", 0) or 0)
+    return report
+
+
+def _cache_report(model_id: str, domain: str) -> dict[str, Any]:
+    """Pre-flight prompt-cache report for one specialist, per transport."""
+    prompt = SPECIALIST_PROMPTS[domain]
+    if transport_for(model_id) == SOURCE_MANTLE:
+        return _mantle_cache_report(model_id, prompt)
+    return cache_prefix_report(model_id, prompt)
+
+
+@dataclass(slots=True)
+class _MantleMetricsView:
+    """Strands ``AgentResult.metrics`` shape, so the extractors need no second branch."""
+
+    accumulated_usage: dict[str, int] | None
+    accumulated_metrics: dict[str, float]
+
+
+class _MantleSpecialistResult:
+    """Adapter giving a mantle response the shape the Converse path already returns.
+
+    Same device as ``agents.synthesize._MantleResult``, and for the same reason: the
+    result-assembly code below (``_analysis_text``, ``_usage_from``, ``_latency_from``,
+    the ``SpecialistResult`` construction) is then SHARED by both families instead of
+    written twice. Here the adapter mimics ``AgentResult`` rather than a structured-output
+    result, because a specialist returns prose and is not parsed - so it exposes
+    ``message`` in Converse's content-block form and ``metrics`` in Strands'
+    ``accumulated_usage`` / ``accumulated_metrics`` form, and the extractors need no
+    mantle-specific branch at all.
+
+    ``stop_reason`` is ``None`` on purpose. ``mantle.complete`` does not surface the
+    Responses ``status``, so there is no stop reason to report and ``"end_turn"`` would be
+    a guess about whether the answer is complete - the one thing a truncation check
+    actually needs to be true.
+    """
+
+    __slots__ = ("message", "metrics", "stop_reason", "usage", "latency_ms", "cost_usd", "region")
+
+    def __init__(self, response: Mapping[str, Any]) -> None:
+        text = response.get("text") or ""
+        self.message = {"role": "assistant", "content": [{"text": text}]}
+        self.usage = response.get("usage")
+        self.latency_ms = response.get("latency_ms")
+        # Already computed by mantle.complete with agents.mantle.cost_usd - the same
+        # function agents.pricing delegates GPT ids to (verified equal), so taking it
+        # here is one computation per call rather than two that could disagree. Note
+        # pricing.cost_usd_or_none would RAISE MantleUnavailable for an unpriced GPT id
+        # rather than return None, because it only swallows MissingUsageError.
+        self.cost_usd = response.get("cost_usd")
+        self.region = response.get("region")
+        self.stop_reason = None
+        self.metrics = _MantleMetricsView(
+            accumulated_usage=dict(self.usage) if self.usage else None,
+            accumulated_metrics=(
+                {} if self.latency_ms is None else {"latencyMs": float(self.latency_ms)}
+            ),
+        )
+
+
+async def _invoke_specialist_mantle(domain: str, model_id: str, domain_input: str) -> Any:
+    """One specialist invocation against a GPT-5.x model on the bedrock-mantle endpoint.
+
+    ``mantle.complete`` is SYNCHRONOUS (the OpenAI SDK's ``responses.create`` blocks), so
+    it is awaited through ``asyncio.to_thread``. That is load-bearing, not tidiness:
+    calling it directly would block the event loop for the whole call and turn the
+    ``asyncio.gather`` below into a serial loop - eight specialists at ~4s each would take
+    ~32s instead of ~4s, and the semaphore would never queue anything because nothing
+    else could run. ``widen_default_executor`` sizes the pool those threads come from.
+
+    The Responses API takes ONE input string where Converse takes a system prompt plus a
+    user turn, so the customer's verbatim prompt and the same ``_INPUT_HEADER`` block the
+    Converse path sends are joined - identical content, identical order, one field. (The
+    standalone probe that produced ``/tmp/bench/setcmp.json`` used a different header
+    line, so this path's prompt is not byte-identical to the one those latency figures
+    were measured on.) No tools are passed, because there is no tool to pass: the same
+    SIGBOUND-01 rule applies and the Responses call here carries no tool spec at all.
+    """
+    from agents import mantle  # noqa: PLC0415
+
+    # PREFERRED PATH: the native Strands Responses provider, when the installed
+    # strands has it (>=1.35; absent in 1.26.x). It is strictly better here, and not
+    # for tidiness:
+    #   * the prompt is a real ``system_prompt`` again, so the GPT specialist receives
+    #     the customer's verbatim text in the same position the Claude ones do rather
+    #     than concatenated into a single input string;
+    #   * usage, hooks, retry strategy and streaming come from the same Strands
+    #     machinery the other seven agents use, so one code path measures all eight;
+    #   * ``invoke_async`` is genuinely async, so no ``to_thread`` hop is needed.
+    # It falls back to ``mantle.complete`` rather than failing, because the fallback is
+    # measured-good and an SDK floor is not a reason to lose a fraud dimension.
+    if mantle.responses_provider_available():
+        try:
+            return await _invoke_specialist_responses_provider(domain, model_id, domain_input)
+        except mantle.MantleUnavailable as exc:
+            log.debug("native Responses provider unavailable (%s); using mantle.complete", exc)
+
+    response = await asyncio.to_thread(
+        mantle.complete,
+        model_id,
+        f"{SPECIALIST_PROMPTS[domain]}\n\n{_INPUT_HEADER}\n{domain_input}",
+        max_output_tokens=_max_output_tokens(model_id),
+    )
+    return _MantleSpecialistResult(response)
+
+
+async def _invoke_specialist_responses_provider(
+    domain: str, model_id: str, domain_input: str
+) -> Any:
+    """One GPT-5.x specialist as an ordinary ``strands.Agent``.
+
+    Same construction as :func:`_build_agent` minus the two Converse-only pieces: no
+    ``cached_system_prompt`` (GPT-5.6 uses explicit Responses cache breakpoints, and a
+    ``cachePoint`` block would be meaningless here) and no ``build_bedrock_model``.
+
+    One measured caveat, recorded rather than papered over:
+    ``result.metrics.accumulated_metrics["latencyMs"]`` comes back as **0** on this
+    provider where Converse reports a real server-side figure. ``wall_ms`` is measured by
+    the caller either way, so the benchmark is unaffected, but ``latency_ms`` must be
+    treated as unavailable rather than as zero.
+    """
+    from strands import Agent  # noqa: PLC0415
+    from strands.agent import NullConversationManager  # noqa: PLC0415
+
+    from agents import mantle  # noqa: PLC0415
+
+    agent = Agent(
+        model=mantle.build_responses_model(
+            model_id, max_tokens=_max_output_tokens(model_id)
+        ),
+        system_prompt=SPECIALIST_PROMPTS[domain],
+        tools=[],
+        callback_handler=None,
+        conversation_manager=NullConversationManager(),
+        retry_strategy=build_retry_strategy(),
+        name=AGENT_NAMES[domain],
+        agent_id=AGENT_NAMES[domain],
+    )
+    return await agent.invoke_async(f"{_INPUT_HEADER}\n{domain_input}")
 
 
 def _build_agent(domain: str, model_id: str) -> Any:
@@ -396,9 +699,7 @@ def _build_agent(domain: str, model_id: str) -> Any:
     from strands.agent import NullConversationManager
 
     return Agent(
-        model=build_bedrock_model(
-            model_id, max_tokens=MAX_TOKENS_BY_TIER.get(tier_label(model_id), 2048)
-        ),
+        model=build_bedrock_model(model_id, max_tokens=_max_output_tokens(model_id)),
         system_prompt=cached_system_prompt(SPECIALIST_PROMPTS[domain]),
         tools=[],
         callback_handler=None,
@@ -419,12 +720,17 @@ async def _run_specialist(
     """Run one specialist, converting any failure into a recorded result.
 
     Never raises: the caller needs seven-of-eight to still adjudicate, so a
-    failure here is data (``error`` set, ``usage`` None), not control flow.
+    failure here is data (``error`` set, ``usage`` None), not control flow. That
+    contract is transport-independent - a ``MantleUnavailable`` (SDK missing, no
+    bearer token, no ``bedrock-mantle:CreateInference``, an unpriced GPT id) is
+    recorded here exactly like a Bedrock ``ThrottlingException``, so a GPT
+    assignment cannot abort the gather that the other seven dimensions are in.
     """
     model_id = model_for(domain)
     tier = tier_label(model_id)
     title = ANALYSIS_TITLES[domain]
-    cache_report = cache_prefix_report(model_id, SPECIALIST_PROMPTS[domain])
+    transport = SOURCE_MOCK if mock else transport_for(model_id)
+    cache_report = _cache_report(model_id, domain)
     started = time.perf_counter()
 
     if mock:
@@ -441,15 +747,22 @@ async def _run_specialist(
                 cost_usd=None,
                 stop_reason=None,
                 title=title,
-                source="mock",
+                source=SOURCE_MOCK,
                 prompt_cache=cache_report,
             )
 
     try:
         async with semaphore:
-            agent = _build_agent(domain, model_id)
-            result = await agent.invoke_async(f"{_INPUT_HEADER}\n{domain_input}")
+            if transport == SOURCE_MANTLE:
+                result = await _invoke_specialist_mantle(domain, model_id, domain_input)
+            else:
+                agent = _build_agent(domain, model_id)
+                result = await agent.invoke_async(f"{_INPUT_HEADER}\n{domain_input}")
         usage = _usage_from(result)
+        if transport == SOURCE_MANTLE:
+            # The measured cache token counts, once they exist. Still not a Converse
+            # verdict: will_cache stays None because no cachePoint was ever sent.
+            cache_report = _mantle_cache_report(model_id, SPECIALIST_PROMPTS[domain], usage)
         return SpecialistResult(
             domain=domain,
             agent_name=AGENT_NAMES[domain],
@@ -459,10 +772,10 @@ async def _run_specialist(
             wall_ms=(time.perf_counter() - started) * 1000.0,
             latency_ms=_latency_from(result),
             usage=usage,
-            cost_usd=cost_usd_or_none(model_id, usage),
+            cost_usd=_specialist_cost(model_id, result, usage),
             stop_reason=getattr(result, "stop_reason", None),
             title=title,
-            source="bedrock",
+            source=transport,
             prompt_cache=cache_report,
         )
     except asyncio.CancelledError:
@@ -481,7 +794,7 @@ async def _run_specialist(
             stop_reason=None,
             title=title,
             error=f"{type(exc).__name__}: {exc}",
-            source="bedrock",
+            source=transport,
             prompt_cache=cache_report,
         )
 
@@ -559,9 +872,26 @@ async def fan_out(
             wall_ms=0.0,
             error=f"{type(result).__name__}: {result}",
             title=ANALYSIS_TITLES[domain],
-            source="mock" if use_mock else "bedrock",
+            source=SOURCE_MOCK if use_mock else transport_for(model_for(domain)),
         )
     return out
+
+
+def _summary_source(completed: Mapping[str, SpecialistResult], use_mock: bool) -> str:
+    """One transport label for the whole fan-out, or ``mixed`` when there isn't one.
+
+    Kept exact rather than convenient: with the eight specialists on Claude this returns
+    ``"bedrock"`` and offline ``"mock"``, byte-identical to what the frame carried before
+    routing existed, so no downstream consumer changes. A GPT assignment on some but not
+    all specialists returns ``"mixed"`` instead of quietly labelling a Responses call as
+    Converse. The per-domain ``sources`` map beside it is always authoritative.
+    """
+    if use_mock:
+        return SOURCE_MOCK
+    labels = {result.source for result in completed.values()}
+    if len(labels) == 1:
+        return labels.pop()
+    return "mixed" if labels else SOURCE_BEDROCK
 
 
 async def fan_out_streaming(
@@ -641,5 +971,11 @@ async def fan_out_streaming(
         # None, not 0.0, when any dimension has no measured usage: a partial sum
         # presented as a total is the failure mode this whole module exists to fix.
         "agent_cost_usd": sum(costs) if costs and all(c is not None for c in costs) else None,
-        "source": "mock" if use_mock else "bedrock",
+        # A single label when every dimension used one transport (which is every
+        # existing configuration, so ``mock`` and ``bedrock`` are unchanged), and
+        # ``mixed`` when the assignment spans Converse and mantle - because there is no
+        # honest single answer then, and picking either would misattribute the other's
+        # rows. ``sources`` keeps the per-domain truth either way.
+        "source": _summary_source(completed, use_mock),
+        "sources": {domain: result.source for domain, result in completed.items()},
     }
