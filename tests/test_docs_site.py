@@ -305,19 +305,27 @@ def test_per_cell_grounding_in_tables_matches_the_artifact_exactly() -> None:
     cells from the artifact's ``0.3575`` to ``0.358``; a reader checking that
     against the JSON cannot tell whether the page rounded or the study moved.
 
-    Scope is deliberately narrow -- **table cells only**. Two different grounding
-    quantities appear on this site and only one of them is a per-cell median:
+    Scope is deliberately narrow -- **table cells only** -- and three *different*
+    grounding quantities are legitimate, which is what makes this guard fiddly:
 
-    * per-cell medians, e.g. ``0.3575``, from ``per_set_verdict[].candidates[]``.
-      These are what comparison tables show, and they must be verbatim.
-    * pooled per-analysis means, ``0.642`` (Claude, n=48) and ``0.357`` (GPT,
-      n=72), computed across ``per_analysis[].grounding.grounded_fraction``.
-      ``0.357`` is a legitimate 3-decimal rounding of ``0.3572`` and is NOT a
-      truncation of the per-cell ``0.3575``, even though it looks like one.
+    1. per-cell medians, e.g. ``0.3575``, from ``per_set_verdict[].candidates[]``.
+       Verdict tables show these and they must be verbatim.
+    2. pooled per-analysis means, ``0.642`` (Claude, n=48) and ``0.357`` (GPT,
+       n=72), over ``per_analysis[].grounding.grounded_fraction``.
+    3. per-(agent, model) means over the same rows, e.g. ``0.214`` for
+       ``bustout``/``sol``, which the per-agent matrix tabulates.
 
-    An earlier version of this test checked prose too and flagged both pooled
-    figures as defects. They were correct; the test was wrong. Hence the narrowing,
-    and hence this note.
+    Cases 2 and 3 are computed here rather than listed, because several of them
+    look exactly like a truncation of a case-1 value and are not. ``bustout``/
+    ``sol`` is the trap: its median is ``0.2145`` and its mean is ``0.2145`` too,
+    which correctly renders as ``0.2145`` in the verdict table and ``0.214`` in the
+    3-decimal mean matrix. Both are right, on the same page, for the same cell.
+
+    Two earlier versions of this test were wrong in this exact way -- first
+    flagging the pooled ``0.357``, then the per-agent ``0.214``. Both times the
+    docs were correct and the test was not, which is worth recording: a guard on
+    rounding has to model every quantity the site publishes, or it manufactures
+    defects and trains a reader to ignore it.
     """
     pages = _require_pages()
     artifact = REPO_ROOT / "evals" / "results" / "set_comparison.json"
@@ -335,24 +343,29 @@ def test_per_cell_grounding_in_tables_matches_the_artifact_exactly() -> None:
                 medians.add(f"{value}")
     assert medians, "artifact records no per-cell grounding medians -- guard is inert"
 
-    #: Pooled means are real values that can collide with a truncation, so they
-    #: are computed here and excluded rather than hard-coded.
-    pooled: set[str] = set()
+    #: Every mean the site could legitimately tabulate -- pooled by family, and per
+    #: (agent, model). Computed rather than listed, because some of these collide
+    #: with what looks like a truncated median and are not one.
+    means: set[str] = set()
     by_set: dict[str, list[float]] = {}
+    by_cell: dict[tuple[str, str], list[float]] = {}
     for row in data.get("per_analysis", []):
         fraction = (row.get("grounding") or {}).get("grounded_fraction")
-        if isinstance(fraction, (int, float)):
-            by_set.setdefault(str(row.get("set")), []).append(float(fraction))
-    for values in by_set.values():
+        if not isinstance(fraction, (int, float)):
+            continue
+        by_set.setdefault(str(row.get("set")), []).append(float(fraction))
+        by_cell.setdefault((str(row.get("domain")), str(row.get("model_label"))), []).append(float(fraction))
+    for values in (*by_set.values(), *by_cell.values()):
         mean = sum(values) / len(values)
-        pooled.update({f"{round(mean, places)}" for places in (2, 3, 4)})
+        means.update({f"{round(mean, places)}" for places in (2, 3, 4)})
 
     truncations: dict[str, str] = {}
     for exact in medians:
         for places in (1, 2, 3):
             rounded = f"{round(float(exact), places)}"
-            if rounded != exact and rounded not in medians and rounded not in pooled:
+            if rounded != exact and rounded not in medians and rounded not in means:
                 truncations.setdefault(rounded, exact)
+    assert truncations, "no truncation is distinguishable from a real value -- guard is inert"
 
     offences: list[str] = []
     for page in pages:
