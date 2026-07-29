@@ -6,6 +6,7 @@ import { File, Files, Folder } from 'fumadocs-ui/components/files';
 import { TypeTable } from 'fumadocs-ui/components/type-table';
 import { Callout } from 'fumadocs-ui/components/callout';
 import { Card, Cards } from 'fumadocs-ui/components/card';
+import { Mermaid } from '@/components/mermaid';
 import type { MDXComponents } from 'mdx/types';
 
 /**
@@ -32,6 +33,7 @@ export function getMDXComponents(components?: MDXComponents) {
     File,
     Folder,
     TypeTable,
+    Mermaid,
     ...components,
   } satisfies MDXComponents;
 }
