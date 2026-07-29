@@ -361,6 +361,39 @@ def exclude_fake_records(
     return kept, excluded
 
 
+#: A bare SQL identifier: letters, digits, ``_``, ``$``, and a leading ``__`` as the
+#: customer's own exclusion tables use (``__fake_emails``). Deliberately does NOT
+#: allow quotes, whitespace, semicolons, parentheses or dots -- every one of those is
+#: how a string-built predicate turns into a second statement.
+_SQL_IDENTIFIER: Final = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
+
+
+class UnsafeSQLIdentifier(ValueError):
+    """An identifier passed to a SQL builder is not a bare identifier.
+
+    Raised instead of quoting-and-continuing because these arguments are supposed to
+    come from this repository's own constants, not from a request. A value that needs
+    escaping is a caller bug, and failing loudly is the behaviour that surfaces it.
+    """
+
+
+def _checked_identifier(value: str, *, role: str) -> str:
+    """Return ``value`` if it is a bare SQL identifier, else raise.
+
+    Interpolating an identifier is unavoidable here: a table or column name cannot be
+    a bind parameter in any SQL dialect, so parameterisation is not an option for this
+    predicate. Validation against an allowlist pattern is the correct control, and it
+    is applied at the one place identifiers enter the string.
+    """
+    if not isinstance(value, str) or not _SQL_IDENTIFIER.match(value):
+        raise UnsafeSQLIdentifier(
+            f"{role}={value!r} is not a bare SQL identifier "
+            f"(expected /{_SQL_IDENTIFIER.pattern}/). Identifiers here come from this "
+            "repository's own constants; a value needing escapes is a caller bug."
+        )
+    return value
+
+
 def null_safe_exclusion_sql(
     column: str, source_table: str, source_column: str | None = None, alias: str = "ar"
 ) -> str:
@@ -373,11 +406,19 @@ def null_safe_exclusion_sql(
 
     Not a join — "Don't join to these tables" — because a join fans out rows and inflates
     every count downstream.
+
+    SECURITY: every identifier is validated against :data:`_SQL_IDENTIFIER` before it
+    reaches the f-string. Table and column names cannot be bind parameters in any SQL
+    dialect, so an allowlist check -- not parameterisation -- is the available control.
+    Raises :class:`UnsafeSQLIdentifier` on anything that is not a bare identifier.
     """
-    src_col = source_column or column
-    qualified = f"{alias}.{column}"
+    src_col = _checked_identifier(source_column or column, role="source_column")
+    checked_column = _checked_identifier(column, role="column")
+    checked_alias = _checked_identifier(alias, role="alias")
+    checked_table = _checked_identifier(source_table, role="source_table")
+    qualified = f"{checked_alias}.{checked_column}"
     return (
-        f"({qualified} <> ALL (SELECT {src_col} FROM {source_table}) "
+        f"({qualified} <> ALL (SELECT {src_col} FROM {checked_table}) "  # nosec B608
         f"or {qualified} is null)"
     )
 

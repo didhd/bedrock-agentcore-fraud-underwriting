@@ -58,19 +58,21 @@ function ChartContainer({
 }) {
   const uniqueId = React.useId()
   const chartId = `chart-${id ?? uniqueId.replace(/:/g, "")}`
+  const theme = useResolvedTheme()
+  const colorVars = React.useMemo(() => chartColorVars(config, theme), [config, theme])
 
   return (
     <ChartContext.Provider value={{ config }}>
       <div
         data-slot="chart"
         data-chart={chartId}
+        style={{ ...colorVars, ...props.style }}
         className={cn(
           "flex aspect-video justify-center text-xs [&_.recharts-cartesian-axis-tick_text]:fill-muted-foreground [&_.recharts-cartesian-grid_line[stroke='#ccc']]:stroke-border/50 [&_.recharts-curve.recharts-tooltip-cursor]:stroke-border [&_.recharts-dot[stroke='#fff']]:stroke-transparent [&_.recharts-layer]:outline-hidden [&_.recharts-polar-grid_[stroke='#ccc']]:stroke-border [&_.recharts-radial-bar-background-sector]:fill-muted [&_.recharts-rectangle.recharts-tooltip-cursor]:fill-muted [&_.recharts-reference-line_[stroke='#ccc']]:stroke-border [&_.recharts-sector]:outline-hidden [&_.recharts-sector[stroke='#fff']]:stroke-transparent [&_.recharts-surface]:outline-hidden",
           className
         )}
         {...props}
       >
-        <ChartStyle id={chartId} config={config} />
         <RechartsPrimitive.ResponsiveContainer
           initialDimension={initialDimension}
         >
@@ -81,37 +83,56 @@ function ChartContainer({
   )
 }
 
-const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
-  const colorConfig = Object.entries(config).filter(
-    ([, config]) => config.theme ?? config.color
-  )
-
-  if (!colorConfig.length) {
-    return null
+/**
+ * The chart's per-series colours, as inline CSS custom properties.
+ *
+ * Upstream shadcn ships this as a raw-HTML `<style>` injection that builds a
+ * stylesheet from `config` and scopes it with `[data-chart=<id>]`. That is an
+ * HTML-injection sink -- a security scan flags it, correctly -- and it is not
+ * needed: everything it emits is a set of `--color-<key>` variables, and variables
+ * can be set through React's own `style` prop, which escapes values and cannot
+ * introduce markup.
+ *
+ * The one capability lost is the `.dark` descendant selector, which let a single
+ * stylesheet carry both palettes and let CSS pick. Inline styles cannot express a
+ * selector, so the active theme is resolved in JS instead (`useResolvedTheme`) and
+ * only that palette is emitted. Behaviour is equivalent because the app already
+ * re-renders on theme change -- the `.dark` class is applied by our own
+ * ThemeProvider, which is React state.
+ */
+function chartColorVars(
+  config: ChartConfig,
+  theme: keyof typeof THEMES,
+): React.CSSProperties {
+  const vars: Record<string, string> = {}
+  for (const [key, itemConfig] of Object.entries(config)) {
+    const color = itemConfig.theme?.[theme] ?? itemConfig.color
+    // Keys come from ChartConfig, which is authored in this repo; still, restrict
+    // them to identifier characters so a key can never terminate the declaration.
+    if (color && /^[\w-]+$/.test(key)) vars[`--color-${key}`] = color
   }
-
-  return (
-    <style
-      dangerouslySetInnerHTML={{
-        __html: Object.entries(THEMES)
-          .map(
-            ([theme, prefix]) => `
-${prefix} [data-chart=${id}] {
-${colorConfig
-  .map(([key, itemConfig]) => {
-    const color =
-      itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ??
-      itemConfig.color
-    return color ? `  --color-${key}: ${color};` : null
-  })
-  .join("\n")}
+  return vars as React.CSSProperties
 }
-`
-          )
-          .join("\n"),
-      }}
-    />
+
+/** The theme currently applied by ThemeProvider, read off the documentElement. */
+function useResolvedTheme(): keyof typeof THEMES {
+  const [theme, setTheme] = React.useState<keyof typeof THEMES>(() =>
+    typeof document !== "undefined" &&
+    document.documentElement.classList.contains("dark")
+      ? "dark"
+      : "light"
   )
+
+  React.useEffect(() => {
+    const root = document.documentElement
+    const read = () => setTheme(root.classList.contains("dark") ? "dark" : "light")
+    read()
+    const observer = new MutationObserver(read)
+    observer.observe(root, { attributes: true, attributeFilter: ["class"] })
+    return () => observer.disconnect()
+  }, [])
+
+  return theme
 }
 
 const ChartTooltip = RechartsPrimitive.Tooltip
@@ -363,11 +384,13 @@ function getPayloadConfigFromPayload(
   return configLabelKey in config ? config[configLabelKey] : config[key]
 }
 
+// `ChartStyle` is gone rather than kept as a no-op: it existed only to emit the
+// stylesheet that `chartColorVars` now sets inline, nothing in this app imported it,
+// and leaving a shim would invite it back.
 export {
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
   ChartLegend,
   ChartLegendContent,
-  ChartStyle,
 }

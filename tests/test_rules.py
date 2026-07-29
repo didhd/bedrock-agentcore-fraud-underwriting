@@ -757,7 +757,11 @@ def test_rule_8_deprecated_tables() -> None:
     assert is_deprecated_table(APPROVED_ALL_RECORDS_TABLE) is False
     assert is_deprecated_table("tbl_auto_consortium") is False
 
-    validate_no_deprecated_tables(f"select * from {APPROVED_ALL_RECORDS_TABLE}")
+    # The f-string IS the fixture: this feeds a SQL string to a validator to prove the
+    # validator accepts the approved table. Nothing executes it, and the interpolated
+    # value is a module constant.
+    approved_sql = f"select * from {APPROVED_ALL_RECORDS_TABLE}"  # nosec B608 - test fixture
+    validate_no_deprecated_tables(approved_sql)
     with pytest.raises(DeprecatedTableError, match="CLEAN"):
         validate_no_deprecated_tables("select * from ALL_RECORDS_ALL__ALL_RECORDS_CLEAN")
 
@@ -1194,7 +1198,9 @@ def test_rule_17_sql_null_safety() -> None:
         "(ar.borr_email <> ALL (SELECT borr_email FROM __fake_emails) "
         "or ar.borr_email is null)"
     )
-    validate_exclusion_sql(f"select * from t ar where {good}")
+    # Same shape as above: the assembled SQL is the input under test, not a query.
+    good_sql = f"select * from t ar where {good}"  # nosec B608 - test fixture
+    validate_exclusion_sql(good_sql)
 
     for bad in (
         "select * from t ar where ar.borr_email <> ALL (SELECT borr_email FROM __fake_emails)",
@@ -1688,12 +1694,16 @@ def test_coverage_doc_generator_runs_as_a_module() -> None:
     A subprocess, so it exercises the command a human would actually type rather than the
     in-process render the previous test compares.
     """
-    result = subprocess.run(
+    # Fixed argument list, no shell, and the interpreter is `sys.executable` rather
+    # than a name resolved off PATH. Nothing here is caller-influenced, so there is no
+    # injection surface; the nosec records that this was reviewed rather than missed.
+    result = subprocess.run(  # nosec B603 - static argv, shell=False, no external input
         [sys.executable, "-m", "signal_layer.rules.catalog"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         timeout=120,
+        shell=False,
     )
     if result.returncode != 0 and "No module named 'signal_layer." in result.stderr:
         pytest.skip(
