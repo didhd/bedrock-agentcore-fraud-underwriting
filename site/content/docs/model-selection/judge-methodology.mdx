@@ -3,27 +3,28 @@ title: Judge methodology
 description: Two judges biased in opposite directions, self-preference quantified rather than assumed away, agreement as the only signal, and NOT ESTABLISHED as a real outcome the design is built to produce.
 ---
 
-<Callout type="info" title="Audience">
-For the customer's engineer, and for anyone who has to decide whether to believe the two
-model studies at all. If this page does not hold up, neither
-[the tier re-derivation](/docs/model-selection/tier-rederivation) nor
-[the cross-family study](/docs/model-selection/cross-family-study) does.
+*For the customer's engineer, and for anyone deciding whether to believe the two model studies at all.*
 
-Code: `evals/tier_quality.py` (the Claude judge, the rubric, the anonymiser),
-`evals/set_comparison.py` (the two-judge combination rule), `evals/judge_sol.py` (the GPT
-judge). Artifacts: `evals/results/tier_quality.json` and `evals/results/set_comparison.json`,
-with cached verdicts in `tier_quality_verdicts.json` (48) and `set_comparison_verdicts.json`
-(240).
-</Callout>
+Bias was measured, not assumed away. An LLM asked "which of these two fraud analyses is better?" has a family, a house style, and a measurable preference for text resembling its own output — so the first study made that conflict maximal on purpose, then quantified it: the judge rated its own family **+0.78** on substance while the axis it could not touch moved **−0.026**. If this page does not hold up, neither [tier re-derivation](/docs/model-selection/tier-rederivation) nor [cross-family study](/docs/model-selection/cross-family-study) does.
 
-## The problem, stated as a conflict of interest
+## How a verdict is produced
 
-An LLM asked "which of these two fraud analyses is better?" is not a neutral instrument. It
-has a family, a house style, and a measurable preference for text that looks like its own
-output. The first study made that conflict maximal on purpose — the judge, Claude Opus 5, was
-**also one of the three candidate models it was scoring.**
+<Mermaid
+  title="One analysis, two judges, three possible outcomes"
+  chart={`
+flowchart LR
+  A["Specialist analysis"] --> B["anonymise:<br/>identifiers stripped,<br/>order shuffled, seed 20260728"]
+  B --> C["Claude Opus 5<br/>also a candidate"]
+  B --> D["GPT-5.5<br/>not a candidate"]
+  C --> E{"Both margins clear<br/>the 0.31 floor,<br/>same direction?"}
+  D --> E
+  E -->|yes| F["FINDING: one family better"]
+  E -->|"both inside the floor"| G["NO DIFFERENCE"]
+  E -->|"disagree, or only one clears"| H["NOT ESTABLISHED"]
+`}
+/>
 
-Rather than assume the bias away or drop the judge, it was **measured**.
+Code: `evals/tier_quality.py` (the Claude judge, the rubric, the anonymiser), `evals/set_comparison.py` (the two-judge combination rule), `evals/judge_sol.py` (the GPT judge). Artifacts: `evals/results/tier_quality.json` and `evals/results/set_comparison.json`, with cached verdicts in `tier_quality_verdicts.json` (48) and `set_comparison_verdicts.json` (240).
 
 ## Self-preference, quantified
 
@@ -34,62 +35,42 @@ From `tier_quality.json → judge_self_preference`:
 | Judge | `global.anthropic.claude-opus-5` |
 | Its own rows | **16** |
 | Other rows | **32** |
-| **Judge-scored calibration margin on its own family** | **+0.31** |
-| **Judge-scored substance margin on its own family** | **+0.78** |
+| Judge-scored calibration margin on its own family | **+0.31** |
+| Judge-scored substance margin on its own family | **+0.78** |
 | Deterministic band-agreement margin (the judge cannot influence this) | **−0.026** |
 | Deterministic contract-violation margin | **−0.12** |
 
-The reading, quoted from the artifact:
+Reading, quoted from the artifact:
 
 > On its own 16 rows the judge scored substance +0.78 and calibration +0.31 versus the other
 > 32, while band agreement moved −0.026. Treat any Opus-vs-cheaper margin below the substance
 > margin as unsupported.
 
 <Callout type="error" title="What that pair of numbers actually shows">
-The judge rated its own family nearly a **full point** higher on substance while the axis it
-could not touch — whether the declared band matched the fixture's pinned expectation — moved
+A judge rated its own family nearly a **full point** higher on substance while the axis it could
+not touch — whether the declared band matched the fixture's pinned expectation — moved
 **−0.026**, i.e. essentially nothing, and slightly *against* its own family.
 
-So the judge-scored margin was mostly **preference**, not quality. That single comparison is
-the whole justification for everything else on this page.
+So the judge-scored margin was mostly **preference**, not quality. That single comparison is the
+whole justification for everything else on this page.
 </Callout>
 
-It is also what killed the last remaining argument for keeping `rings` on Opus 5. Opus's only
-surviving edge there was **+0.20** judge calibration, which sits **inside** the judge's own
-measured +0.31 self-preference and is therefore not distinguishable from bias.
-[Detail](/docs/model-selection/tier-rederivation#rings-heavy--mid).
+It is also what killed the last remaining argument for keeping `rings` on Opus 5. Opus's only surviving edge there was **+0.20** judge calibration, which sits **inside** the judge's own measured +0.31 self-preference and is therefore not distinguishable from bias. [Detail](/docs/model-selection/tier-rederivation#rings-heavy--mid).
 
-## The response: two judges, biased in opposite directions
+## Two judges, biased in opposite directions
 
-The cross-family study asks a harder question — is the GPT set as good? — where a single judge
-from either family would decide the answer by its own identity. So every one of the 120
-analyses is judged **twice**.
+A harder question follows in the cross-family study — is the GPT set as good? — where a single judge from either family would decide the answer by its own identity. So every one of the 120 analyses is judged **twice**.
 
-| Judge | Family | Also a candidate? | Effort | Transport |
-|---|---|---|---|---|
-| `global.anthropic.claude-opus-5` | claude | **Yes** — the strongest possible form of the conflict | Strands structured output (forced tool schema) | Bedrock Converse |
-| `openai.gpt-5.5` | gpt | **No** — the candidates are the 5.6 variants | `medium` reasoning effort | `bedrock-mantle` Responses |
+| Judge | Family | Also a candidate? | Why that choice | Effort | Transport |
+|---|---|---|---|---|---|
+| `global.anthropic.claude-opus-5` | claude | **Yes** | The strongest possible form of the conflict: if a finding survives a judge scoring its own output, it survives | Strands structured output (forced tool schema) | Bedrock Converse |
+| `openai.gpt-5.5` | gpt | **No** | Carries the mirror bias without scoring a sibling it might be deployed beside — the candidates are the 5.6 variants | `medium` reasoning effort | `bedrock-mantle` Responses |
 
-Two design choices worth naming:
-
-- **The Claude judge is deliberately a candidate.** If a finding survives a judge scoring its
-  own output, it survives.
-- **The GPT judge is deliberately *not* a candidate.** `openai.gpt-5.5` shares the family and
-  the vendor with Luna / Terra / Sol, so it carries the mirror bias, without scoring a sibling
-  it might be deployed beside.
-
-The same logic picks Sol in `evals/judge_sol.py`, the standalone GPT judge module: quoted from
-its docstring, *"Sol is deliberately the GPT judge rather than Luna or Terra: it is the only
-GPT-5.6 variant NOT a candidate for any specialist assignment (Luna is the leading candidate
-and the incumbent synthesizer, Terra is the middle candidate), so it is the one GPT model that
-is not scoring a sibling it might be assigned alongside. It also measured the highest reasoning
-effort of the three, which is what a judge should be."*
+Sol is picked by the same logic in `evals/judge_sol.py`, the standalone GPT judge module. Quoted from its docstring: *"Sol is deliberately the GPT judge rather than Luna or Terra: it is the only GPT-5.6 variant NOT a candidate for any specialist assignment (Luna is the leading candidate and the incumbent synthesizer, Terra is the middle candidate), so it is the one GPT model that is not scoring a sibling it might be assigned alongside. It also measured the highest reasoning effort of the three, which is what a judge should be."*
 
 ## What is held identical between the two judges
 
-If the rubric drifted between judges, their agreement would mean nothing. So `judge_sol.py`
-and `set_comparison.py` **import** the shared pieces from `evals/tier_quality.py` rather than
-restating them:
+If the rubric drifted between judges, their agreement would mean nothing. So `judge_sol.py` and `set_comparison.py` **import** the shared pieces from `evals/tier_quality.py` rather than restating them:
 
 ```python
 from evals.tier_quality import (
@@ -100,66 +81,50 @@ from evals.tier_quality import (
 
 | Held identical | Differs |
 |---|---|
-| The judge instruction text | The model |
-| The anonymisation | The transport (Converse vs Responses) |
-| The verdict field names, enums and score anchors | How the JSON shape is enforced |
-| The pinned expectation from `fixtures.loader.expected_for` | Reasoning effort |
+| Judge instruction text | The model |
+| Anonymisation | Transport (Converse vs Responses) |
+| Verdict field names, enums and score anchors | How the JSON shape is enforced |
+| Pinned expectation from `fixtures.loader.expected_for` | Reasoning effort |
 
 A test asserts the two judges use the same instruction text.
 
 <Callout type="warn" title="The one place the transport forces a difference">
-The Claude judge gets its verdict through Strands structured output — the pydantic model
-becomes a forced tool schema, so the shape is enforced by the API. The mantle Responses path
-has no equivalent here, so the GPT judge is asked for a bare JSON object and the reply is
-parsed and validated by `_parse_gpt_verdict` against the same ten fields.
+Strands structured output carries the Claude judge's verdict — the pydantic model becomes
+a forced tool schema, so shape is enforced by the API. The mantle Responses path has no
+equivalent here, so the GPT judge is asked for a bare JSON object and the reply is parsed and
+validated by `_parse_gpt_verdict` against the same ten fields.
 
 Critically: **a malformed or out-of-range verdict is an ERROR, not a clamped value.** Quoted
-from the code's comment on `_VERDICT_FIELDS`: *"silently clamping a score would invent
-agreement between the two judges, which is the one thing this design must not do."*
+from the code's comment on `_VERDICT_FIELDS`: *"silently clamping a score would invent agreement
+between the two judges, which is the one thing this design must not do."*
 </Callout>
 
-## The verdict schema
+## Verdict schema
 
 Ten fields, identical for both judges:
 
 | Field | Type | What it is |
 |---|---|---|
-| `band_read_from_analysis` | `LOW RISK` / `POSSIBLE RISK` / `HIGH RISK` / `UNCLEAR` | The band the judge reads out of the prose. Compared against the regex reader; disagreements are not counted as agreement. |
+| `band_read_from_analysis` | `LOW RISK` / `POSSIBLE RISK` / `HIGH RISK` / `UNCLEAR` | Band the judge reads out of the prose. Compared against the regex reader; disagreements are not counted as agreement |
 | `band_matches_expectation` | bool | Against the fixture's pinned band |
-| `calibration_score` | int 1–5 | How well the band follows the customer's own CALIBRATION text |
+| `calibration_score` | int 1–5 | How well the band follows the customer's own calibration text |
 | `false_positive_verdict` | `Pass` / `PassWithNote` / `FalsePositive` / `FalseNegative` | Against her anti-false-positive rules |
 | `escalation_drift` | `aligned` / `escalates` / `dismisses` | |
 | `substance_score` | int 1–5 | **Density, explicitly not length** |
 | `padding_observed` | bool | |
 | `cites_context_fields` | bool | Whether it validates signals against the paired `_context` |
 | `contract_notes` | string | Output-contract deviations |
-| `justification` | string, capped | The citation for the scores |
+| `justification` | string, capped | Citation for the scores |
 
-The anchors are stated in the prompt rather than left to the model. `substance_score`: *"1 =
-mostly restatement, scaffolding or repetition of the same finding; 3 = mixed; 5 = every
-section adds a distinct fact or a distinct inference. Judge density, NOT length: a short
-analysis that carries its evidence scores high, and a long one that repeats itself scores
-low."*
+Anchors are stated in the prompt rather than left to the model. `substance_score`: *"1 = mostly restatement, scaffolding or repetition of the same finding; 3 = mixed; 5 = every section adds a distinct fact or a distinct inference. Judge density, NOT length: a short analysis that carries its evidence scores high, and a long one that repeats itself scores low."*
 
-`calibration_score` 5 requires the model to *"explicitly weigh the benign explanation the
-prompt names for this signal before concluding, and treat alerts from one behaviour as one
-signal"* — i.e. the anchor encodes the customer's own anti-false-positive principle.
+A `calibration_score` of 5 requires the model to *"explicitly weigh the benign explanation the prompt names for this signal before concluding, and treat alerts from one behaviour as one signal"* — the anchor encodes the customer's own anti-false-positive principle.
 
-## Blinding
+Blinding, from `run.blinding`: model and provider identifiers stripped from the analysis text before judging (`evals.tier_quality.anonymise`), judge order shuffled under the fixed seed, both judges seeing the same anonymised text and the same rubric. Shuffle seed `20260728` in both studies, so ordering is reproducible rather than merely random.
 
-From `run.blinding`:
+## Combination rule
 
-> model/provider identifiers stripped from the analysis text before judging
-> (`evals.tier_quality.anonymise`); judge order shuffled under the fixed seed; both judges see
-> the same anonymised text and the same rubric
-
-Shuffle seed `20260728` in both studies, so the ordering is reproducible rather than merely
-random.
-
-## The combination rule
-
-`evals/set_comparison.py:two_judge_agreement`. Margins are **GPT minus Claude**; positive
-favours GPT. `JUDGE_MARGIN_FLOOR = 0.31`.
+`evals/set_comparison.py:two_judge_agreement`. Margins are **GPT minus Claude**; positive favours GPT. `JUDGE_MARGIN_FLOOR = 0.31`.
 
 | Both margins | Verdict |
 |---|---|
@@ -169,19 +134,11 @@ favours GPT. `JUDGE_MARGIN_FLOOR = 0.31`.
 | point opposite ways, or only one clears the floor | **NOT ESTABLISHED** |
 | at least one judge produced no verdict | **NOT ESTABLISHED** |
 
-<Callout type="info" title="0.31 is a measured number, not a confidence interval">
-Quoted from the code: *"It is not a confidence interval — the sample is far too small for one
-— it is the prior study's MEASURED self-preference on calibration (+0.31), used as the floor
-below which a judge's opinion cannot be distinguished from its own identity."*
-
-And note what the third row is: **"no difference" is a real finding, and the likeliest one —
-it is what "as good at the fraud analysis" looks like when it is true.**
-</Callout>
+0.31 is a measured number, not a confidence interval. Quoted from the code: *"It is not a confidence interval — the sample is far too small for one — it is the prior study's MEASURED self-preference on calibration (+0.31), used as the floor below which a judge's opinion cannot be distinguished from its own identity."* Note what the third row is: **"no difference" is a real finding, and the likeliest one — it is what "as good at the fraud analysis" looks like when it is true.**
 
 ## NOT ESTABLISHED is an outcome, not an error
 
-Two of the ten axes in the cross-family study returned it, and no recommendation rests on
-either.
+Two of the ten axes in the cross-family study returned it, and no recommendation rests on either.
 
 | Axis | Scope | Claude judge | GPT judge | Verdict |
 |---|---|---:|---:|---|
@@ -196,35 +153,22 @@ either.
 | `substance_score` | `rings` | +0.528 | +0.806 | **GPT better on both judges** |
 | `substance_score` | `synthetic` | +0.417 | +0.583 | **GPT better on both judges** |
 
-Read the two NOT ESTABLISHED rows carefully, because they are the mechanism working: on
-`synthetic` calibration the Claude judge's −0.361 clears the floor and the GPT judge's −0.222
-does not, so the axis yields **nothing**. On `identity` substance it is the mirror: +0.431
-clears, +0.248 does not. Neither is reported as a small effect, and neither is averaged into a
-single number.
+Read the two NOT ESTABLISHED rows carefully, because they are the mechanism working. On `synthetic` calibration the Claude judge's −0.361 clears the floor and the GPT judge's −0.222 does not, so the axis yields **nothing**. On `identity` substance it is the mirror: +0.431 clears, +0.248 does not. Neither is reported as a small effect, and neither is averaged into a single number.
 
-<Callout type="error" title="Nothing is bias-corrected, and that is deliberate">
-Quoted from `JUDGE_CONFLICT_NOTE`: *"Neither margin is 'corrected' by subtracting a bias
-estimate: that would produce a number that looks adjusted and was never measured."*
-
-A "bias-corrected" score is a fabricated score with a plausible name on it. The design's
-answer to bias is redundancy, not arithmetic.
-</Callout>
+Nothing is bias-corrected, and that is deliberate. Quoted from `JUDGE_CONFLICT_NOTE`: *"Neither margin is 'corrected' by subtracting a bias estimate: that would produce a number that looks adjusted and was never measured."* A "bias-corrected" score is a fabricated score with a plausible name on it. This design's answer to bias is redundancy, not arithmetic.
 
 ## Each judge's measured preference for its own family
 
 From `set_comparison.json → judge_self_preference.per_judge`:
 
-| Judge | Family | Own-family calibration margin | Own-family substance margin |
-|---|---|---:|---:|
-| `global.anthropic.claude-opus-5` | claude | **+0.226** | **−0.398** |
-| `openai.gpt-5.5` | gpt | **−0.239** | **+0.684** |
+| Judge | Family | Own-family calibration margin | Own-family substance margin | Behaved as predicted? |
+|---|---|---:|---:|---|
+| `global.anthropic.claude-opus-5` | claude | **+0.226** | **−0.398** | On calibration yes; on substance **no** |
+| `openai.gpt-5.5` | gpt | **−0.239** | **+0.684** | On substance yes; on calibration **no** |
 
-The Claude judge behaved as predicted on calibration (+0.226 for its own family) and **against
-prediction on substance** — it rated GPT's analyses higher by 0.398. That is the most useful
-single number in the study, because it is a preference running the wrong way for the judge's
-own identity.
+GPT's analyses were rated higher by 0.398 on substance by the Claude judge. That is the most useful single number in the study, because it is a preference running the wrong way for the judge's own identity.
 
-## The layers no judge touches
+## Layers no judge touches
 
 Both studies are explicit that the judges do not decide. Quoted from the caveats:
 
@@ -245,85 +189,39 @@ Both studies are explicit that the judges do not decide. Quoted from the caveats
 | Substance score | judge | Yes |
 | Padding observed | judge | Yes |
 
-The `deterministic_cross_check` block exists to police the boundary between the two groups:
+Policing the boundary between those two groups is the `deterministic_cross_check` block's job: band agreement **−0.054**, contract violations **−0.756**, grounded fraction **−0.284**, all GPT minus Claude. *"A judge-scored margin unaccompanied by a deterministic margin in the same direction is more likely preference than quality."* The cross-family recommendation therefore rests on **grounding**, which has no judge in it, and not on the substance margin, which does.
 
-| Metric, GPT minus Claude | Margin |
-|---|---:|
-| Band agreement | −0.054 |
-| Contract violations | −0.756 |
-| Grounded fraction | −0.284 |
+## Reading the band twice
 
-*"A judge-scored margin unaccompanied by a deterministic margin in the same direction is more
-likely preference than quality."* The cross-family recommendation therefore rests on
-**grounding**, which has no judge in it, and not on the substance margin, which does.
+Small, and it matters. From `tier_quality.json` caveats: *"The band is read twice — by regex and by the blind judge. Rows where the two readers disagree are listed per cell and are not counted as agreement."*
 
-## The band is read twice
-
-Small, and it matters. From `tier_quality.json` caveats: *"The band is read twice — by regex
-and by the blind judge. Rows where the two readers disagree are listed per cell and are not
-counted as agreement."*
-
-This is how `identity`/Sonnet 5 ends up with a band denominator of **3, not 6** in the
-cross-family study: three of its analyses had no band the two readers agreed on, and the
-sample note says so — *"6 application(s) answered per cell, 3 with a readable band; a band
-claim needs 5."* A design that took the judge's read alone would have reported 6/6 and hidden
-a real fidelity defect.
+That is how `identity`/Sonnet 5 ends up with a band denominator of **3, not 6** in the cross-family study: three of its analyses had no band the two readers agreed on, and the sample note says so — *"6 application(s) answered per cell, 3 with a readable band; a band claim needs 5."* A design taking the judge's read alone would have reported 6/6 and hidden a real fidelity defect.
 
 ## What judging cost
 
-| Study | Analyses | Verdicts | Specialist spend | Judge spend | Total |
-|---|---:|---:|---:|---:|---:|
-| Tier quality | 48 | 48 | $1.3586 | **$3.5501** | **$4.9088** |
-| Cross-family | 120 | 240 | $2.7526 | **$14.1343** | **$16.8869** |
+| Study | Analyses | Verdicts | Specialist spend | Judge spend | Total | Judge multiple |
+|---|---:|---:|---:|---:|---:|---:|
+| Tier quality | 48 | 48 | $1.3586 | **$3.5501** | **$4.9088** | **2.6x** |
+| Cross-family | 120 | 240 | $2.7526 | **$14.1343** | **$16.8869** | **5.1x** |
 
-Judging cost **2.6x** and **5.1x** the analyses it judged. That is the real price of the
-methodology, it is measured rather than estimated, and it is why the verdicts are cached in
-sidecar files (`tier_quality_verdicts.json`, `set_comparison_verdicts.json`) keyed by
-`domain|model|application` so a failed judge call can be retried without re-paying the
-successes.
-
-Both reports can be regenerated from the cached verdicts at **zero** spend:
+That is the real price of the methodology, measured rather than estimated, and it is why verdicts are cached in sidecar files (`tier_quality_verdicts.json`, `set_comparison_verdicts.json`) keyed by `domain|model|application` so a failed judge call can be retried without re-paying the successes. Both reports regenerate from the cached verdicts at **zero** spend:
 
 ```bash
 PYTHONPATH=. python3 -m evals.set_comparison --rescore
 ```
 
-`live_calls` in the committed cross-family report records `judge_calls_made: 0` and
-`judge_verdicts_reused_from_cache: 240`, so the published aggregate is reproducible without
-calling a model.
+`live_calls` in the committed cross-family report records `judge_calls_made: 0` and `judge_verdicts_reused_from_cache: 240`, so the published aggregate is reproducible without calling a model.
 
-## What this methodology does not fix
+## Still unknown
 
-<Steps>
+| Limit | Why two judges do not fix it |
+|---|---|
+| **Small n** | Six applications per cell in the cross-family study, three to five in the tier study. A one-case band difference is 17 points at n=6, and two judges do not add samples |
+| **A shared blind spot** | If both judges are wrong the same way, agreement will not catch it — and there is a live example on this site: five models across two families all mis-band APP-1014 and APP-1004, and the judges named the same fault rather than disputing the band. Agreement is evidence about the *analyses*, not about the *rubric* |
+| **Subjectivity in the anchors** | "Every section adds a distinct fact" is a human sentence. Both judges interpret it, and the interpretation is not measured |
+| **Transport asymmetry** | The Claude judge's verdict shape is API-enforced; the GPT judge's is parsed. Both validate against the same ten fields, but the failure modes are not identical |
 
-<Step>
-
-**Small n.** Six applications per cell in the cross-family study, three to five in the tier
-study. A one-case band difference is 17 points at n=6. Two judges do not add samples.
-
-</Step>
-
-<Step>
-
-**A shared blind spot.** If both judges are wrong the same way, agreement will not catch it —
-and there is a live example on this site: five models across two families all mis-band
-APP-1014 and APP-1004, and the judges named the same fault each time rather than disputing the
-band. Agreement between judges is evidence about the *analyses*, not about the *rubric*.
-
-</Step>
-
-<Step>
-
-**Subjectivity in the anchors.** "Every section adds a distinct fact" is a human sentence.
-Both judges interpret it, and the interpretation is not measured.
-
-</Step>
-
-<Step>
-
-**The transport asymmetry.** The Claude judge's verdict shape is API-enforced; the GPT judge's
-is parsed. Both validate against the same ten fields, but the failure modes are not identical.
-
-</Step>
-
-</Steps>
+<Cards>
+  <Card title="Cross-family study" href="/docs/model-selection/cross-family-study" description="Where this machinery was applied: 120 analyses, 240 verdicts, one deciding metric." />
+  <Card title="Tier re-derivation" href="/docs/model-selection/tier-rederivation" description="Where the +0.31 floor came from, and the two moves it enabled." />
+</Cards>

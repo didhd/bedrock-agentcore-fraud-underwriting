@@ -1,6 +1,6 @@
 # Engagement documentation site
 
-Fumadocs (Next.js 16 + `fumadocs-mdx`) site documenting the Point Predictive → Amazon Bedrock
+Fumadocs (Next.js 16 + `fumadocs-mdx`) site documenting the AnyCompany → Amazon Bedrock
 AgentCore port. Scaffolded with `npm create fumadocs-app@latest` (template
 `+next+fuma-docs-mdx`, no `/src`, no linter).
 

@@ -1,13 +1,13 @@
 ---
-title: The test suite
-description: 1,223 offline tests — what the mutation tests prove, the anti-fabrication guards, the schema registry that refuses an unknown artifact, and why a test never names a private SDK attribute.
+title: Test suite
+description: 1,237 offline tests — what the mutation tests prove, the anti-fabrication guards, the schema registry that refuses an unknown artifact, and why a test never names a private SDK attribute.
 ---
 
-<Callout type="info" title="Audience">
-For the customer's engineer, and specifically for the question *"how do I know the fidelity
-claims on this site are true and not just asserted?"* The answer is that most of them are
-executable, and several were verified by **deliberately breaking them**.
-</Callout>
+*For the customer's engineer, and specifically for the question "how do I know the fidelity claims on this site are true and not just asserted?"*
+
+Most of those claims are executable, and several were verified by **deliberately breaking them**.
+**1,237 tests** are collected by `MOCK_MODE=1 python3 -m pytest tests/`, of which 22 are the two
+docs-guard files that only apply once the site exists.
 
 ## Running it
 
@@ -15,24 +15,11 @@ executable, and several were verified by **deliberately breaking them**.
 MOCK_MODE=1 python3 -m pytest tests/ -q -p no:cacheprovider
 ```
 
-No AWS, no credentials, no spend. `MOCK_MODE` defaults to `1`, so the flag is belt-and-braces;
-every runtime in this repo must be runnable with zero AWS calls because the demo is rehearsed
-offline and CI has no Bedrock access.
-
-<Callout type="info" title="Why `-p no:cacheprovider`">
-It disables pytest's `.pytest_cache` writer. Two reasons it is worth passing here rather than
-being a matter of taste:
-
-- **The tree is asserted on.** `tests/test_docs_site.py` walks `site/content/docs/**` and
-  `tests/test_prompt_fidelity.py` walks `prompts/verbatim/`, so a run that writes new
-  directories into the working tree is a run that changed its own inputs.
-- **Read-only and parallel contexts.** A packaged runtime directory, a CI container with a
-  read-only mount, or two suites sharing a checkout all fail or interfere on the cache
-  directory rather than on anything real.
-
-Nothing in the suite depends on cross-run state — there is no `--lf`/`--ff` workflow here — so
-the cache buys nothing and costs a mutable directory.
-</Callout>
+No AWS, no credentials, no spend. `MOCK_MODE` defaults to `1`, so the flag is belt-and-braces; every
+runtime in this repo must be runnable with zero AWS calls, because the demo is rehearsed offline and
+CI has no Bedrock access. Excluding the two docs-guard files, the product suite reports
+`1214 passed, 1 skipped`; the one skip is a live smoke test gated behind
+`AGENTCORE_BENCH_ALLOW_LIVE=1`.
 
 Two other invocation notes that will otherwise cost time:
 
@@ -41,16 +28,22 @@ python3 -m pytest -q --ignore=agentcore     # what deploy/ci.sh runs
 python3 -m pytest -q -W error::UserWarning  # what a Strands upgrade should run
 ```
 
-`--ignore=agentcore` is required after any `agentcore package`: the staging tree contains
-third-party wheels shipping test modules with colliding basenames, and a bare `pytest` aborts
-during **collection** with `import file mismatch` before reaching a single project test.
-`-W error::UserWarning` matters because `BedrockConfig` swallows unknown keys with a warning —
-see [Strands](/docs/platform/strands#unknown-config-keys-are-accepted-with-only-a-userwarning).
+`--ignore=agentcore` is required after any `agentcore package`: the staging tree contains third-party
+wheels shipping test modules with colliding basenames, and a bare `pytest` aborts during
+**collection** with `import file mismatch` before reaching a single project test.
+`-W error::UserWarning` matters because `BedrockConfig` swallows unknown keys with a warning — see
+[Strands](/docs/platform/strands#unknown-config-keys-are-accepted-with-only-a-userwarning).
+
+`-p no:cacheprovider` disables pytest's `.pytest_cache` writer, and it is worth passing rather than
+being a matter of taste for two reasons. **The tree is asserted on**: `tests/test_docs_site.py` walks
+`site/content/docs/**` and `tests/test_prompt_fidelity.py` walks `prompts/verbatim/`, so a run that
+writes new directories into the working tree is a run that changed its own inputs. And **read-only or
+parallel contexts** — a packaged runtime directory, a CI container with a read-only mount, or two
+suites sharing a checkout — fail or interfere on the cache directory rather than on anything real.
+Nothing in the suite depends on cross-run state, so the cache buys nothing and costs a mutable
+directory.
 
 ## What is collected
-
-**1,223 tests**, of which 1,214 pass, 1 is skipped and 8 are the docs-site guards that only
-apply once the site exists.
 
 | File | Tests | What it gates |
 |---|---:|---|
@@ -68,120 +61,113 @@ apply once the site exists.
 | `tests/test_fanout_mantle.py` | **39** | Two transports through one shared result-assembly path |
 | `tests/test_models.py` | **32** | Model assignment, tier rationales, the recorded usage |
 | `tests/test_output_contract.py` | **25** | Rules **derived** from prompt text, not hard-coded |
-| `tests/test_docs_site.py` | **8** | This site: no confidential text, no fabricated figures, every citation real |
+| `tests/test_docs_site.py` | **13** | This site: no confidential text, no fabricated figures, every citation real |
+| `tests/test_docs_readability.py` | **9** | This site's readability: titles, callout budget, diagrams, tables |
 
-The largest file being prompt fidelity is not an accident. **Fidelity is the product**, because
-the person reviewing this wrote the originals.
+Prompt fidelity being the largest file is not an accident. **Fidelity is the product**, because the
+person reviewing this wrote the originals.
 
-## The mutation tests
+## Mutation tests
 
-A test that has never failed is a test whose premise is unverified. Several guards here were
-checked by deliberately breaking the thing they guard.
+A test that has never failed is a test whose premise is unverified. Several guards here were checked
+by deliberately breaking the thing they guard.
 
-### The prompt integrity chain — 5 mutation attempts, all caught
+### Prompt integrity — 5 mutation attempts, all caught
 
 <Steps>
 
 <Step>
 **Edit a packaged copy.** `test_manifest_hash_matches` recomputes the sha256 of every file in
-`prompts/verbatim/` and compares it against `prompts/manifest.json`. One changed byte fails,
-naming the file.
+`prompts/verbatim/` against `prompts/manifest.json`. One changed byte fails, naming the file.
 </Step>
 
 <Step>
 **Paraphrase a prompt and update its hash.** Caught by a *different* test:
-`test_verbatim_matches_source` diffs each packaged copy against the customer document in
-`docs/`. Regenerating the manifest satisfies the hash check and still fails the diff — the two
-guards are deliberately independent, so **regenerating the manifest is not a bypass.**
+`test_verbatim_matches_source` diffs each packaged copy against the customer document in `docs/`.
+Regenerating the manifest satisfies the hash check and still fails the diff — the two guards are
+deliberately independent, so **regenerating the manifest is not a bypass.**
 </Step>
 
 <Step>
-**Reintroduce the invented output format.** The pre-port code rewrote all nine prompts and
-invented a `RISK:` / `FINDINGS:` format.
-`test_loader_raises_naming_the_file_on_drift` performs exactly that mutation in a tmpdir —
-replacing `"You are an Identity Fraud Detection Agent."` with
-`"ROLE: Identity Fraud Detection Agent"` — and asserts `PromptIntegrityError` is raised **and
-that the message names both the file and the expected hash.**
+**Reintroduce the invented output format.** The pre-port code rewrote all nine prompts and invented a
+`RISK:` / `FINDINGS:` format. `test_loader_raises_naming_the_file_on_drift` performs exactly that
+mutation in a tmpdir — replacing `"You are an Identity Fraud Detection Agent."` with
+`"ROLE: Identity Fraud Detection Agent"` — and asserts `PromptIntegrityError` is raised **and that the
+message names both the file and the expected hash.**
 </Step>
 
 <Step>
-**Delete a packaged file.** `test_loader_raises_on_missing_file` asserts absence is an error
-naming the file, not a silently empty prompt. An empty system prompt is the worst possible
-failure mode here: the agent still answers.
+**Delete a packaged file.** `test_loader_raises_on_missing_file` asserts absence is an error naming the
+file, not a silently empty prompt. An empty system prompt is the worst failure mode here: the agent
+still answers.
 </Step>
 
 <Step>
 **Add or drop a file without updating the manifest.**
-`test_manifest_covers_exactly_the_packaged_files` asserts the manifest's file list equals the
-directory listing exactly, and that each recorded byte count matches `stat().st_size`.
+`test_manifest_covers_exactly_the_packaged_files` asserts the manifest's file list equals the directory
+listing exactly, and that each recorded byte count matches `stat().st_size`.
 </Step>
 
 </Steps>
 
 <Callout type="error" title="Why five guards for one property">
-The failure this chain prevents is the one that would have lost the technical review outright.
-The paraphrased prompts were bad; the *parser* was worse — it defaulted to `LOW RISK` whenever
-it could not find its invented `RISK:` line, so **feeding it the real prompts would have cleared
-every application silently.** No test failed, no error was logged, and every adjudication looked
-clean. [Prompt fidelity](/docs/fidelity/prompt-fidelity).
+This chain prevents the failure that would have lost the technical review outright. The
+paraphrased prompts were bad; the *parser* was worse — it defaulted to `LOW RISK` whenever it could
+not find its invented `RISK:` line, so **feeding it the real prompts would have cleared every
+application silently.** No test failed, no error was logged, and every adjudication looked clean. See
+[Prompt fidelity](/docs/fidelity/prompt-fidelity).
 </Callout>
 
-### The docs-site leak guard, mutation-tested three ways
+### Docs-site leak guard, mutation-tested three ways
 
-`tests/test_docs_site.py` shingles every confidential document into normalised 12-word n-grams
-and asserts none appears in any page's **prose**. Three tests, because a guard needs its own
-guard:
+`tests/test_docs_site.py` shingles every confidential document into normalised 12-word n-grams and
+asserts none appears in any page's **prose**. Three tests, because a guard needs its own guard.
 
 | Test | What it proves |
 |---|---|
-| `test_no_customer_prompt_text_is_published` | The guard fires — the actual check. |
-| `test_the_leak_guard_would_catch_a_paste` | The guard is **not vacuous**: a 60-word paste from `identity_agent_prompt.txt` *must* trip it. Without this, a shingle size producing no overlap would let the confidentiality test pass on any input. |
-| `test_the_code_span_exemption_does_not_swallow_prose` | The **exemption** cannot be abused. Code spans are exempt (a 1:1 port cannot be documented without naming field names and enum values), so fenced blocks are re-checked at a **30-word** shingle — long enough that an enum list cannot reach it and copied prose always will. |
+| `test_no_customer_prompt_text_is_published` | The guard fires — the actual check |
+| `test_the_leak_guard_would_catch_a_paste` | The guard is **not vacuous**: a 60-word paste from `identity_agent_prompt.txt` *must* trip it. Without this, a shingle size producing no overlap would let the confidentiality test pass on any input |
+| `test_the_code_span_exemption_does_not_swallow_prose` | The **exemption** cannot be abused. Code spans are exempt, since a 1:1 port cannot be documented without naming field names and enum values, so fenced blocks are re-checked at a **30-word** shingle — long enough that an enum list cannot reach it and copied prose always will |
 
-The exemption's justification is worth quoting, because it is the line this site is written on:
-
-> *"What is confidential is the customer's writing — her instructions, her reasoning, her
-> paragraphs. What is not is the machine-readable contract her prompt defines: the field names,
-> the enum values, the JSON key order."*
-
-In practice that exemption fired on exactly **one** real passage — the enum-conflict comparison —
-and every word of the match was inside backticks.
+Its justification is the line this site is written on: what is confidential is the
+customer's writing — her instructions, her reasoning, her paragraphs. What is not is the
+machine-readable contract her prompt defines: the field names, the enum values, the JSON key order. In
+practice that exemption fired on exactly **one** real passage, the enum-conflict comparison, and every
+word of the match was inside backticks.
 
 ### Mutation-tested elsewhere
 
 - `tests/test_mantle.py:441` — the "requested region is unavailable, use the measured-fastest
-  *available* one" branch. Its docstring records *"verified by mutation"*, because without the
+  *available* one" branch. Its docstring records that it was verified by mutation, because without the
   check that distinction is untested.
-- `tests/test_mantle.py:808` — a table's provenance sentence. Verified by mutation: **changing
-  the table cell alone did not fail the test**, which is exactly the gap the extra assertion
-  closes.
-- `tests/test_set_comparison.py` parametrises **invalid judge verdicts** and asserts each
-  **raises rather than being coerced** — a fourth `false_positive_verdict` value, an
-  out-of-range score, a missing key.
+- `tests/test_mantle.py:808` — a table's provenance sentence. Verified by mutation: **changing the
+  table cell alone did not fail the test**, which is exactly the gap the extra assertion closes.
+- `tests/test_set_comparison.py` parametrises **invalid judge verdicts** and asserts each **raises
+  rather than being coerced** — a fourth `false_positive_verdict` value, an out-of-range score, a
+  missing key.
 
-## The anti-fabrication guards
+## Anti-fabrication guards
 
-`tests/test_bench.py` is organised into nine numbered sections, and four of them exist only to
-make fabrication a build failure.
+`tests/test_bench.py` is organised into nine numbered sections, and four exist only to make
+fabrication a build failure.
 
 <Tabs items={['Percentiles', 'Cost', 'Offline labelling', 'The README itself']}>
 <Tab value="Percentiles">
 
 Section 1. Twelve tests, and the ones that matter are the negatives:
 
-- `test_single_sample_yields_no_percentiles_at_all` — n=1 produces **no** p50, not "the
-  maximum".
+- `test_single_sample_yields_no_percentiles_at_all` — n=1 produces **no** p50, not "the maximum".
 - `test_p50_suppressed_below_its_minimum` — parametrised over n.
-- `test_percentiles_appear_exactly_at_their_minimum_sample_count` — the boundary is tested from
-  both sides, so the thresholds cannot silently loosen.
-- `test_percentile_values_are_observed_samples_not_interpolated` — nearest-rank means every
-  published value is a value the run **observed**.
+- `test_percentiles_appear_exactly_at_their_minimum_sample_count` — the boundary is tested from both
+  sides, so the thresholds cannot silently loosen.
+- `test_percentile_values_are_observed_samples_not_interpolated` — nearest-rank means every published
+  value is a value the run **observed**.
 - `test_percentile_method_is_recorded_so_the_number_is_reproducible`.
 - `test_pipeline_p95_is_refused_at_three_repetitions_per_application` and
   `test_pipeline_report_caveats_name_the_refused_p95_when_n_is_too_small` — the refusal must be
   *stated*, not merely `null`.
-- `test_markdown_summary_refuses_a_suppressed_percentile_out_loud` — the human-readable summary
-  must not quietly drop a suppressed row.
+- `test_markdown_summary_refuses_a_suppressed_percentile_out_loud` — the human-readable summary must
+  not quietly drop a suppressed row.
 
 </Tab>
 <Tab value="Cost">
@@ -192,23 +178,23 @@ Section 2. The rule is that **missing usage yields `None`, never a figure**:
 - `test_unknown_model_yields_none_rather_than_borrowing_another_price` — a new model id must not
   inherit a sibling's rate.
 - `test_a_model_agents_pricing_refuses_to_price_yields_no_cost`
-- `test_degraded_run_cost_is_none_not_a_partial_sum` — **eight priced calls presented as the cost
-  of a nine-call adjudication is an under-count wearing a total's name.** This is why the
-  committed benchmark reports latency at n=42 and cost at n=41.
-- `test_token_totals_distinguish_zero_from_unmeasured` — the distinction the whole telemetry
-  path rests on.
+- `test_degraded_run_cost_is_none_not_a_partial_sum` — **eight priced calls presented as the cost of a
+  nine-call adjudication is an under-count wearing a total's name.** This is why the committed
+  benchmark reports latency at n=42 and cost at n=41.
+- `test_token_totals_distinguish_zero_from_unmeasured` — the distinction the whole telemetry path rests
+  on.
 - `test_cost_variance_drivers_refuse_to_attribute_with_no_priced_run`
 - `test_us_profile_costs_exactly_one_point_one_times_global` and
-  `test_sonnet_5_introductory_rate_is_flagged_as_temporary` — the second pins the
-  **2026-09-01** promo lapse so it cannot be forgotten.
-- `test_rate_card_delegates_to_agents_pricing_and_matches_it` — the harness must not carry a
-  second, drifting copy of the rate card.
+  `test_sonnet_5_introductory_rate_is_flagged_as_temporary` — the second pins the **2026-09-01** promo
+  lapse so it cannot be forgotten.
+- `test_rate_card_delegates_to_agents_pricing_and_matches_it` — the harness must not carry a second,
+  drifting copy of the rate card.
 
 </Tab>
 <Tab value="Offline labelling">
 
-Section 4. An offline run measures orchestration overhead and **nothing else**, and it must say
-so in three places:
+Section 4. An offline run measures orchestration overhead and **nothing else**, and it must say so in
+three places:
 
 - `test_offline_report_says_model_latency_is_not_measured`
 - `test_offline_human_table_carries_the_warning_in_its_header`
@@ -217,50 +203,46 @@ so in three places:
 - `test_unmeasured_prompt_size_reports_unknown_not_a_verdict` — `unknown` is not `never_cacheable`.
 
 Plus `test_live_requires_both_the_flag_and_the_env_var` and
-`test_live_cli_refuses_without_the_env_var`, which assert the double gate at the API and at the
-CLI separately.
+`test_live_cli_refuses_without_the_env_var`, which assert the double gate at the API and at the CLI
+separately.
 
 </Tab>
 <Tab value="The README itself">
 
-`test_readme_states_the_measurement_status_honestly` asserts prose, which is unusual and
-deliberate:
+`test_readme_states_the_measurement_status_honestly` asserts prose, which is unusual and deliberate:
 
 - the string **`HAS NOT BEEN MEASURED`** must be present;
-- **`NOMINAL_LATENCY_S`** must be named — *"the README must name the fabricated table this
-  harness replaces"*;
+- **`NOMINAL_LATENCY_S`** must be named, so the README names the fabricated table this harness
+  replaces;
 - six `agentcore` eval commands must be documented;
-- `agentcore configure` and `agentcore launch` must be **mentioned** (as non-existent) —
-- **and must never appear inside a runnable code block.** The test tracks fence state line by
-  line and reports the offending line number.
+- `agentcore configure` and `agentcore launch` must be **mentioned** as non-existent —
+- **and must never appear inside a runnable code block.** The test tracks fence state line by line and
+  reports the offending line number.
 
-That last pair is the same guard `deploy/ci.sh` step 0 enforces repo-wide, from the other
-direction: the script forbids the strings everywhere *except* the four files whose purpose is to
-warn about them, and this test checks that those files warn correctly rather than instruct.
-[The CLI](/docs/platform/agentcore-cli).
+That last pair is the same guard `deploy/ci.sh` step 0 enforces repo-wide from the other direction:
+the script forbids the strings everywhere *except* the four files whose purpose is to warn about them,
+and this test checks that those files warn correctly rather than instruct. See
+[AgentCore CLI](/docs/platform/agentcore-cli).
 
 </Tab>
 </Tabs>
 
-### And one guard against this engagement's own near-miss
+### One guard against this engagement's own near-miss
 
-`tests/test_models.py` and `tests/test_pricing.py` carry 12 guards added specifically because a
-draft summary of this work quoted study figures that appear in **no artifact on disk**. The
-comment in the test file is the rationale:
+`tests/test_models.py` and `tests/test_pricing.py` carry 12 guards added specifically because a draft
+summary of this work quoted study figures that appear in **no artifact on disk**. The comment in the
+test file is the rationale: the grounding margin, the contract counts, the per-agent figures and both
+judges' self-preference numbers are now all re-derived from the 120 rows rather than trusted.
 
-> *"The grounding margin, the contract counts, the per-agent figures and both judges'
-> self-preference numbers are now all re-derived from the 120 rows rather than trusted."*
+`tests/test_docs_site.py` carries the same idea for the site. The fabricated figures may not appear on
+a page **unless the same paragraph marks them as fabricated**, which is how the landing page is
+allowed to name them, and every `evals/results/*` or `docs/*` path a page cites as its source **must
+exist**. That second guard is why a citation on this site cannot be decorative.
 
-`tests/test_docs_site.py` carries the same idea for the site: the fabricated figures may not
-appear on a page **unless the same paragraph marks them as fabricated** (which is how the
-landing page is allowed to name them), and every `evals/results/*` or `docs/*` path a page cites
-as its source **must exist**. That second guard is why a citation on this site cannot be
-decorative.
+## Schema registry
 
-## The schema registry
-
-Every JSON in `evals/results/` is either collected as a pipeline-bench report and subjected to
-the full contract, or it carries a schema **explicitly listed as known-not-to-be-one**:
+Every JSON in `evals/results/` is either collected as a pipeline-bench report and subjected to the
+full contract, or it carries a schema **explicitly listed as known-not-to-be-one**.
 
 | Schema | Guarded by |
 |---|---|
@@ -270,61 +252,60 @@ the full contract, or it carries a schema **explicitly listed as known-not-to-be
 | `pointpredictive.agentcore.set-comparison/1` + `-analyses/1` + `-verdicts/1` | `tests/test_set_comparison.py` |
 
 <Callout type="warn" title="An unlisted schema fails the build — that is the point">
-`test_report_selection_skips_only_recognised_non_bench_schemas` asserts that every file is in
-one of those two buckets. A new artifact with an unlisted schema **fails**, with a message
-forcing the decision:
+`test_report_selection_skips_only_recognised_non_bench_schemas` asserts every file falls into one of
+those two buckets. A new artifact with an unlisted schema **fails**, with a message forcing the
+decision: either it is a benchmark report and must satisfy the guards, or its schema is added to
+`known_non_bench` with a reason.
 
-> *"Either it is a benchmark report and must satisfy the guards below, or add its schema to
-> `known_non_bench` with a reason."*
-
-A file that is JSON but carries **no** recognisable schema is collected as a bench report on
-purpose, so a corrupt or unschema'd report fails loudly instead of being skipped. The
-alternative — a `glob("*.json")` that quietly ignores what it does not understand — is how an
-artifact ends up published with no guard on it at all.
+A file that is JSON but carries **no** recognisable schema is collected as a bench report on purpose,
+so a corrupt or unschema'd report fails loudly instead of being skipped. The alternative — a
+`glob("*.json")` that quietly ignores what it does not understand — is how an artifact ends up
+published with no guard on it at all.
 </Callout>
 
 Two further guards on the committed benchmark specifically:
 
-- `test_committed_report_carries_provenance_sample_counts_and_caveats` — a committed benchmark
-  must name the commit it measured, its timestamp, its region and its model ids; must carry a
-  non-empty `caveats` list; and `len(raw_runs)` must equal `totals.runs`, so **every aggregate
-  stays recomputable**.
-- `test_committed_report_percentiles_obey_the_sample_minimums` — the *published* numbers face the
-  same refusal rule as a fresh run. An artifact cannot be grandfathered in.
+- `test_committed_report_carries_provenance_sample_counts_and_caveats` — a committed benchmark must
+  name the commit it measured, its timestamp, its region and its model ids; must carry a non-empty
+  `caveats` list; and `len(raw_runs)` must equal `totals.runs`, so **every aggregate stays
+  recomputable**.
+- `test_committed_report_percentiles_obey_the_sample_minimums` — the *published* numbers face the same
+  refusal rule as a fresh run. An artifact cannot be grandfathered in.
 
 ## Two conventions a maintainer should keep
 
-<Callout type="warn" title="1. Never assert a private SDK attribute">
-The single real incompatibility found in the `strands-agents` 1.26 → 1.50 upgrade was a test
-naming `BedrockModel._supports_caching`, which 1.50 refactored to `_cache_strategy`. The product
-behaviour was identical on both versions. The fix was to assert **this repo's own public guard**
-instead:
+**Never assert a private SDK attribute.** The single real incompatibility found in the
+`strands-agents` 1.26 → 1.50 upgrade was a test naming `BedrockModel._supports_caching`, which 1.50
+refactored to `_cache_strategy`, while product behaviour was identical on both versions. The fix was
+to assert this repo's own public guard instead:
 
 ```python
 assert m.supports_prompt_caching(m.LIGHT_MODEL) is True
 assert m.supports_prompt_caching("global.amazon.nova-pro-v1:0") is False
 ```
 
-`_`-prefixed names in assertions are upgrade debt.
-[The SDK upgrade](/docs/platform/sdk-upgrade).
-</Callout>
+`_`-prefixed names in assertions are upgrade debt. See [SDK upgrade](/docs/platform/sdk-upgrade).
 
-<Callout type="warn" title="2. Derive contract rules from the source, do not restate them">
-`agents/output_contract.py` derives which output rule applies to which agent **from the prompt
-text at import** rather than hard-coding a table — and that is not stylistic. It corrected a
-real assumption: the header ban appears in **four** prompts, not six. `income` and `synthetic`
-never received it. A checker with a hard-coded "6 of 8" would report violations the customer's
-prompt does not contain — and a fidelity report that flags a non-violation is worse than no
-report, because it teaches the reviewer to distrust the whole thing.
-
+**Derive contract rules from the source; do not restate them.** `agents/output_contract.py` derives
+which output rule applies to which agent **from the prompt text at import** rather than hard-coding a
+table, and that is not stylistic — it corrected a real assumption. The header ban appears in **four**
+prompts, not six; `income` and `synthetic` never received it. A checker with a hard-coded "6 of 8"
+would report violations the customer's prompt does not contain, and a fidelity report that flags a
+non-violation is worse than no report, because it teaches the reviewer to distrust the whole thing.
 `tests/test_output_contract.py` (25 tests) asserts the derivation, including that it agrees with
-`agents.fanout.ANALYSIS_TITLES` so the two cannot drift.
+`agents.fanout.ANALYSIS_TITLES` so the two cannot drift. See
 [Output-contract defects](/docs/fidelity/output-contract-defects).
-</Callout>
+
+## Still unknown
+
+**No test in this suite calls AWS.** That is the design — the demo is rehearsed offline and CI has no
+Bedrock access — but it means the suite verifies the contracts, the refusals and the arithmetic, and
+verifies nothing about live service behaviour. The one live smoke test in
+`tests/test_fanout_mantle.py` is skipped by default and costs roughly a cent when enabled.
 
 <Cards>
   <Card
-    title="The eval harness"
+    title="Eval harness"
     href="/docs/reference/eval-harness"
     description="The five measurement modules, their spend gates, and what each refuses to report."
   />

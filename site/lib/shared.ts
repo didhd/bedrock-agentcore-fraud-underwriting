@@ -1,4 +1,4 @@
-export const appName = 'Point Predictive on AgentCore';
+export const appName = 'AnyCompany on AgentCore';
 export const docsRoute = '/docs';
 export const docsImageRoute = '/og/docs';
 export const docsContentRoute = '/llms.mdx/docs';

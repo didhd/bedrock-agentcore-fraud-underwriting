@@ -1,37 +1,39 @@
 ---
-title: The ten alert categories
+title: Alert categories
 description: General Rule 3 as data rather than prose — ten categories, 166 list entries, 148 distinct IDs, 18 in more than one category, and the 31-39 disregard rule that belongs to none of them.
 ---
 
-<Callout type="info" title="Audience">
-This page is for the customer's engineer. Every count here is read from
-`signal_layer/alert_categories.py` at import. The alert IDs themselves are the customer's
-numbers from General Rule 3 and are shown, because the routing they drive is the thing being
-verified; her surrounding prose is not reproduced.
-</Callout>
+*For the customer's engineer. Every count here is read from `signal_layer/alert_categories.py` at import. The alert IDs themselves are her numbers from General Rule 3 and are shown, because the routing they drive is the thing being verified; her surrounding prose is not reproduced.*
 
-## Why this is data and not a paragraph
+**Ten categories, 166 list entries, 148 distinct IDs, 18 of them in more than one category.** The gap
+between 166 and 148 is the whole finding: **the categories are not a partition**, so
+`category_of(alert_id)` returns a list and the reverse index is many-to-many by construction.
 
-General Rule 3 groups the alert IDs into ten named categories. It is the single largest piece
-of pure data in the customer's rule set, and it is the mechanism by which each specialist gets
-the *right* alerts.
+## Why category routing decides what a specialist can see
 
-That matters more than it looks, because of a separate rule: **all eight specialists are
-forbidden from citing alert numbers** — *"Reference specific findings from alerts, not alert
-numbers."* An agent that cannot name an alert number cannot reason its way to the right subset.
-So the only way a specialist ever sees the correct alerts is for the signal layer to filter
-them **by category before the payload is built**.
+<Mermaid
+  title="Alerts reach a specialist only through category filtering"
+  chart={`
+flowchart LR
+  A["alerts_fired<br/>on the record"] --> R3["General Rule 3<br/>10 categories<br/>166 entries"]
+  R3 --> DX["DOMAIN_EXTRA_ALERTS<br/>from each agent's own doc"]
+  DX --> DV["DomainView<br/>this agent's alerts only"]
+  DV --> AG["specialist prompt<br/>cannot cite alert NUMBERS"]
+`}
+/>
 
-<Callout type="warn" title="What a single wrong digit costs">
-Quoting the module's own docstring: *"A single wrong digit here silently removes a detection or
-attributes it to the wrong specialist."* No error, no warning — just a fraud dimension the
-specialist was never shown.
+A separate rule makes that filtering load-bearing: **all eight specialists are forbidden from citing
+alert numbers** — *"Reference specific findings from alerts, not alert numbers."* An agent that cannot
+name an alert number cannot reason its way to the right subset, so the only way a specialist ever sees
+the correct alerts is for the signal layer to filter them **by category before the payload is
+built**.
 
-The prior revision of this repository did not carry these IDs at all. The whole rule set
-existed as six prose display strings.
-</Callout>
+Quoting the module's own docstring on what a transcription error costs: *"A single wrong digit here
+silently removes a detection or attributes it to the wrong specialist."* No error, no warning — just a
+fraud dimension the specialist was never shown. The prior revision of this repository did not carry
+these IDs at all; the whole rule set existed as six prose display strings.
 
-## The counts
+## Counts
 
 Read from `signal_layer/alert_categories.py` at import:
 
@@ -43,13 +45,10 @@ Read from `signal_layer/alert_categories.py` at import:
 | IDs appearing in more than one category | **18** |
 | Lowest / highest ID named | 3 / 169 |
 
-The gap between 166 and 148 is the whole point of the next section: **the categories are not a
-partition.**
-
 ## The ten categories
 
-Labels are the customer's own headings with the trailing "Alerts"/"Alert" removed; her exact
-source headings are preserved in `SOURCE_HEADINGS`.
+Labels are her own headings with the trailing "Alerts"/"Alert" removed; her exact source headings are
+preserved in `SOURCE_HEADINGS`.
 
 | Category | Source heading | n IDs |
 |---|---|---:|
@@ -64,17 +63,16 @@ source headings are preserved in `SOURCE_HEADINGS`.
 | Collateral | `Collateral Alert` | 6 |
 | Bust Out Risk | `Bust Out Risk Alert` | 2 |
 
-<Callout type="info" title="ID order is the customer's, not sorted">
-The Employment list is deliberately **not** in ascending order. Her source lists `76, 78, 116,
-117, 132, 140, 142, 143, 144, 148, 156` first and then the ten Employment Deviation IDs `68,
-69, 70, 71, 73, 74, 75, 77, 79, 114`. The tuple preserves that, because the ordering carries
-her grouping intent. Membership tests go through `CATEGORY_ALERTS`, which is order-free.
-</Callout>
+ID order inside each tuple is the customer's, not sorted. Her Employment list is deliberately not
+ascending: it names `76, 78, 116, 117, 132, 140, 142, 143, 144, 148, 156` first and then the ten
+Employment Deviation IDs `68, 69, 70, 71, 73, 74, 75, 77, 79, 114`. The tuple preserves that because
+the ordering carries her grouping intent, while membership tests go through `CATEGORY_ALERTS`, which
+is order-free.
 
 ## The 18 multi-category IDs
 
-`MULTI_CATEGORY_ALERTS` is **derived** from the transcribed sets rather than retyped, and a
-test asserts the module docstring and the data agree — so this list cannot drift.
+`MULTI_CATEGORY_ALERTS` is **derived** from the transcribed sets rather than retyped, and a test
+asserts the module docstring and the data agree, so this list cannot drift.
 
 | Alert ID | Categories |
 |---:|---|
@@ -89,102 +87,80 @@ test asserts the module docstring and the data agree — so this list cannot dri
 | 117 | Employment + Default |
 | 164 | Income + Bust Out Risk |
 
-That is 18 IDs in total (ten of them the Employment / Employment Deviation overlap).
+Eighteen IDs in total, ten of them the Employment / Employment Deviation overlap.
 
 <Callout type="error" title="A single-label mapping loses a category for 18 IDs">
-This is the reason `category_of(alert_id)` returns a **list**, and the reason the reverse index
-is many-to-many by construction. Quoting `docs/general_rules_coverage.md` on rule 3:
-*"a single-label mapping would silently lose a category for 18 ids."*
+Quoting `docs/general_rules_coverage.md` on rule 3: *"a single-label mapping would silently lose a
+category for 18 ids."*
 
-Concretely: build a `dict[int, str]` from these lists and alert **164** stops being a Bust Out
-Risk alert — the bustout specialist never sees it. Alert **97** stops being a Collateral alert.
-Alerts 116 and 117 stop being Default alerts.
+Concretely: build a `dict[int, str]` from these lists and alert **164** stops being a Bust Out Risk
+alert, so the bustout specialist never sees it. Alert **97** stops being a Collateral alert. Alerts
+116 and 117 stop being Default alerts. That is why `category_of(alert_id)` returns a list.
 </Callout>
 
 ## The 31-39 disregard rule
 
-Immediately after the Income list, General Rule 3 carves out the range **31–39**: she rates
-those nine ids as weak fraud indicators and tells the agent it can set them aside for the most
-part. Her exact sentence is held in code as `DISREGARD_RULE` — extracted from the orchestration
-document rather than retyped — with `DISREGARDED_ALERTS = frozenset(range(31, 40))`.
+Immediately after the Income list, General Rule 3 carves out the range **31–39**: she rates those nine
+ids as weak fraud indicators and tells the agent it can set them aside for the most part. Her exact
+sentence is held in code as `DISREGARD_RULE` — extracted from the orchestration document rather than
+retyped — with `DISREGARDED_ALERTS = frozenset(range(31, 40))`.
 
-<Callout type="warn" title="None of 31-39 appears in any of the ten categories — verified">
-`DISREGARDED_ALERTS & ALL_CATEGORISED_ALERTS` is **empty**. So this is not an instruction to
-strip nine IDs out of a category; it is an instruction about **uncategorised** alerts that
-arrive in `alerts_fired`.
+None of 31–39 appears in any of the ten categories, and that is verified:
+`DISREGARDED_ALERTS & ALL_CATEGORISED_ALERTS` is **empty**. So this is not an instruction to strip
+nine IDs out of a category; it is an instruction about **uncategorised** alerts arriving in
+`alerts_fired`. The implementation consequence, recorded in the module, is that they **must not be
+dropped from the record** but **must not drive risk** — deleting them would be a different rule from
+the one she wrote, since hers says "for the most part", which is interpretive, and a hard delete is
+not.
 
-The implementation consequence, recorded in the module: they **must not be dropped from the
-record**, but they **must not drive risk**. Deleting them would be a different rule from the one
-she wrote — hers says "for the most part", which is interpretive, and a hard delete is not.
-</Callout>
-
-`category_of()` returns `[]` for any ID the customer never categorised. In the 1-169 range that
-is **21 IDs**: the nine covered by the disregard rule, plus **12 others** — 1, 2, 108, 109,
-118, 121, 122, 124, 125, 126, 127, 149. Those twelve are uncategorised in her rule and are
-carried on the unfiltered record rather than guessed into a category.
+`category_of()` returns `[]` for any ID she never categorised. In the 1–169 range that is **21 IDs**:
+the nine covered by the disregard rule, plus **12 others** — 1, 2, 108, 109, 118, 121, 122, 124, 125,
+126, 127, 149. Those twelve are uncategorised in her rule and are carried on the unfiltered record
+rather than guessed into a category.
 
 ## Which specialist sees which categories
 
-Only **five** of the eight fraud domains have a same-named category in General Rule 3. For the
-other three the mapping is derived, and `PROVENANCE` records for every domain whether the
-mapping is **DOC-QUOTED** from a customer document or **INFERRED** — so the customer can correct
-the inferred ones without archaeology.
+Only **five** of the eight fraud domains have a same-named category in General Rule 3. For the other
+three the mapping is derived, and `PROVENANCE` records for every domain whether the mapping is
+**DOC-QUOTED** from a customer document or **INFERRED** — so she can correct the inferred ones without
+archaeology.
 
-| Domain | Categories | Extra IDs from its own doc | Total IDs visible | Provenance |
-|---|---|---:|---:|---|
-| identity | Identity | 4 | 60 | **DOC-QUOTED** |
-| dealer | Dealer Risk | 0 | 9 | **DOC-QUOTED** |
-| straw | Straw Borrower | 0 | 10 | **DOC-QUOTED** |
-| employment | Employment + Employment Deviation | 12 | 23 | **DOC-QUOTED** |
-| income | Income | 0 | 12 | **DOC-QUOTED** |
-| synthetic | Identity | 18 | 62 | **INFERRED** |
-| bustout | Bust Out Risk + Default | 0 | 35 | **INFERRED** for Default |
-| rings | Identity | 4 | 60 | **INFERRED** |
+| Domain | Categories | Extra IDs from its own doc | Total IDs visible | Provenance | Reasoning offered |
+|---|---|---:|---:|---|---|
+| identity | Identity | 4 | 60 | **DOC-QUOTED** | — |
+| dealer | Dealer Risk | 0 | 9 | **DOC-QUOTED** | — |
+| straw | Straw Borrower | 0 | 10 | **DOC-QUOTED** | — |
+| employment | Employment + Employment Deviation | 12 | 23 | **DOC-QUOTED** | — |
+| income | Income | 0 | 12 | **DOC-QUOTED** | — |
+| synthetic | Identity | 18 | 62 | **INFERRED** | Her synthetic document names its own supplemental list of 18 IDs, and **16 of those 18 belong to the Identity-related set** (the other two, 138 and 163, are Default). Identity is the closest customer-defined container |
+| bustout | Bust Out Risk + Default | 0 | 35 | **INFERRED** for Default | She defines bust-out as coordinated rapid credit acquisition followed by non-repayment and instructs the agent to look at EPD / EPD6 / FPD defaults. `Default` is the only place those live |
+| rings | Identity | 4 | 60 | **INFERRED** | Her rings document names fraud-ring alerts 64, 65, 66 and 67, and **all four belong to the Identity-related set** |
 
 Totals are `len(alerts_for_domain(domain))`, computed from the module. Extra IDs come from
-`DOMAIN_EXTRA_ALERTS` — supplemental IDs named directly in that domain's own orchestration
-document, outside General Rule 3, each carried alongside the verbatim quote that named it in
-`DOMAIN_EXTRA_ALERT_QUOTES` so the numbers are auditable.
+`DOMAIN_EXTRA_ALERTS` — supplemental IDs named directly in that domain's own orchestration document,
+outside General Rule 3, each carried alongside the verbatim quote that named it in
+`DOMAIN_EXTRA_ALERT_QUOTES` so the numbers are auditable. Each inferred row is tagged `INFERRED` in
+`PROVENANCE` with an explicit "Confirm with the customer", and those three rows are the ones to put in
+front of her.
 
-<Callout type="warn" title="The three inferred mappings, and the reasoning offered for each">
-These are the rows to put in front of the customer, because General Rule 3 defines no
-Synthetic, Rings or Default-for-bustout mapping. The module states the reasoning and asks for
-confirmation rather than presenting a guess as a contract:
-
-- **synthetic → Identity.** Her synthetic orchestration document names its own supplemental
-  list of 18 IDs, and **16 of those 18 are members of the Identity-related set** (the other
-  two, 138 and 163, are Default). Identity is therefore the closest customer-defined container.
-- **rings → Identity.** Her rings document names fraud-ring alerts 64, 65, 66 and 67, and **all
-  four are members of the Identity-related set.**
-- **bustout → Default** (in addition to Bust Out Risk, which is doc-quoted). She defines
-  bust-out as coordinated rapid acquisition of credit followed by non-repayment, and instructs
-  the bustout agent to look at EPD / EPD6 / FPD defaults. The `Default` category is the only
-  place those live.
-
-Each row is tagged `INFERRED` in `PROVENANCE` with an explicit "Confirm with the customer."
-</Callout>
-
-<Callout type="info" title="Two categories are deliberately assigned to no domain">
-`Vehicle Risk` and `Collateral` are in `UNASSIGNED_CATEGORIES`. No customer document routes
-them to any of the eight specialists, so they are **not** injected into a specialist's view on a
-guess. They stay reachable through `CATEGORY_ALERTS` and are carried on the unfiltered record.
-
-The alternative — attaching them to whichever specialist seemed closest — would put nine alert
-IDs in front of an agent whose prompt has no interpretation for them, which is the same class
-of error as [handing a specialist a signal its prompt never
-mentions](/docs/what-was-built#the-signal-registry).
-</Callout>
+Two categories are deliberately assigned to no domain. `Vehicle Risk` and `Collateral` sit in
+`UNASSIGNED_CATEGORIES` because no customer document routes them to any of the eight specialists, so
+they are not injected into a specialist's view on a guess. They stay reachable through
+`CATEGORY_ALERTS` and are carried on the unfiltered record. The alternative — attaching them to
+whichever specialist seemed closest — would put nine alert IDs in front of an agent whose prompt has
+no interpretation for them, which is the same class of error as [handing a specialist a signal its
+prompt never mentions](/docs/what-was-built#the-signal-registry).
 
 ## Provenance of the transcription
 
-The IDs were transcribed character-by-character from
-`docs/.converted/identity_orchestration_062026.txt` lines 72-93, and the identical lists were
+IDs were transcribed character by character from
+`docs/.converted/identity_orchestration_062026.txt` lines 72–93, and the identical lists were
 cross-checked against **the other seven** converted orchestration documents — bustout, dealer,
-employment, income, rings, straw, synthetic. All eight agree exactly, **including ID order**.
-The master orchestration document contains no General Rules at all.
+employment, income, rings, straw, synthetic. All eight agree exactly, **including ID order**. The
+master orchestration document contains no General Rules at all.
 
-`alerts_for_domain()` raises `KeyError` for an unknown domain rather than returning an empty
-set, because a typo'd domain name must not silently produce a specialist with zero alerts.
+`alerts_for_domain()` raises `KeyError` for an unknown domain rather than returning an empty set,
+because a typo'd domain name must not silently produce a specialist with zero alerts.
 
 ## Verifying it
 
@@ -193,7 +169,32 @@ MOCK_MODE=1 python3 -m pytest tests/test_rules.py -q -k alert_categories
 ```
 
 `test_rule_3_alert_categories` is the coverage entry for this module in
-`docs/general_rules_coverage.md`, and separate tests assert that `MULTI_CATEGORY_ALERTS` agrees
-with the docstring list and that the 31-39 set is disjoint from every category.
+`docs/general_rules_coverage.md`, and separate tests assert that `MULTI_CATEGORY_ALERTS` agrees with
+the docstring list and that the 31–39 set is disjoint from every category.
 
-Related: [the 29 General Rules](/docs/fidelity/general-rules), of which this is rule 3.
+## Still unknown
+
+- **The three inferred mappings.** synthetic → Identity, rings → Identity, and bustout → Default are
+  reasoned, not quoted. Confirmation is a one-line answer from her.
+- **Where `Vehicle Risk` and `Collateral` belong.** Nine IDs across two categories are routed to no
+  specialist because no document routes them.
+- **Whether the 12 uncategorised IDs outside 31–39 are intentional.** They are carried unfiltered
+  rather than guessed.
+
+<Cards>
+  <Card
+    title="General Rules coverage"
+    href="/docs/fidelity/general-rules"
+    description="All 29 rules, their enforcement layer, and the ones whose naive reading is a defect."
+  />
+  <Card
+    title="Signal layer"
+    href="/docs/reference/signal-layer"
+    description="How a DomainView is built, and what each specialist can and cannot see."
+  />
+  <Card
+    title="Fixtures"
+    href="/docs/reference/fixtures"
+    description="The 14 applications, including the anti-false-positive cases."
+  />
+</Cards>

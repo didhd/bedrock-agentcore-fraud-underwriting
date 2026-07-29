@@ -1,74 +1,76 @@
 ---
 title: GPT-5.6 on bedrock-mantle
-description: The endpoint that serves OpenAI models on Amazon Bedrock — the hostname, the /openai/v1 vs /v1 mutual exclusivity with all four measured combinations, bearer-token auth, the IAM action, regional availability, and the native Strands provider.
+description: The endpoint serving OpenAI models on Amazon Bedrock — hostname, the two mutually exclusive base-URL paths with all four measured combinations, bearer-token auth, the third IAM prefix, rates, and token accounting against Converse.
 ---
 
-<Callout type="info" title="Audience">
-For the customer's engineer. Every claim on this page was verified live on **2026-07-28**
-against `us-east-1`. Source: `agents/mantle.py` (1,372 lines, with the measurements as
-module data rather than as comments) and `tests/test_mantle.py` (**82 tests**).
-</Callout>
+*For the customer's engineer. Every claim was verified live on 2026-07-28 against us-east-1.*
+
+`bedrock-mantle` is a different endpoint from Bedrock Converse, with a different auth mechanism, a
+different IAM action prefix, no inference-profile prefixes, and two base-URL paths that each serve
+a disjoint set of models. Sources: `agents/mantle.py`, which carries the measurements as module
+data rather than as comments, and `tests/test_mantle.py` (**82 tests**).
+
+## Auth and routing path
+
+<Mermaid
+  title="From credentials to a model, in the order the module does it"
+  chart={`
+flowchart LR
+  T["provide_token(region)<br/>bearer, short-lived"] --> R["resolve_mantle_region"]
+  R --> U["base_url_for(region)<br/>/openai/v1 or /v1"]
+  U --> M["model id, bare<br/>openai.gpt-5.6-luna"]
+  M --> C["responses.create<br/>reasoning effort, no temperature"]
+`}
+/>
+
+Each stage has its own failure mode and none of them says what it means: a missing token presents
+as `MantleUnavailable`, a wrong path presents as a 400 blaming the *model*, and a wrong hostname
+presents as NXDOMAIN that reads like a VPC problem.
 
 ## Why this endpoint is in the architecture at all
 
-The master synthesizer runs on **GPT-5.6 Luna**, and it is there on a measurement, not a
+Master synthesis runs on **GPT-5.6 Luna**, and it is there on a measurement rather than a
 preference. GPT-5.x models are **not served on Bedrock Converse or InvokeModel** —
 `strands.models.BedrockModel` cannot reach them, and `converse` rejects the id with
-`ValidationException: The provided model identifier is invalid`. They are available only on
-the `bedrock-mantle` endpoint through the OpenAI Responses API.
+`ValidationException: The provided model identifier is invalid`. Only the `bedrock-mantle`
+endpoint serves them, through the OpenAI Responses API.
 
-The eight *specialists* stay on Claude. That decision, and the one deterministic metric that
-made it, is on [the cross-family study](/docs/model-selection/cross-family-study).
+Eight *specialists* stay on Claude. That decision and the one deterministic metric that made it
+are on [Cross-family study](/docs/model-selection/cross-family-study).
 
-## The base URL is the whole trap
+## Base URL: two paths, disjoint model sets
 
-<Callout type="error" title="Symptom first">
-**What you see, case 1.** DNS does not resolve at all — NXDOMAIN. This looks exactly like a
-permissions or VPC problem and is not one.
+Hostname is `bedrock-mantle.{region}.api.aws` — **not** `.amazonaws.com`, which does not exist.
+Two paths sit on that host and they are **mutually exclusive**. All four combinations were
+measured, 2026-07-28, us-east-1.
 
-*Cause:* the hostname is `bedrock-mantle.{region}.api.aws`, **not** `.amazonaws.com`. The
-`.amazonaws.com` form does not exist.
+| Base URL path | Model | Result | Serves |
+|---|---|---|---|
+| `/v1` | `openai.gpt-oss-120b` | **200** | open-weight `gpt-oss` |
+| `/v1` | `openai.gpt-5.6-luna` | **400** `validation_error` — *"does not support the '/v1/responses' API"* | — |
+| `/openai/v1` | `openai.gpt-oss-120b` | **400** `validation_error` | — |
+| `/openai/v1` | `openai.gpt-5.6-luna` | **200** | frontier `gpt-5.6` |
 
-**What you see, case 2.** A `400 validation_error` reading
+**Neither path serves both families.**
 
-```
-The model 'openai.gpt-5.6-luna' does not support the '/v1/responses' API
-```
+<Callout type="warn" title="Strands' own documentation leads you into the 400">
+Strands' docs for `OpenAIResponsesModel` show `/v1` with `openai.gpt-oss-120b`. That pair is
+correct — and **wrong for GPT-5.6**. Following it verbatim produces the 400 above, whose wording
+points at the model rather than at the path, which is what makes it cost an afternoon.
 
-which reads like the model is unavailable in your account. It is not. **The path is wrong.**
-</Callout>
-
-There are two paths on the same host and they are **mutually exclusive**. All four
-combinations were measured, 2026-07-28, us-east-1:
-
-| Base URL path | Model | Result |
-|---|---|---|
-| `/v1` | `openai.gpt-oss-120b` | **200** |
-| `/v1` | `openai.gpt-5.6-luna` | **400** `validation_error` — *"does not support the '/v1/responses' API"* |
-| `/openai/v1` | `openai.gpt-oss-120b` | **400** `validation_error` |
-| `/openai/v1` | `openai.gpt-5.6-luna` | **200** |
-
-So one path serves the open-weight `gpt-oss` family and the other serves the frontier
-`gpt-5.6` family. **Neither serves both.**
-
-<Callout type="warn" title="The Strands documentation leads you into the 400">
-Strands' documentation for its `OpenAIResponsesModel` provider shows `/v1` with
-`openai.gpt-oss-120b`. That pair is correct — and it is **wrong for GPT-5.6**. Following it
-verbatim produces the 400 above, whose wording points at the model rather than at the path.
-
-`agents/mantle.py` carries both templates as named constants so the distinction is
-discoverable rather than folklore:
+Both templates are named constants in `agents/mantle.py` so the distinction is discoverable rather
+than folklore:
 
 ```python
 MANTLE_BASE_URL_TEMPLATE             = "https://bedrock-mantle.{region}.api.aws/openai/v1"
 MANTLE_OPEN_WEIGHT_BASE_URL_TEMPLATE = "https://bedrock-mantle.{region}.api.aws/v1"
 ```
 
-Nothing in the module calls the second one — `gpt-oss` models are also on Converse and go
-through Strands normally — but it is recorded so nobody re-derives the four-way table.
+Nothing in the module calls the second — `gpt-oss` models are also on Converse and go through
+Strands normally — but it is recorded so nobody re-derives the four-way table.
 </Callout>
 
-## Auth is a bearer token, not SigV4 request signing
+## Bearer token, not SigV4 request signing
 
 ```python
 from aws_bedrock_token_generator import provide_token
@@ -76,32 +78,23 @@ from aws_bedrock_token_generator import provide_token
 OpenAI(base_url=base_url_for(region), api_key=provide_token(region=region))
 ```
 
-<Callout type="warn" title="Tokens are short-lived — mint per call, not per process">
-`agents/mantle.py` mints one per call rather than caching across a long-running runtime. If
-you hold a model object for hours (which the native Strands provider invites, because the
-token is baked into `client_args` at construction), you must rebuild it. The docstring on
-`build_responses_model` says so explicitly for that reason.
-</Callout>
+Tokens are short-lived, so `agents/mantle.py` mints one **per call** rather than caching across a
+long-running runtime. Holding a model object for hours — which the native Strands provider
+invites, because the token is baked into `client_args` at construction — requires rebuilding it,
+and `build_responses_model`'s docstring says so for that reason.
 
-**IAM needs `bedrock-mantle:CreateInference`** — AWS managed policy
-`AmazonBedrockMantleInferenceAccess`. Note that this is a **third** action prefix, distinct
-from both `bedrock:` and `bedrock-agentcore:`. A principal with full `bedrock:*` cannot call
-this endpoint.
-
-*Symptom of the missing permission:* `MantleUnavailable` raised at token-mint time, with the
-module's own message naming the action:
-
-```text
-could not mint a Bedrock bearer token for {region}: …
-The principal needs bedrock-mantle:CreateInference (AmazonBedrockMantleInferenceAccess).
-```
+**IAM needs `bedrock-mantle:CreateInference`**, AWS managed policy
+`AmazonBedrockMantleInferenceAccess`. That is a **third** action prefix, distinct from both
+`bedrock:` and `bedrock-agentcore:`, so a principal with full `bedrock:*` cannot call this
+endpoint. Missing it raises `MantleUnavailable` at token-mint time, with the module's own message
+naming the action.
 
 ## Model ids, regions, and rates
 
-There is **no `global.*` or `us.*` prefix and no cross-region inference** on this endpoint.
-The id is bare (`openai.gpt-5.6-luna`) and the call is **in-region only**.
+There is **no `global.*` or `us.*` prefix and no cross-region inference** here. The id is bare
+(`openai.gpt-5.6-luna`) and the call is **in-region only**.
 
-Rates, $ per 1M tokens, from `MANTLE_RATES_PER_MTOK`:
+Rates in $ per 1M tokens, read from `MANTLE_RATES_PER_MTOK`:
 
 | Model | Input | Cache read | Output | Available in |
 |---|---:|---:|---:|---|
@@ -111,50 +104,30 @@ Rates, $ per 1M tokens, from `MANTLE_RATES_PER_MTOK`:
 | `openai.gpt-5.5` | 5.50 | 0.55 | 33.00 | us-east-1, us-east-2 |
 | `openai.gpt-5.4` | 2.75 | 0.275 | 16.50 | us-east-1, us-east-2, us-west-2, us-gov-west-1 |
 
-<Callout type="error" title="Cache-WRITE tokens bill at 1.25x input, and omitting them under-reported a call by 62%">
-GPT-5.6 bills tokens written to cache at **1.25× the uncached input rate** (a 30-minute
-cache). Implicit caching is **on by default**, so a first call against a large prompt reports
-most of its input as `cacheWriteInputTokens` — and that term dominates the bill.
+<Callout type="error" title="Cache-write tokens bill at 1.25x input, and omitting them under-reported a call by 62%">
+GPT-5.6 bills tokens written to cache at **1.25× the uncached input rate** on a 30-minute cache,
+and implicit caching is **on by default**. So a first call against a large prompt reports most of
+its input as `cacheWriteInputTokens`, and that term dominates the bill.
 
-Measured: a Luna synthesis reported `cacheWriteInputTokens=6740`, which is **$0.00927 of a
-$0.01499 call — 62% of the total.** Drop the term and you under-report by that much.
+Measured: a Luna synthesis reported `cacheWriteInputTokens=6740`, worth **$0.00927 of a $0.01499
+call — 62% of the total.** Drop the term and you under-report by that much.
 
-GPT-5.4 and GPT-5.5 cache automatically with **no write charge**, so their multiplier is
-`0.0`. Both are in `CACHE_WRITE_MULTIPLIER` rather than assumed.
-
-`rates_for()` **raises** on an unpriced id instead of defaulting, so a new model cannot enter
-a cost-reported path silently.
+GPT-5.4 and GPT-5.5 cache automatically with **no write charge**, so their multiplier is `0.0`.
+Both sit in `CACHE_WRITE_MULTIPLIER` rather than being assumed. `rates_for()` **raises** on an
+unpriced id instead of defaulting, so a new model cannot enter a cost-reported path silently.
 </Callout>
 
-## These are reasoning models: `temperature` is ignored
+## Token accounting against Converse
 
-```python
-client.responses.create(
-    model=model_id,
-    input=prompt,
-    reasoning={"effort": resolved_effort},   # not temperature / top_p / top_k
-    max_output_tokens=max_output_tokens,
-    store=False,
-)
-```
+Same word, two meanings. Normalisation is what lets `agents/pricing.py` stay correct across both
+families without a per-family branch in the cost path.
 
-`temperature`, `top_p` and `top_k` are **ignored**. Effort values:
-`none | low | medium | high | xhigh | max`. Measured on this repo's synthesis prompt, `low`
-and `medium` both returned a valid 21-key object; **`low` is the default** here because the
-master prompt is an explicit instruction set, not a puzzle.
-
-The one place effort is turned up deliberately is the GPT judge
-(`evals/judge_sol.py`, `effort="high"`) — the whole value of a second judge is that it
-reasons independently rather than pattern-matching prose.
-
-## Token accounting differs from Converse, and is normalised
-
-| | Bedrock Converse | Responses API |
-|---|---|---|
-| `inputTokens` / `input_tokens` | **non-cached only** | **total prompt, cached included** |
-
-`agents/mantle.py::_usage` subtracts, so a cached token is billed **once**, at the cache
-rate, for both families:
+| Concern | Bedrock Converse | Responses API | How `agents/mantle.py::_usage` reconciles |
+|---|---|---|---|
+| `inputTokens` / `input_tokens` | **non-cached only** | **total prompt, cached included** | subtracts cached and written from the total |
+| Cached tokens | separate `cacheReadInputTokens` | inside `input_tokens` | carried out into its own key |
+| Cache-written tokens | separate `cacheWriteInputTokens` | inside `input_tokens` | carried out into its own key |
+| Net effect on billing | one rate table applies | would double-count without the subtraction | a cached token is billed **once**, at the cache rate, for both families |
 
 ```python
 {
@@ -166,53 +139,64 @@ rate, for both families:
 }
 ```
 
-That normalisation is what lets `agents/pricing.py` stay correct across two families without
-a per-family branch in the cost path.
+## Reasoning models ignore `temperature`
+
+```python
+client.responses.create(
+    model=model_id,
+    input=prompt,
+    reasoning={"effort": resolved_effort},   # not temperature / top_p / top_k
+    max_output_tokens=max_output_tokens,
+    store=False,
+)
+```
+
+`temperature`, `top_p` and `top_k` are **ignored**. Effort values are
+`none | low | medium | high | xhigh | max`. Measured on this repo's synthesis prompt, `low` and
+`medium` both returned a valid 21-key object; **`low` is the default** here because the master
+prompt is an explicit instruction set rather than a puzzle.
+
+Effort is turned up deliberately in exactly one place: the GPT judge (`evals/judge_sol.py`,
+`effort="high"`), where the whole value of a second judge is that it reasons independently instead
+of pattern-matching prose.
 
 ## Region is a measured choice, not a deployment accident
 
-<Callout type="warn" title="`resolve_mantle_region` deliberately does NOT read AWS_REGION">
-Where the stack happens to be deployed says nothing about which region answers a mantle call
-fastest — and it measurably matters. With `AWS_REGION=us-west-2` an earlier revision sent
-every Luna synthesis to us-west-2, which measured **5.02 s p50 against us-east-1's 4.61 s**
-(n=3 each, on the real 31,343-character prompt): an 8.9% latency tax paid for no reason. A
-mantle call is in-region only and has no cross-region profile, so co-locating it with the
-Converse specialists buys nothing either.
+`resolve_mantle_region` deliberately does **not** read `AWS_REGION`. Where the stack happens to be
+deployed says nothing about which region answers a mantle call fastest, and it measurably matters:
+with `AWS_REGION=us-west-2` an earlier revision sent every Luna synthesis to us-west-2, which
+measured **5.02 s p50 against us-east-1's 4.61 s** (n=3 each, on the real 31,343-character prompt)
+— an 8.9% latency tax paid for nothing. A mantle call is in-region only with no cross-region
+profile, so co-locating it with the Converse specialists buys nothing either.
 
 Precedence, most explicit first:
 
 1. an explicit `region=` argument,
-2. `BEDROCK_MANTLE_REGION` (the operator override — data residency, a new region, or simply
-   disagreeing with the measurement),
+2. `BEDROCK_MANTLE_REGION`, the operator override for data residency, a new region, or simply
+   disagreeing with the measurement,
 3. the measured-fastest region for that model,
 4. the model's first declared available region,
 5. `DEFAULT_MANTLE_REGION` = `us-east-1`.
 
-Steps 1 and 2 are still subject to the availability check: a requested region the model is
-not served in is **replaced**, because the alternative is a confusing 404. And an *unmeasured*
-model falls back to declared availability order — absence is treated as "unknown", never as
-"slow".
-</Callout>
+Steps 1 and 2 remain subject to the availability check: a requested region the model is not served
+in is **replaced**, because the alternative is a confusing 404. An *unmeasured* model falls back to
+declared availability order — absence is treated as "unknown", never as "slow". The full matrix,
+why a short-prompt probe ranks regions differently, and the third-party readings it is checked
+against are on [Region matrix](/docs/model-selection/regions).
 
-The full measured matrix, why a short-prompt probe ranks the regions differently, and the
-third-party readings it is checked against, are on
-[the region matrix page](/docs/model-selection/regions).
-
-## The native Strands provider
+## Native Strands provider
 
 `strands.models.openai_responses.OpenAIResponsesModel` is the ergonomic way to reach this
 endpoint: a GPT model becomes an ordinary `strands.Agent` — same fan-out, same hooks, the
-customer's verbatim prompt in a real `system_prompt` rather than concatenated into one
-Responses `input` string, and the same `result.metrics.accumulated_usage` surface.
+customer's verbatim prompt in a real `system_prompt` rather than concatenated into one Responses
+`input` string, and the same `result.metrics.accumulated_usage` surface.
 
-It was **not usable on `strands-agents==1.26.0`** for two verified reasons:
-
-- it does not exist there — `ImportError: No module named 'strands.models.openai_responses'`;
-- it requires `openai>=2.0.0`, and the installed SDK was 1.107.3.
-
-Both were resolved by the [SDK upgrade](/docs/platform/sdk-upgrade) to `strands-agents==1.50.2`
-and `openai>=2.49.0`. `agents.mantle.responses_provider_available()` reports which path is
-live, and `build_responses_model()` returns the native object:
+It was **not usable on `strands-agents==1.26.0`** for two verified reasons: it does not exist
+there (`ImportError: No module named 'strands.models.openai_responses'`), and it requires
+`openai>=2.0.0` against an installed 1.107.3. Both were resolved by the
+[SDK upgrade](/docs/platform/sdk-upgrade) to `strands-agents==1.50.2` and `openai>=2.49.0`.
+`agents.mantle.responses_provider_available()` reports which path is live, and
+`build_responses_model()` returns the native object.
 
 ```python
 OpenAIResponsesModel(
@@ -227,18 +211,15 @@ OpenAIResponsesModel(
 )
 ```
 
-<Callout type="info" title="Migrating does not delete this module">
-When the native provider takes over, `agents/mantle.py` collapses to a thin factory — but the
-**cost and region tables stay**, because Strands prices nothing and chooses no region. The
-1.25× cache-write multiplier, the per-variant rate card, the availability map and the measured
-latency matrix have no home in the SDK.
-</Callout>
+Migrating does not delete this module. When the native provider takes over, `agents/mantle.py`
+collapses to a thin factory — but the **cost and region tables stay**, because Strands prices
+nothing and chooses no region. The 1.25× cache-write multiplier, the per-variant rate card, the
+availability map and the measured latency matrix have no home in the SDK.
 
 ## Re-deriving the measurements instead of trusting them
 
-The latency matrix is re-derivable, and the command is double-gated exactly like the
-benchmark's live mode, because it is *trials × models × regions* billed calls on a
-31,343-character prompt:
+The latency matrix is re-derivable, and the command is double-gated exactly like the benchmark's
+live mode, because it is *trials × models × regions* billed calls on a 31,343-character prompt.
 
 ```bash
 # Print the recorded table and spend nothing.
@@ -251,31 +232,31 @@ AGENTCORE_MANTLE_ALLOW_MEASURE=1 python3 -m agents.mantle --measure
 AGENTCORE_MANTLE_ALLOW_MEASURE=1 python3 -m agents.mantle --measure --dry-run
 ```
 
-Four refusals are built into that path and each exists because the alternative is a
-misleading number:
+Four refusals are built into that path, each because the alternative is a misleading number.
 
 | Refusal | Reason |
 |---|---|
-| `--measure` without `AGENTCORE_MANTLE_ALLOW_MEASURE=1` | Two gates, deliberately. |
-| `--trials` below 3 | A cell below the minimum is dropped from the ranking anyway, so the run would spend money and change nothing. |
-| An **unpriced** model id | Refuses to measure what it cannot cost. |
-| A prompt more than 25% away from 31,343 chars | Labelled **NOT comparable** with the recorded table, because the ranking turns on the TTFT-versus-throughput balance, which is a function of prompt and reply size. |
+| `--measure` without `AGENTCORE_MANTLE_ALLOW_MEASURE=1` | Two gates, deliberately |
+| `--trials` below 3 | A cell below the minimum is dropped from the ranking anyway, so the run would spend money and change nothing |
+| An **unpriced** model id | Refuses to measure what it cannot cost |
+| A prompt more than 25% away from 31,343 chars | Labelled **NOT comparable** with the recorded table, because the ranking turns on the TTFT-versus-throughput balance, a function of prompt and reply size |
 
-The spend estimate is an explicit **upper bound** with its basis stated: input estimated at
-chars/4 (there is no `CountTokens` API on this endpoint, so a real pre-flight count is not
-available) priced at the 1.25× cache-write rate, and output priced at the full
-`max_output_tokens` cap, which no measured call reached. It is never presented as a
-measurement.
+## Still unknown
+
+**The spend estimate for a measurement run is an upper bound, not a measurement**, and its basis is
+stated where it is printed: input estimated at chars/4, because there is no `CountTokens` API on
+this endpoint and a real pre-flight count is unavailable, priced at the 1.25× cache-write rate;
+output priced at the full `max_output_tokens` cap, which no measured call reached.
 
 <Cards>
   <Card
-    title="The region matrix"
+    title="Region matrix"
     href="/docs/model-selection/regions"
     description="Eight measured cells, n=3 each, and why a 32-token probe ranks regions differently."
   />
   <Card
-    title="Why the synthesizer is on Luna"
+    title="Synthesizer selection"
     href="/docs/model-selection/synthesizer"
-    description="The measurement that moved it, and why Sol is the worst GPT variant here rather than the best."
+    description="The measurement that moved synthesis to Luna, and why Sol is the worst GPT variant here."
   />
 </Cards>

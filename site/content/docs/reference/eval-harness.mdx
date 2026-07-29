@@ -1,29 +1,16 @@
 ---
-title: The eval harness
-description: bench.py, tier_quality.py, set_comparison.py, judge_sol.py and tail_analysis.py — what each one measures, how to re-run it, what it refuses to report, and its spend gate.
+title: Eval harness
+description: bench.py, tier_quality.py, set_comparison.py, judge_sol.py and tail_analysis.py — what each measures, how to re-run it, what it refuses to report, and its spend gate.
 ---
 
-<Callout type="info" title="Audience">
-For the customer's engineer, and for whoever has to re-run any of this after the engagement.
-Five modules, ~9,600 lines, and one rule they all serve: **a number shown to the customer is
-either a real measurement from a named run in this repo, or it is the customer's own reported
-figure with attribution. There is no third category.**
-</Callout>
+*For the customer's engineer, and for whoever has to re-run any of this after the engagement.*
 
-## Why the harness exists at all
+Five modules, ~9,600 lines, one rule they all serve: **a number shown to the customer is either a
+real measurement from a named run in this repo, or it is the customer's own reported figure with
+attribution. There is no third category.** Total measured spend across all committed studies is
+**$28.89**.
 
-The pre-port demo computed its headline claim — "26 s sequential → 8.5 s parallel" — from a
-hand-written `NOMINAL_LATENCY_S` dict, and printed `time.sleep(nominal * 0.05)` beside it as
-"measured wall-clock". Per-agent cost came from a hard-coded `NOMINAL_TOKENS` table. Every one
-of those figures was invented, and `agents/models.py` now carries an explicit prohibition:
-
-> *"There is no latency table in this module. … Nothing in this module may be used to predict
-> latency."*
-
-`evals/bench.py` replaced all of it, and `tests/test_bench.py` (**133 tests**) fails CI if that
-style of fabrication returns.
-
-## The five modules at a glance
+## Five modules at a glance
 
 | Module | Question it answers | Committed artifact | Measured spend |
 |---|---|---|---:|
@@ -33,33 +20,36 @@ style of fabrication returns.
 | `evals/judge_sol.py` | (the GPT half of the two-judge design — not a standalone study) | contributes verdicts to the above | included above |
 | `evals/tail_analysis.py` | Why is there a 75 s max, and what would remove it? | `evals/results/tail_analysis.json` + `.md` | **$0.6278** (the live cap sweep) |
 
-Total measured spend across all committed studies: **$28.89**.
+## Why the harness exists at all
+
+Fabrication is why. The pre-port demo computed its headline claim — "26 s sequential → 8.5 s parallel" — from a
+hand-written `NOMINAL_LATENCY_S` dict, and printed `time.sleep(nominal * 0.05)` beside it as
+"measured wall-clock". Per-agent cost came from a hard-coded `NOMINAL_TOKENS` table. Every one of
+those figures was invented, and `agents/models.py` now carries an explicit prohibition against
+holding any latency table at all.
+
+`evals/bench.py` replaced all of it, and `tests/test_bench.py` (**133 tests**) fails CI if that style
+of fabrication returns.
 
 ## Two rules that apply to every module
 
-<Callout type="warn" title="1. Percentiles are refused below a documented sample count">
-| Percentile | Minimum n | Why |
+**Percentiles are refused below a documented sample count.** A refused percentile is `null` in the
+JSON with its reason recorded beside it, for example
+`"p99": "refused: 42 sample(s), need >= 100. A p99 over 42 sample(s) is not a p99."`
+
+| Percentile | Minimum n | Why that number |
 |---|---:|---|
-| p50 | **5** | A three-sample median is not worth showing a customer. (The arithmetic floor would be 2.) |
-| p95 | **20** | 1/(1−0.95) — below this the tail cannot be observed. |
-| p99 | **100** | 1/(1−0.99). |
+| p50 | **5** | A three-sample median is not worth showing a customer. The arithmetic floor would be 2 |
+| p95 | **20** | 1/(1−0.95) — below this the tail cannot be observed |
+| p99 | **100** | 1/(1−0.99) |
 
-A refused percentile is `null` in the JSON **with its reason recorded beside it**, e.g.
+Percentiles are **nearest-rank with no interpolation**, so every published value is a value the run
+actually observed — which matters most at exactly these sample sizes. The method string is recorded
+in every output, and `n/a` in a table column means the percentile was **refused**, never that it was
+zero.
 
-```
-"p99": "refused: 42 sample(s), need >= 100. A p99 over 42 sample(s) is not a p99."
-```
-
-Percentiles are **nearest-rank, no interpolation**, so every value printed is a value the run
-actually observed — which matters most at exactly these sample sizes. The method string is
-recorded in every output.
-
-`n/a` in a table column means the percentile was **refused**, never that it was zero.
-</Callout>
-
-<Callout type="warn" title="2. Live modes are double-gated">
-Every billed path requires **both** a flag and an environment variable, because the flag alone
-is one keystroke from a billed run:
+**Live modes are double-gated.** Every billed path requires both a flag and an environment variable,
+because a flag alone is one keystroke from a billed run.
 
 | Module | Gate |
 |---|---|
@@ -71,33 +61,29 @@ is one keystroke from a billed run:
 
 Each prints the full plan — applications, repetitions, call count, every model id, and a spend
 estimate — **before calling anything**, and each has a `--dry-run` that stops there.
-</Callout>
 
 ---
 
-## `evals/bench.py` — the headline benchmark
+## `evals/bench.py`: the headline benchmark
 
-Four modes, and the difference between two of them is load-bearing:
+Four modes, and the difference between two of them decides which number you may quote.
 
-| Mode | Calls a model? | Measures |
-|---|---|---|
-| `--offline` | no | **only** this repo's orchestration overhead |
-| `--live` | yes | per-call Bedrock latency/cost via *this module's own* agents |
-| `--pipeline` | yes, unless `--mock` | **the shipped pipeline**, end to end, per application |
-| `--reaggregate` | no | recomputes a committed report's statistics from its own `raw_runs` |
+| Mode | Calls a model? | What it measures | Quotable as |
+|---|---|---|---|
+| `--offline` | no | **only** this repo's orchestration overhead | orchestration overhead, labelled |
+| `--live` | yes | per-call Bedrock latency/cost via *this module's own* agents | **a** fan-out, plus per-specialist time-to-first-token |
+| `--pipeline` | yes, unless `--mock` | **the shipped pipeline**, end to end, per application | **the** fan-out — the program AgentCore runs |
+| `--reaggregate` | no | recomputes a committed report's statistics from its own `raw_runs` | nothing new; derivation only |
 
-<Callout type="error" title="`--live` is not `--pipeline`, and the distinction decides which number you may quote">
-`--live` builds its own `strands.Agent` per specialist and its own synthesis call, so it
-measures **a** fan-out rather than **the** fan-out. It does not go through `agents.fanout`'s
-semaphore, widened executor or shared botocore pool; it does not go through
-`agents.synthesize`'s structured-output validation or bounded repair; and **it cannot reach the
-GPT-5.6 synthesizer at all**, because GPT-5.x is not on Converse.
+<Callout type="error" title="`--live` is not `--pipeline`, and the committed headline comes from `--pipeline`">
+`--live` builds its own `strands.Agent` per specialist and its own synthesis call, so it measures **a**
+fan-out rather than **the** fan-out. It bypasses `agents.fanout`'s semaphore, widened executor and
+shared botocore pool; it bypasses `agents.synthesize`'s structured-output validation and bounded
+repair; and **it cannot reach the GPT-5.6 synthesizer at all**, because GPT-5.x is not on Converse.
 
-`--pipeline` calls `agents.fanout.fan_out` and `agents.synthesize.synthesize` **directly**, so
-what it times is the program AgentCore actually runs.
-
-`--live` retains exactly one advantage: it streams, so it is the only mode that measures
-**time-to-first-token** per specialist.
+`--pipeline` calls `agents.fanout.fan_out` and `agents.synthesize.synthesize` **directly**. Its one
+disadvantage: it does not stream, so `--live` remains the only mode that measures time-to-first-token
+per specialist.
 </Callout>
 
 ### Re-running it
@@ -106,8 +92,8 @@ what it times is the program AgentCore actually runs.
 # Structural dry run. Exercises the whole path, calls nothing, spends nothing.
 python -m evals.bench --pipeline --mock --repetitions 1
 
-# The committed benchmark. 14 applications x 3 repetitions = 42 adjudications,
-# 378 model calls. Measured spend for this exact command: $6.4659.
+# The committed benchmark. 14 applications x 3 repetitions = 42 adjudications.
+# Measured spend for this exact command: $6.4659.
 AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.bench --pipeline \
     --repetitions 3 --region us-east-1 \
     --json evals/results/pipeline_14x3_us-east-1.json \
@@ -124,9 +110,9 @@ python -m evals.bench --offline --concurrency 1,4,16 --iterations 40
 AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.bench --live --dry-run
 ```
 
-**Why `--repetitions 3`:** 14 × 3 = 42 clears the 20-sample minimum for a **pooled** p95. It
-does **not** clear it per application (3 each), and the report suppresses those rather than
-printing them. Reaching a p99 needs 100 pooled samples — `--repetitions 8`, roughly $18.
+Why `--repetitions 3`: 14 × 3 = 42 clears the 20-sample minimum for a **pooled** p95. It does **not**
+clear it per application, where n=3 each, and the report suppresses those rather than printing them.
+Reaching a p99 needs 100 pooled samples — `--repetitions 8`, roughly $18.
 
 ### Re-aggregating without re-spending
 
@@ -135,25 +121,25 @@ python -m evals.bench --reaggregate evals/results/pipeline_14x3_us-east-1.json \
     --markdown evals/results/pipeline_14x3_us-east-1.md
 ```
 
-Every measured field lives in `raw_runs`, so every statistic is recomputable. The provenance
-block is carried through **unchanged** — re-aggregating does not restamp the numbers with
-today's git sha — and a `reaggregated_at_utc` field plus a caveat record that the derivation,
-and only the derivation, is newer than the measurement. The committed report was
-re-aggregated this way at `2026-07-28T07:46:30+00:00`; no model was called to produce it.
+Every measured field lives in `raw_runs`, so every statistic is recomputable. The provenance block is
+carried through **unchanged** — re-aggregating does not restamp the numbers with today's git sha — and
+a `reaggregated_at_utc` field plus a caveat record that the derivation, and only the derivation, is
+newer than the measurement. The committed report was re-aggregated this way at
+`2026-07-28T07:46:30+00:00`; no model was called to produce it.
 
 ### Two fields decide whether a cost figure is real
 
-`totals.calls_with_real_usage` and `per_agent.<agent>.cost_usd.n_priced_calls`. **If either is
-`0`, no cost in that report was measured, and every cost field is `null`.**
+`totals.calls_with_real_usage` and `per_agent.<agent>.cost_usd.n_priced_calls`. **If either is `0`, no
+cost in that report was measured, and every cost field is `null`.**
 
-### The prompt-cacheability verdict is reported separately from the hit rate
+### Cacheability verdict is reported separately from the hit rate
 
-`bench.py` emits `cacheable` / `never_cacheable` / `unknown` as its own field, so a 0% hit rate
-never appears without the sentence that explains it. `unknown` means the run did not measure a
-prompt token count (offline runs cannot) and is **not** a guess.
+`bench.py` emits `cacheable` / `never_cacheable` / `unknown` as its own field, so a 0% hit rate never
+appears without the sentence that explains it. `unknown` means the run did not measure a prompt token
+count, which offline runs cannot, and is **not** a guess.
 
-Measured prompt sizes via Bedrock `CountTokens` (us-east-1, 2026-07-28, on the assembled
-prompt — verbatim system prompt + projected APP-1004 payload):
+Measured prompt sizes via Bedrock `CountTokens` (us-east-1, 2026-07-28, on the assembled prompt —
+verbatim system prompt plus projected APP-1004 payload):
 
 | Specialist | Model | Measured prompt tokens | Min cacheable prefix | Verdict |
 |---|---|---:|---:|---|
@@ -161,32 +147,29 @@ prompt — verbatim system prompt + projected APP-1004 payload):
 | `straw` | haiku-4-5 | **1,655** | 4,096 | **never caches** |
 | the other six | sonnet-5 / opus-5 | not measurable | 1,024 / 512 | unknown |
 
-`CountTokens` is not offered for every model: in us-east-1 `anthropic.claude-haiku-4-5-…`
-returns a count while `anthropic.claude-sonnet-5` and `anthropic.claude-opus-5` both raise
+`CountTokens` is not offered for every model: in us-east-1 `anthropic.claude-haiku-4-5-…` returns a
+count while `anthropic.claude-sonnet-5` and `anthropic.claude-opus-5` both raise
 `ValidationException: The provided model doesn't support counting tokens`. It also **rejects
-inference-profile prefixes** — the bare `anthropic.*` id is required. `bench.py` strips the
-prefix and reports `None` for the unsupported models rather than substituting an estimate.
+inference-profile prefixes** — the bare `anthropic.*` id is required. `bench.py` strips the prefix and
+reports `None` for the unsupported models rather than substituting an estimate.
 
 ---
 
-## `evals/tier_quality.py` — the Claude-only tier study
+## `evals/tier_quality.py`: the Claude-only tier study
 
-**48 blind-judged analyses**, 12 (agent, model) cells, one judge (Claude Opus 5). Region
-us-east-1, shuffle seed 20260728.
-
-Three **independent layers**, deliberately not one score:
+**48 blind-judged analyses**, 12 (agent, model) cells, one judge (Claude Opus 5), region us-east-1,
+shuffle seed 20260728. Three **independent layers**, deliberately not one score.
 
 <Steps>
 
 <Step>
-**Deterministic contract check** (`contract_findings`). Every rule is read out of the agent's
-own verbatim prompt at import, so a rule is only enforced for a domain whose prompt actually
-carries the sentence — and the sentence is **quoted in the finding**.
+**Deterministic contract check** (`contract_findings`). Every rule is read out of the agent's own
+verbatim prompt at import, so a rule is only enforced for a domain whose prompt actually carries the
+sentence — and the sentence is **quoted in the finding**.
 
-This is where the study's most load-bearing correction lives: the header ban appears in **four**
-of eight prompts, not six. `income` and `synthetic` never received it. A checker that
-hard-coded "6 of 8" would report violations the customer's prompt does not contain. From the
-artifact's own `contract_scope`:
+This layer holds the study's most load-bearing correction: the header ban appears in **four** of eight
+prompts, not six. `income` and `synthetic` never received it. A checker hard-coding "6 of 8" would
+report violations the customer's prompt does not contain. From the artifact's own `contract_scope`:
 
 | Rule | Applies to | n |
 |---|---|---:|
@@ -196,44 +179,41 @@ artifact's own `contract_scope`:
 | `max_4000_chars` | same six | 6 |
 | **`no_risk_label_in_headers`** | **identity, dealer, straw, employment** | **4** |
 
-`bustout` and `rings` state **none** of them. [Output-contract defects](/docs/fidelity/output-contract-defects).
+`bustout` and `rings` state **none** of them. See
+[Output-contract defects](/docs/fidelity/output-contract-defects).
 </Step>
 
 <Step>
-**Deterministic band + grounding extraction.** The band is what the analysis itself declares,
-compared against `fixtures.loader.expected_for(app)['domains'][domain]` — which carries the
-requirement id and the customer sentence justifying it.
+**Deterministic band and grounding extraction.** The band is what the analysis itself declares,
+compared against `fixtures.loader.expected_for(app)['domains'][domain]`, which carries the requirement
+id and the customer sentence justifying it.
 
-Grounding is measured against the **paired `<signal>_context` rows the payload actually
-contained**: distinctive tokens are lifted out of the example rows and looked for in the prose,
-so "cites the context field" is evidence rather than the word *context* appearing somewhere.
+Grounding is measured against the **paired `<signal>_context` rows the payload actually contained**:
+distinctive tokens are lifted out of the example rows and looked for in the prose, so "cites the
+context field" is evidence rather than the word *context* appearing somewhere.
 </Step>
 
 <Step>
-**Blind LLM judge.** The analysis text is anonymised and the order shuffled under a fixed seed
-before judging, so the judge never sees which tier wrote what and two runs judge in the same
-order.
+**Blind LLM judge.** Analysis text is anonymised and the order shuffled under a fixed seed before
+judging, so the judge never sees which tier wrote what and two runs judge in the same order.
 </Step>
 
 </Steps>
 
-<Callout type="info" title="The band is extracted TWICE, on purpose">
-The deterministic extractor and the judge each report the band they read, and the aggregation
-reports **how often they disagree**. A regex over prose is fallible; so is a model. Two
-independent readings that agree are evidence — and where they disagree the row is counted
-`band_unresolved` rather than being scored in either direction.
-</Callout>
+Bands are extracted **twice** on purpose. A deterministic extractor and the judge each report the
+band they read, and the aggregation reports **how often they disagree** — a regex over prose is
+fallible and so is a model. Two independent readings that agree are evidence, and where they disagree
+the row is counted `band_unresolved` rather than scored in either direction.
 
-<Callout type="error" title="The judge conflict, quantified rather than assumed away">
-Opus 5 was one of the three candidates *and* the judge. On its own 16 rows it scored substance
-**+0.78** and calibration **+0.31** higher than on the other 32 rows, while the
-**deterministic** band-agreement margin moved only **−0.026** and contract violations **−0.12**.
+**The judge conflict is quantified rather than assumed away.** Opus 5 was one of the three candidates
+*and* the judge. On its own 16 rows it scored substance **+0.78** and calibration **+0.31** higher than
+on the other 32 rows, while the **deterministic** band-agreement margin moved only **−0.026** and
+contract violations **−0.12**.
 
-The consequence is written into the artifact's caveats: *"Any conclusion that rests on Opus
-outscoring a cheaper tier by less than the measured self-preference margin is NOT supported."*
-That is what motivated the two-judge design in the next study.
+Its caveats state the consequence directly: any conclusion resting on Opus outscoring a
+cheaper tier by less than the measured self-preference margin is not supported. That is what motivated
+the two-judge design in the next study. See
 [Judge methodology](/docs/model-selection/judge-methodology).
-</Callout>
 
 ```bash
 # Judge analyses already paid for.
@@ -249,53 +229,50 @@ AGENTCORE_BENCH_ALLOW_LIVE=1 PYTHONPATH=. python evals/tier_quality.py \
 PYTHONPATH=. python evals/tier_quality.py --dry-run
 ```
 
-<Callout type="info" title="Reuse is why the committed run reports zero live calls">
-`live_calls` in the committed artifact reads `specialist_calls_made: 0`,
-`judge_verdicts_reused_from_cache: 48`, `reused_analyses: 48` — and `spend_actual_usd` still
-totals $4.9088, because **rows reused from an earlier sweep carry that sweep's measured cost**.
-Rows with no recorded usage contribute **nothing**, not an estimate. The `--rescore` /
-`--reuse` paths are how the aggregation can be corrected without re-spending.
-</Callout>
+Reuse is why the committed run reports zero live calls: `live_calls` reads
+`specialist_calls_made: 0`, `judge_verdicts_reused_from_cache: 48`, `reused_analyses: 48`, and
+`spend_actual_usd` still totals $4.9088, because **rows reused from an earlier sweep carry that
+sweep's measured cost**. Rows with no recorded usage contribute **nothing**, not an estimate. The
+`--rescore` / `--reuse` paths are how the aggregation can be corrected without re-spending.
 
 ---
 
-## `evals/set_comparison.py` — the cross-family study
+## `evals/set_comparison.py`: the cross-family study
 
-**4 agents × 6 applications × 5 models = 120 blind-judged analyses, 240 verdicts** (two judges
-per analysis). Claude Opus 5 and Sonnet 5; GPT-5.6 Luna, Terra and Sol. Judges: Claude Opus 5
-and GPT-5.5. `specialist_max_output_tokens: 4096` — **identical across both families on
-purpose**, because the length gap is the central question and a per-tier cap would put the
-harness's own configuration inside the measurement.
+**4 agents × 6 applications × 5 models = 120 blind-judged analyses, 240 verdicts**, two judges per
+analysis. Candidates: Claude Opus 5 and Sonnet 5; GPT-5.6 Luna, Terra and Sol. Judges: Claude Opus 5
+and GPT-5.5. `specialist_max_output_tokens: 4096` — **identical across both families on purpose**,
+because the length gap is the central question and a per-tier cap would put the harness's own
+configuration inside the measurement.
 
-It refuses three tempting shortcuts, and the refusals are the design:
+Three tempting shortcuts are refused, and the refusals are the design.
 
 | Shortcut refused | What it does instead |
 |---|---|
-| **Judging by output length** | Measures *evidence per unit length*, **paired on the same application**: distinct signals cited, distinct `_context` fields validated, whether the band's justification is complete. Brevity that drops evidence is a finding against GPT; brevity that drops padding is not. The customer's own master prompt says so (`MSTR-018`). |
-| **One judge** | Two judges biased in **opposite** directions. **Agreement is the signal; disagreement is "NOT ESTABLISHED"** — the study is allowed to return no verdict on an axis. |
-| **Letting the judges decide** | The scores that drive the recommendation are **deterministic and untouchable by a judge**: band agreement, false positives on the anti-FP fixtures, false negatives, `_context` grounding, and `agents.output_contract.check`. Judges add calibration and substance, reported as subjective. |
+| **Judging by output length** | Measures *evidence per unit length*, **paired on the same application**: distinct signals cited, distinct `_context` fields validated, whether the band's justification is complete. Brevity that drops evidence is a finding against GPT; brevity that drops padding is not. The customer's own master prompt says so (`MSTR-018`) |
+| **One judge** | Two judges biased in **opposite** directions. **Agreement is the signal; disagreement is "NOT ESTABLISHED"** — the study is allowed to return no verdict on an axis |
+| **Letting the judges decide** | The scores driving the recommendation are **deterministic and untouchable by a judge**: band agreement, false positives on the anti-FP fixtures, false negatives, `_context` grounding, and `agents.output_contract.check`. Judges add calibration and substance, reported as subjective |
 
 ### Why those six applications and not a random six
 
 Chosen for what they can **falsify**:
 
-- **APP-1009, APP-1010** are anti-false-positive fixtures — APP-1010 fires eleven alerts that
-  all share one underlying behaviour, so **any model that counts alerts escalates it.**
-- **APP-1014 rings** and **APP-1004 bustout** are the two calibration failures every Claude
-  tier shared. If GPT repeats them the fault is the prompt; if it does not, that is a point for
-  GPT no latency table shows.
-- **APP-1004** carries genuinely corroborated fraud, so **a model that says LOW to everything
-  cannot score well.**
-- **APP-1012, APP-1013** supply the POSSIBLE band, which both families are most likely to skip
-  past in either direction.
+- **APP-1009, APP-1010** are anti-false-positive fixtures — APP-1010 fires eleven alerts sharing one
+  underlying behaviour, so **any model that counts alerts escalates it.**
+- **APP-1014 rings** and **APP-1004 bustout** are the two calibration failures every Claude tier
+  shared. If GPT repeats them the fault is the prompt; if it does not, that is a point for GPT no
+  latency table shows.
+- **APP-1004** carries genuinely corroborated fraud, so **a model that says LOW to everything cannot
+  score well.**
+- **APP-1012, APP-1013** supply the POSSIBLE band, which both families are most likely to skip past
+  in either direction.
 
-<Callout type="warn" title="Coverage is 4 of 8 agents, and that is reported as the limit it is">
-`dealer`, `straw`, `employment` and `income` **never ran on GPT** — and APP-1006/1007/1008,
-three of the five designated anti-false-positive fixtures, target exactly those. Only two of
-the five anti-FP fixtures touch the four agents swept. `income` in particular has **no quality
-evidence either way**, which is one reason the partial migration was declined.
+**Coverage is 4 of 8 agents, and that is reported as the limit it is.** `dealer`, `straw`, `employment`
+and `income` **never ran on GPT** — and APP-1006/1007/1008, three of the five designated
+anti-false-positive fixtures, target exactly those. Only two of the five anti-FP fixtures touch the
+four agents swept. `income` in particular has **no quality evidence either way**, which is one reason
+the partial migration was declined. See
 [Cross-family study](/docs/model-selection/cross-family-study).
-</Callout>
 
 ```bash
 # No calls; re-scores the committed analyses.
@@ -306,94 +283,88 @@ AGENTCORE_BENCH_ALLOW_LIVE=1 PYTHONPATH=. python3 -m evals.set_comparison \
     --sweep rings,synthetic,bustout,identity --judge --live
 ```
 
-Outputs four files: the report, a markdown sidecar, `set_comparison_analyses.json` (the 120
-analyses) and `set_comparison_verdicts.json` (the 240 verdicts). Keeping the analyses and
-verdicts separate is what makes `--rescore` free.
+Four output files: the report, a markdown sidecar, `set_comparison_analyses.json` (the 120 analyses)
+and `set_comparison_verdicts.json` (the 240 verdicts). Keeping analyses and verdicts separate is what
+makes `--rescore` free.
 
 ---
 
-## `evals/judge_sol.py` — the second, oppositely-biased judge
+## `evals/judge_sol.py`: the second, oppositely-biased judge
 
-Not a standalone study: it is the GPT half of the two-judge design. **GPT-5.6 Sol**,
-`us-east-1`, `effort="high"`.
+Not a standalone study — the GPT half of the two-judge design. **GPT-5.6 Sol**, `us-east-1`,
+`effort="high"`.
 
-<Callout type="info" title="Sol specifically, and the reason is a conflict-of-interest argument">
-Sol is **the only GPT-5.6 variant that is not a candidate for any specialist assignment** —
-Luna is the leading candidate *and* the incumbent synthesizer, Terra is the middle candidate. So
-Sol is the one GPT model not scoring a sibling it might be deployed alongside. It also measured
-the highest reasoning effort of the three, which is what a judge should be.
+Sol specifically, and the reason is a conflict-of-interest argument: Sol is **the only GPT-5.6 variant
+that is not a candidate for any specialist assignment**. Luna is the leading candidate *and* the
+incumbent synthesizer; Terra is the middle candidate. So Sol is the one GPT model not scoring a
+sibling it might be deployed alongside, and it measured the highest reasoning effort of the three,
+which is what a judge should be. Note the separate finding that **Sol is the worst GPT variant on
+quality**, at 4× Luna's price — a statement about it as a *specialist*, not as a judge. See
+[Synthesizer selection](/docs/model-selection/synthesizer).
 
-Note the separate finding that **Sol is the worst GPT variant on quality**, at 4× Luna's price
-— which is a statement about it as a *specialist*, not as a judge.
-[Synthesizer](/docs/model-selection/synthesizer).
-</Callout>
+| Held identical to the Claude judge | Differs |
+|---|---|
+| Judge instructions, verbatim | Model: GPT-5.6 Sol |
+| Anonymisation | Transport: Responses API via `agents.mantle.complete` |
+| Verdict schema, same Pydantic model | JSON enforcement: stated then validated on the way back, because the Responses API has no forced tool call here |
+| The pinned expectation | — |
 
-**What is held identical:** the judge instructions, the anonymisation, the verdict schema and
-the pinned expectation all come from `evals.tier_quality` **unchanged**. Only the model and the
-transport differ — and a test asserts it uses the same instruction text, because if the prompt
-drifted between judges the comparison would be meaningless.
-
-**Why it cannot reuse `tier_quality.judge_analysis`:** that builds a Strands Agent on Converse,
-and GPT-5.x is not on Converse. This module goes through `agents.mantle.complete` and parses
-the verdict JSON itself, validating against the same Pydantic model. The Converse path gets its
-JSON shape enforced by a forced tool call; the Responses API has no such tool here, so the
-schema is **stated and then validated on the way back** — and an invalid verdict **raises**
-rather than being coerced (`tests/test_set_comparison.py` parametrises the mutations).
+A test asserts it uses the same instruction text, because if the prompt drifted between judges the
+comparison would be meaningless. And an invalid verdict **raises** rather than being coerced —
+`tests/test_set_comparison.py` parametrises the mutations.
 
 ---
 
-## `evals/tail_analysis.py` — why the tail exists
+## `evals/tail_analysis.py`: why the tail exists
 
-Reads the committed benchmark and decomposes its tail into the four causes it could have. It
-answers four questions and **refuses a fifth it cannot**:
+Reads the committed benchmark and decomposes its tail into the four causes it could have. Four
+questions answered, and a fifth refused.
 
 <Steps>
 
 <Step>
-**Where is the tail?** Per run: which agent was slowest, and whether it is the same one every
-time. Per application: how much of the spread is the application's own signal load versus
-repetition-to-repetition noise on identical input — reported as a **share of sum-of-squares,
-not an F test**, because n=3 per cell.
+**Where is the tail?** Per run: which agent was slowest, and whether it is the same one every time.
+Per application: how much of the spread is the application's own signal load versus
+repetition-to-repetition noise on identical input — reported as a **share of sum-of-squares, not an F
+test**, because n=3 per cell.
 </Step>
 
 <Step>
-**Is it output length?** Every specialist call has both a wall clock and a real `outputTokens`,
-so the line is fitted and `r²` reported per domain — **with and without the runs identified as
-stalls**, because one stall destroys a correlation and hides the very effect being tested.
+**Is it output length?** Every specialist call has both a wall clock and a real `outputTokens`, so the
+line is fitted and `r²` reported per domain — **with and without the runs identified as stalls**,
+because one stall destroys a correlation and hides the very effect being tested.
 </Step>
 
 <Step>
-**Is it retries?** A retry sleeps *inside* the call, so it shows up as wall clock **exceeding**
-the model's own `latencyMs`. That gap is computable per call, which makes the retry theory
-falsifiable rather than assumed. Measured answer: **0 throttles in 336 calls**, and the gap is
-0.73 s p50 / 1.69 s p95 over n=334.
+**Is it retries?** A retry sleeps *inside* the call, so it shows up as wall clock **exceeding** the
+model's own `latencyMs`. That gap is computable per call, which makes the retry theory falsifiable
+rather than assumed. Measured answer: **0 throttles in 336 calls**, gap **0.73 s p50 / 1.69 s p95 over
+n=334**.
 </Step>
 
 <Step>
-**What is the floor?** `asyncio.gather` cannot return before its slowest member, so the
-distribution of `slowest_specialist_wall_ms` **is** the fan-out floor, and
-`fanout_wall_ms − slowest_specialist_wall_ms` is everything orchestration adds. **A fix that
-does not move the floor does not move end-to-end.**
+**What is the floor?** `asyncio.gather` cannot return before its slowest member, so the distribution of
+`slowest_specialist_wall_ms` **is** the fan-out floor, and
+`fanout_wall_ms − slowest_specialist_wall_ms` is everything orchestration adds. **A fix that does not
+move the floor does not move end-to-end.**
 </Step>
 
 </Steps>
 
-<Callout type="error" title="What it deliberately does not do: model a configuration it did not run">
-`cap_binding_census` reports how many **measured** calls a candidate `max_tokens` would have
-truncated — a count of observed output lengths, **not** a predicted latency. The saving from a
-cap is only ever claimed from `--live`, which re-invokes the agent with the cap actually
-applied.
+<Callout type="error" title="What it refuses: modelling a configuration it did not run">
+`cap_binding_census` reports how many **measured** calls a candidate `max_tokens` would have truncated
+— a count of observed output lengths, **not** a predicted latency. Any saving from a cap is only ever
+claimed from `--live`, which re-invokes the agent with the cap actually applied. The module's own
+words: holding tokens constant across a config change is exactly the error this repo already made
+once.
 
-> *"Holding tokens constant across a config change is exactly the error this repo already made
-> once."*
-
-The live sweep — 30 calls, $0.6278, caps 1024/1536/2048/3072/4096 on bustout and rings over
-APP-1004/1012/1013, with **4096 re-run in the same session as the control** so the delta is not
-against another day's run — is why the proposed `max_tokens` fix is recorded as having
-**failed**: 5 of 10 comparable cells faster and 5 slower (p50 delta −1.52 s), **14 of 30
-truncated**, and only **13 of 30 agreeing on band** with 14 bands lost entirely. Its own quality
-gate says a cap is a fix only if it *(a)* lowers wall clock, *(b)* truncates nothing and
-*(c)* leaves every band unchanged. It failed all three. [The tail](/docs/performance/the-tail).
+That live sweep — 30 calls, $0.6278, caps 1024/1536/2048/3072/4096 on bustout and rings over
+APP-1004/1012/1013, with **4096 re-run in the same session as the control** so the delta is not against
+another day's run — is why the proposed `max_tokens` fix is recorded as having **failed**: 5 of 10
+comparable cells faster and 5 slower (p50 delta −1.52 s), **14 of 30 truncated**, and only **13 of 30
+agreeing on band**. Its own quality gate says a cap is a fix only if it lowers wall clock, truncates
+nothing, and leaves every band unchanged. It failed all three. See
+[Latency tail](/docs/performance/the-tail).
 </Callout>
 
 ```bash
@@ -407,17 +378,17 @@ AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.tail_analysis --live \
     --applications APP-1004,APP-1012,APP-1013
 ```
 
-A `STALL` in this module means a **single specialist** call crossing 60 s. That threshold is not
-an outlier rule — it is the customer's own sub-minute target applied to one agent, because one
-specialist consuming the entire end-to-end budget is a different physical event from a verbose
-specialist and the two must not be pooled.
+A `STALL` in this module means a **single specialist** call crossing 60 s. Not an outlier rule — it is
+the customer's own sub-minute target applied to one agent, because one specialist consuming the entire
+end-to-end budget is a different physical event from a verbose specialist and the two must not be
+pooled.
 
 ---
 
-## The in-platform evaluators, and the golden dataset
+## In-platform evaluators, and where they stand
 
-Three evaluator configs in `evals/evaluators/` are written and schema-checked but **not yet
-registered against a deployed runtime**:
+Three evaluator configs in `evals/evaluators/` are written and schema-checked but **not yet registered
+against a deployed runtime**:
 
 | File | Level | Type |
 |---|---|---|
@@ -425,33 +396,31 @@ registered against a deployed runtime**:
 | `pp_false_positive_discipline.json` | TRACE | llm-as-a-judge |
 | `pp_output_contract_check.json` | SESSION | code-based |
 
-They were validated **against the AgentCore CLI's own Zod schema** (`EvaluatorSchema` from
-`@aws/agentcore/dist/schema/schemas/agentcore-project.js`), and the golden dataset against the
-CLI's own `parseAndValidate` — *"because a shape that only satisfies our own tests is not
-evidence."* Registration commands are in `evals/README.md`; the gap is listed under
+They were validated against the AgentCore CLI's own Zod schema (`EvaluatorSchema` from
+`@aws/agentcore/dist/schema/schemas/agentcore-project.js`), and the golden dataset against the CLI's
+own `parseAndValidate` — because a shape that only satisfies our own tests is not evidence.
+Registration commands are in `evals/README.md`; the gap is listed under
 [production hardening](/docs/platform/deployment#production-hardening-still-open).
 
 ## What has NOT been measured
 
-The harness's own list, reproduced because the exclusions are as load-bearing as the figures:
+Reproduced from the harness's own list, because the exclusions are as load-bearing as the figures.
 
 - **A p99 of anything.** n=42; a p99 needs 100. `--repetitions 8` (~$18) would reach it.
 - **A per-application p95.** n=3 each, all suppressed. Only the pooled p95 is supportable.
-- **Throughput or latency under concurrent load.** The benchmark ran **one application at a
-  time**. The one `server_5xx` pair observed at concurrency 1 is a reason to expect the question
-  to matter.
-- **Prompt-cache hit rate under repeat load.** Every specialist call measured a miss, and that
-  is documented behaviour rather than a defect.
+- **Throughput or latency under concurrent load.** The benchmark ran **one application at a time**.
+  The one `server_5xx` pair observed at concurrency 1 is a reason to expect the question to matter.
+- **Prompt-cache hit rate under repeat load.** Every specialist call measured a miss, which is
+  documented behaviour rather than a defect.
 - **Accuracy.** The benchmark measures whether an adjudication *validated* and whether repeats
-  *agreed* — not whether the verdict is right. Three pin disagreements are surfaced, not
-  resolved.
-- **AgentCore Runtime overhead** — cold start, session setup, SSE framing. **The single largest
-  known gap** between 31.45 s p50 and what a deployed customer would see.
+  *agreed* — not whether the verdict is right. Three pin disagreements are surfaced, not resolved.
+- **AgentCore Runtime overhead** — cold start, session setup, SSE framing. **The single largest known
+  gap** between 31.45 s p50 and what a deployed customer would see.
 - **Any region other than `us-east-1`** for the pipeline as a whole.
-- **Any Snowflake comparison.** This repo has never run the customer's Snowflake pipeline and
-  cannot. Their reported figures (4,500 applications over 48 h; $700K–$1M ARR) are **theirs, by
-  attribution**, and must never sit beside one of ours as though both were measured the same
-  way. [Snowflake comparison](/docs/cost/snowflake-comparison).
+- **Any Snowflake comparison.** This repo has never run the customer's Snowflake pipeline and cannot.
+  Their reported figures — 4,500 applications over 48 h, $700K–$1M ARR — are **theirs, by
+  attribution**, and must never sit beside one of ours as though both were measured the same way. See
+  [Snowflake comparison](/docs/cost/snowflake-comparison).
 
 <Cards>
   <Card
@@ -462,6 +431,6 @@ The harness's own list, reproduced because the exclusions are as load-bearing as
   <Card
     title="Artifact index"
     href="/docs/reference/artifact-index"
-    description="Every file under evals/results/ with its schema, n, spend, and what it can and cannot support."
+    description="Every file under evals/results/ with its n, its spend, and what it can and cannot support."
   />
 </Cards>

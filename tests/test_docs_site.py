@@ -297,6 +297,76 @@ def test_quoted_refusal_strings_match_the_artifact() -> None:
     assert not offences, "misquoted refusal strings:\n" + "\n".join(offences)
 
 
+def test_per_cell_grounding_in_tables_matches_the_artifact_exactly() -> None:
+    """A per-cell grounding median in a table must carry the artifact's own digits.
+
+    ``_context`` grounding is the metric that decided the specialists stay on
+    Claude, so its digits are load-bearing. A prose rewrite re-rounded three table
+    cells from the artifact's ``0.3575`` to ``0.358``; a reader checking that
+    against the JSON cannot tell whether the page rounded or the study moved.
+
+    Scope is deliberately narrow -- **table cells only**. Two different grounding
+    quantities appear on this site and only one of them is a per-cell median:
+
+    * per-cell medians, e.g. ``0.3575``, from ``per_set_verdict[].candidates[]``.
+      These are what comparison tables show, and they must be verbatim.
+    * pooled per-analysis means, ``0.642`` (Claude, n=48) and ``0.357`` (GPT,
+      n=72), computed across ``per_analysis[].grounding.grounded_fraction``.
+      ``0.357`` is a legitimate 3-decimal rounding of ``0.3572`` and is NOT a
+      truncation of the per-cell ``0.3575``, even though it looks like one.
+
+    An earlier version of this test checked prose too and flagged both pooled
+    figures as defects. They were correct; the test was wrong. Hence the narrowing,
+    and hence this note.
+    """
+    pages = _require_pages()
+    artifact = REPO_ROOT / "evals" / "results" / "set_comparison.json"
+    if not artifact.is_file():
+        pytest.skip("set_comparison artifact is not present in this checkout")
+
+    import json
+
+    data = json.loads(artifact.read_text(encoding="utf-8"))
+    medians: set[str] = set()
+    for row in data.get("per_set_verdict", []):
+        for entry in [row.get("incumbent_scores") or {}, *(row.get("candidates") or [])]:
+            value = entry.get("grounded_fraction_median")
+            if isinstance(value, (int, float)):
+                medians.add(f"{value}")
+    assert medians, "artifact records no per-cell grounding medians -- guard is inert"
+
+    #: Pooled means are real values that can collide with a truncation, so they
+    #: are computed here and excluded rather than hard-coded.
+    pooled: set[str] = set()
+    by_set: dict[str, list[float]] = {}
+    for row in data.get("per_analysis", []):
+        fraction = (row.get("grounding") or {}).get("grounded_fraction")
+        if isinstance(fraction, (int, float)):
+            by_set.setdefault(str(row.get("set")), []).append(float(fraction))
+    for values in by_set.values():
+        mean = sum(values) / len(values)
+        pooled.update({f"{round(mean, places)}" for places in (2, 3, 4)})
+
+    truncations: dict[str, str] = {}
+    for exact in medians:
+        for places in (1, 2, 3):
+            rounded = f"{round(float(exact), places)}"
+            if rounded != exact and rounded not in medians and rounded not in pooled:
+                truncations.setdefault(rounded, exact)
+
+    offences: list[str] = []
+    for page in pages:
+        text = page.read_text(encoding="utf-8")
+        for rounded, exact in truncations.items():
+            if re.search(rf"\|\s*{re.escape(rounded)}\s*\|", text):
+                offences.append(
+                    f"{page.relative_to(REPO_ROOT)} tabulates grounding {rounded} "
+                    f"where the artifact records {exact}"
+                )
+
+    assert not offences, "re-rounded grounding figures in tables:\n" + "\n".join(sorted(set(offences)))
+
+
 def test_every_cited_artifact_path_exists() -> None:
     """A page that names its source must name a real file.
 

@@ -1,53 +1,45 @@
 ---
-title: The synthesizer is not Claude
+title: Synthesizer selection
 description: GPT-5.6 Luna on bedrock-mantle, chosen on a 55.2 s → 6.1 s measurement, validated at 4.20 s p50 over 42 live adjudications with zero repair attempts — and why the specialists did NOT follow it.
 ---
 
-<Callout type="info" title="Audience">
-Both audiences. The executive reading is that one substitution is what makes the sub-minute
-target reachable. The engineering reading is that it is the *only* model choice in this repo
-made on a cross-family measurement, and that the specialists were offered the same measurement
-and declined it.
+*For both audiences. The executive reading is that one substitution makes the sub-minute target reachable; the engineering reading is that the specialists were offered the same measurement and declined it.*
+
+**GPT-5.6 Luna, and it is the only model choice in this repo made on a cross-family measurement.** Substituting it for Claude Sonnet 5 on the master adjudication took a measured 55.2 s call to 6.1 s on the same eight analyses, and 42 live runs then measured **4.20 s p50 / 5.59 s p95** at **$0.010640/call** with **0 failures and 0 repair attempts** (`evals/results/pipeline_14x3_us-east-1.json → synthesis_detail`).
+
+## Where the synthesizer sits
+
+<Mermaid
+  title="One serial call after eight parallel ones"
+  chart={`
+flowchart LR
+  F["Fan-out:<br/>8 specialists in parallel<br/>85.6% of end-to-end"] --> P["Master prompt:<br/>31,343 chars on APP-1004"]
+  P --> S["GPT-5.6 Luna<br/>bedrock-mantle<br/>4.20 s p50, n=42"]
+  S --> V["Adjudication validated:<br/>21 keys, 42 of 42"]
+  V -->|"invalid"| R["One bounded repair,<br/>then raise"]
+`}
+/>
+
+A master adjudicator receives **all eight specialist narratives** substituted into the customer's verbatim `master_agent_prompt.txt` and emits the **21-key adjudication object**. On a real application that prompt is **31,343 characters** — measured on APP-1004, with the eight narratives in place — and the reply is ~800–1,000 tokens of JSON. Single largest call in the pipeline, and serial: nothing can start until all eight specialists finish.
 
 Code: `agents/mantle.py`, `agents/synthesize.py`, `agents/models.py:SYNTHESIZER_MODEL`.
-Artifact: `evals/results/pipeline_14x3_us-east-1.json → synthesis_detail`.
-</Callout>
 
-## What the synthesizer is
-
-The master adjudicator. It receives **all eight specialist narratives** substituted into the
-customer's verbatim `master_agent_prompt.txt` and emits the **21-key adjudication object**. On
-a real application that prompt is **31,343 characters** — measured on APP-1004, with the eight
-narratives in place — and the reply is ~800–1,000 tokens of JSON.
-
-It is therefore the single largest call in the pipeline, and it is serial: nothing can start
-until all eight specialists have finished.
-
-## The measurement that decided it
+## Measurement that decided it
 
 Measured on APP-1004, against **the same eight analyses**, **n=1 each**:
 
-| Synthesizer | Wall clock | Cost | Result |
-|---|---:|---:|---|
-| Claude Sonnet 5 | **55.2 s** | $0.11731 | 21/21 keys, HIGH RISK / DECLINE |
-| GPT-5.6 Luna | **6.1 s** | $0.01488 | 21/21 keys, HIGH RISK / DECLINE |
+| Synthesizer | Wall clock | Cost | Result | Verdict |
+|---|---:|---:|---|---|
+| Claude Sonnet 5 | **55.2 s** | $0.11731 | 21/21 keys, HIGH RISK / DECLINE | rejected on latency |
+| GPT-5.6 Luna | **6.1 s** | $0.01488 | 21/21 keys, HIGH RISK / DECLINE | **shipped** |
 
-Identical verdict, ~9x faster, ~87% cheaper on that call. The Claude synthesis alone consumed
-**55.2 s of a 101.1 s end-to-end run** (28,567 input tokens for 6,018 output tokens); the
-substitution took that measured end-to-end to **37.5 s**.
+Identical verdict, ~9x faster, ~87% cheaper on that call. Claude synthesis alone consumed **55.2 s of a 101.1 s end-to-end run** (28,567 input tokens for 6,018 output tokens); the substitution took that measured end-to-end to **37.5 s**.
 
-<Callout type="warn" title="n=1, and the page says so">
-This is one application, one call each. It is enough to separate 55.2 s from 6.1 s — a 9x gap
-is not a sampling artifact — and it is **not** a distribution. `agents/mantle.py` records a
-slightly different pair for the same substitution measured on a different draw (55.2 s /
-$0.11731 against **4.4 s / $0.01314**), which is exactly the run-to-run spread you would expect
-at n=1. Neither number is a benchmark; the 42-run figure below is.
-</Callout>
+**n=1, and this page says so.** One application, one call each. Enough to separate 55.2 s from 6.1 s — a 9x gap is not a sampling artifact — and **not** a distribution. `agents/mantle.py` records a slightly different pair for the same substitution measured on a different draw (55.2 s / $0.11731 against **4.4 s / $0.01314**), which is the run-to-run spread expected at n=1. Neither number is a benchmark; the 42-run figure below is.
 
 ## What 42 live adjudications then measured
 
-`evals/results/pipeline_14x3_us-east-1.json → synthesis_detail`, model `openai.gpt-5.6-luna`,
-**42 calls, 0 failed**:
+`evals/results/pipeline_14x3_us-east-1.json → synthesis_detail`, model `openai.gpt-5.6-luna`, **42 calls, 0 failed**:
 
 | | n | min | p50 | p95 | max | mean |
 |---|---:|---:|---:|---:|---:|---:|
@@ -64,10 +56,9 @@ at n=1. Neither number is a benchmark; the 42-run figure below is.
 | Errors | none |
 | p99 | *"refused: 42 sample(s), need >= 100. A p99 over 42 sample(s) is not a p99."* |
 
-**4.20 s p50 at n=42 is the figure to quote.** The 6.1 s (or 4.4 s) figure is the one-run
-comparison that motivated the change.
+**4.20 s p50 at n=42 is the figure to quote.** The 6.1 s (or 4.4 s) figure is the one-run comparison that motivated the change.
 
-### The token profile, and why it looks strange
+### Token profile, and why it looks strange
 
 | Token class | Total over 42 calls | Mean per call |
 |---|---:|---:|
@@ -76,8 +67,7 @@ comparison that motivated the change.
 | Cache read | 0 | 0.0 |
 | **Cache write** | **180,610** | **4,300.2** |
 
-Two input tokens per call. The entire ~31K-character prompt lands in the **cache-write** class,
-because implicit caching is on by default for GPT-5.6 and every application's prompt is new.
+Two input tokens per call. The entire ~31K-character prompt lands in the **cache-write** class, because implicit caching is on by default for GPT-5.6 and every application's prompt is new.
 
 <Callout type="error" title="This is why the cache-write term is load-bearing">
 GPT-5.6 bills cache-write at **1.25x the uncached input rate**. Omitting that term
@@ -87,112 +77,50 @@ multiplier of **0.0** because they cache automatically with no write charge.
 [Cost levers](/docs/cost/levers#gpt-56-cache-write-tokens-bill-at-125x-input).
 </Callout>
 
-Note also that `agents/mantle.py:_usage` normalises the Responses convention onto the Bedrock
-Converse one. Responses `usage.input_tokens` is the **total** prompt size and already includes
-cached tokens; Converse reports only the non-cached count. Subtracting keeps a cached token
-billed once, at the right rate, for both families — otherwise `agents/pricing.py` would
-double-count.
+Note also that `agents/mantle.py:_usage` normalises the Responses convention onto the Bedrock Converse one. Responses `usage.input_tokens` is the **total** prompt size and already includes cached tokens; Converse reports only the non-cached count. Subtracting keeps a cached token billed once, at the right rate, for both families — otherwise `agents/pricing.py` would double-count.
 
 ## The 21-key contract is validated, not assumed
 
-The synthesizer's whole job is a contract, so the routing validates rather than trusts:
+A synthesizer's whole job is a contract, so the routing validates rather than trusts:
 
-- `structured_output_model=Adjudication` on the Converse path — Strands converts the pydantic
-  model to a forced tool spec and hands the model back its own validation errors mid-loop.
-- On the mantle path there is no equivalent tool, so `agents/synthesize.py:_invoke_master_mantle`
-  parses the reply and validates it against the same `Adjudication` model, feeding the same
-  bounded-repair loop. Exactly **one** repair invocation is allowed; after that it **raises**.
-- **There is no code path that emits an unvalidated adjudication.**
+- `structured_output_model=Adjudication` on the Converse path — Strands converts the pydantic model to a forced tool spec and hands the model back its own validation errors mid-loop.
+- On the mantle path there is no equivalent tool, so `agents/synthesize.py:_invoke_master_mantle` parses the reply and validates it against the same `Adjudication` model, feeding the same bounded-repair loop. Exactly **one** repair invocation is allowed; after that it **raises**.
+- **No code path emits an unvalidated adjudication.**
 
-Measured over the 42 runs: **42 of 42 validated**, including the one degraded run that lost two
-specialists to `InternalServerException`. **0 repairs needed.**
+Measured over the 42 runs: **42 of 42 validated**, including the one degraded run that lost two specialists to `InternalServerException`. **0 repairs needed.**
 
-`agents/models.py:SYNTHESIZER_MAX_TOKENS` is 4096, and the reason is in its comment: the
-customer caps each of nine summaries at "under 1200 characters", which is ~2,850 tokens plus
-JSON scaffolding. Measured, the largest synthesis wrote **1,005** output tokens and the median
-**666** — so 4096 is 4.1x the observed ceiling and has never bound.
+`agents/models.py:SYNTHESIZER_MAX_TOKENS` is 4096, and the reason is in its comment: the customer caps each of nine summaries at "under 1200 characters", which is ~2,850 tokens plus JSON scaffolding. Measured, the largest synthesis wrote **1,005** output tokens and the median **666** — so 4096 is 4.1x the observed ceiling and has never bound.
 
-<Callout type="warn" title="Truncation here destroys the object rather than shortening it">
-A truncated synthesis fails the 21-key contract outright — a *failed* adjudication, not a
-cheaper one. And the ceiling does matter in the other direction: an earlier pass measured that
-at `max_tokens=16384` a live synthesis took **84 s of a 113 s end-to-end run** and emitted
-**9,244** output tokens, far past the contract it was asked to honour.
-</Callout>
+Truncation here destroys the object rather than shortening it: a truncated synthesis fails the 21-key contract outright, a *failed* adjudication rather than a cheaper one. The ceiling matters in the other direction too — an earlier pass measured that at `max_tokens=16384` a live synthesis took **84 s of a 113 s end-to-end run** and emitted **9,244** output tokens, far past the contract it was asked to honour.
 
 ## Which variant, and it is not the ordering anyone expects
 
-Measured on the real 31,343-character prompt, streamed Responses calls, `effort=low`, **n=3 per
-cell**, 2026-07-28. All 24 calls returned a valid 21-key `Adjudication` and all 24 adjudicated
-**HIGH RISK / DECLINE** — so the latency spread is not bought with a shorter or worse answer.
+Measured on the real 31,343-character prompt, streamed Responses calls, `effort=low`, **n=3 per cell**, 2026-07-28. All 24 calls returned a valid 21-key `Adjudication` and all 24 adjudicated **HIGH RISK / DECLINE**, so the latency spread is not bought with a shorter or worse answer.
 
-| Variant | Best measured p50 | Input / cache-read / output per 1M |
-|---|---:|---|
-| **GPT-5.6 Luna** | **4.61 s** (us-east-1) | **$1.10 / $0.11 / $6.60** |
-| GPT-5.6 Terra | 6.29 s (us-east-2) | $2.75 / $0.28 / $16.50 |
-| GPT-5.6 Sol | 11.19 s (us-east-1) | $5.50 / $0.55 / $33.00 |
+| Variant | Best measured p50 | Input / cache-read / output per 1M | Verdict |
+|---|---:|---|---|
+| **GPT-5.6 Luna** | **4.61 s** (us-east-1) | **$1.10 / $0.11 / $6.60** | **shipped — cheapest AND fastest** |
+| GPT-5.6 Terra | 6.29 s (us-east-2) | $2.75 / $0.28 / $16.50 | 2.5x the price for 1.4x the latency |
+| GPT-5.6 Sol | 11.19 s (us-east-1) | $5.50 / $0.55 / $33.00 | 5x the price for 2.4x the latency |
 
-**5x the token price buys 2.4x more latency on this workload.** There is no speed-for-money
-trade to make, and Luna is not a compromise pick — it is both the cheapest and the fastest.
+**5x the token price buys 2.4x more latency on this workload.** No speed-for-money trade exists to make, and Luna is not a compromise pick. Full matrix, region reasoning and the short-prompt trap: [region selection](/docs/model-selection/regions).
 
-Full matrix, region reasoning and the short-prompt trap: [regions](/docs/model-selection/regions).
-
-Sol is also the worst GPT variant on **quality** in the cross-family study — 0 of 4 agents
-graded "as good", and the only cell that escalated both anti-false-positive fixtures.
-[Cross-family study](/docs/model-selection/cross-family-study#gpt-56-sol-is-the-worst-variant-on-quality-at-4x-lunas-price).
+Sol is also the worst GPT variant on **quality** in the cross-family study — 0 of 4 agents graded "as good", and the only cell that escalated both anti-false-positive fixtures. [Cross-family study](/docs/model-selection/cross-family-study#gpt-56-sol-is-the-worst-variant-on-quality-at-4x-lunas-price).
 
 ## Why the specialists did not follow
 
-The obvious next question after moving the synthesizer is whether to move the eight agents. It
-was measured — 120 blind-judged analyses, two judges, $16.8869 — and the answer is **not yet**.
+An obvious next question after moving the synthesizer is whether to move the eight agents. It was measured — 120 blind-judged analyses, two judges, $16.8869 — and the answer is **not yet**.
 
-| | Synthesizer | Specialists |
-|---|---|---|
-| What the model produces | A **21-key JSON object** whose shape is machine-validated on every call | **Titled prose** that a human underwriter reads, whose quality is the product |
-| How correctness is checked | Contract validation: 42/42, deterministic | Band agreement, anti-FP escalation, `_context` grounding, output contract |
-| Prompt size | 31,343 chars | ~7,500 chars |
-| Measured decision | GPT, on latency | **Claude, on `_context` grounding: 0.642 vs 0.357, lower on 4 of 4 agents** |
+| | Synthesizer | Specialists | Consequence |
+|---|---|---|---|
+| What the model produces | A **21-key JSON object** whose shape is machine-validated on every call | **Titled prose** a human underwriter reads, whose quality is the product | Asymmetric burden of proof |
+| How correctness is checked | Contract validation: 42/42, deterministic | Band agreement, anti-FP escalation, `_context` grounding, output contract | One is checkable per call; one is not |
+| Prompt size | 31,343 chars | ~7,500 chars | Different latency regime |
+| Measured decision | **GPT, on latency** | **Claude, on `_context` grounding: 0.642 vs 0.357, lower on 4 of 4 agents** | Same family measured, opposite answers |
 
-The asymmetry is the point. **The synthesizer's output contract is checkable by a machine on
-every single call, so a latency win can be taken without a quality argument.** A specialist's
-output is a fraud judgement, and its quality axis — validating each signal against its paired
-`_context` evidence, as every specialist prompt requires — is measurably weaker on GPT.
+That asymmetry is the point. **A synthesizer's output contract is checkable by a machine on every single call, so a latency win can be taken without a quality argument.** A specialist's output is a fraud judgement, and its quality axis — validating each signal against its paired `_context` evidence, as every specialist prompt requires — is measurably weaker on GPT.
 
-<Callout type="info" title="The specialist question is not closed, and the plumbing is not the blocker">
-`agents/fanout.py` routes a GPT specialist today
-(`transport_for('openai.gpt-5.6-luna') == 'bedrock-mantle'`), so reversing the decision is one
-value in `SPECIALIST_MODELS`. The hold is a measurement result. One prompt-engineering
-experiment on grounding is what stands between it and a projected **47.8%** specialist cost
-reduction. [Cross-family study](/docs/model-selection/cross-family-study#what-would-change-the-answer).
-</Callout>
-
-## What is unproven about the synthesizer
-
-<Callout type="error" title="Luna's fraud reasoning has never been blind-judged against a Claude synthesizer">
-This is the gap, stated as `TIER_RATIONALE` states it: *"WHAT IS UNPROVEN: that Luna's fraud
-REASONING matches Sonnet 5's. The 42 runs validated 21 keys every time and the verdict-stability
-check found 12 of 14 applications stable, but no blind judge has scored Luna against a Claude
-synthesizer across the fixture set."*
-
-What exists instead:
-
-- **42 runs, 21 keys every time, 0 repairs** — a *contract* result, not a reasoning one.
-- **12 of 14 applications verdict-stable** across three repetitions of byte-identical input.
-  APP-1005 and APP-1012 moved between HIGH RISK and MEDIUM RISK.
-- **24 matrix calls unanimous on HIGH RISK / DECLINE** across three variants and three regions
-  — a *determinism* observation, not an accuracy one.
-- **Mild corroboration** from the specialist cross-family study that Luna reasons acceptably on
-  this customer's fraud material — but that is not a synthesizer result: the synthesis prompt is
-  31,343 characters against a specialist's ~7,500, and it emits a 21-key object rather than
-  prose.
-
-The eval that would close it is the calibration judge in
-`evals/evaluators/pp_calibration_judge.json`, run across the fixture set on both a Luna and a
-Claude synthesizer.
-</Callout>
-
-Also unproven: **that the variant or region ranking holds for any other prompt size.** It is a
-property of a ~31K-character prompt with an ~800–1000 token reply, and a short-prompt probe
-ranks the regions differently.
+That specialist question is not closed and the plumbing is not the blocker. `agents/fanout.py` routes a GPT specialist today (`transport_for('openai.gpt-5.6-luna') == 'bedrock-mantle'`), so reversing the decision is one value in `SPECIALIST_MODELS`. One prompt-engineering experiment on grounding stands between the hold and a projected **47.8%** specialist cost reduction. [Cross-family study](/docs/model-selection/cross-family-study#what-would-change-the-answer).
 
 ## Reversing it is one environment variable
 
@@ -200,73 +128,45 @@ ranks the regions differently.
 BEDROCK_MODEL_SYNTHESIZER=global.anthropic.claude-sonnet-5
 ```
 
-`agents/synthesize.py` routes on the **model id**, not on a flag: `agents.mantle.is_mantle_model`
-returns True for anything starting `openai.gpt-5`, and anything else goes through
-`build_bedrock_model` and Converse. So there is no second code path to maintain and no feature
-flag to get wrong — the same bounded-repair loop and the same `Adjudication` validation apply to
-both families.
+`agents/synthesize.py` routes on the **model id**, not on a flag: `agents.mantle.is_mantle_model` returns True for anything starting `openai.gpt-5`, and anything else goes through `build_bedrock_model` and Converse. So there is no second code path to maintain and no feature flag to get wrong — the same bounded-repair loop and the same `Adjudication` validation apply to both families.
 
 ## Operational notes on the mantle path
 
-Verified live, and each one cost time:
+Verified live, and each one cost time.
 
-<Steps>
+| Finding | Detail |
+|---|---|
+| GPT-5.x is not on Bedrock Converse or InvokeModel | `BedrockModel` rejects the id with `ValidationException: The provided model identifier is invalid` |
+| Hostname is `bedrock-mantle.{region}.api.aws`, not `.amazonaws.com` | The `amazonaws.com` form does not resolve at all (NXDOMAIN), which looks exactly like a permissions problem and is not one |
+| Path is `/openai/v1`, not `/v1`, and the two are mutually exclusive | Strands documentation shows `/v1` with `openai.gpt-oss-120b`, correct for that pair and **wrong for GPT-5.6**. [Detail](/docs/platform/bedrock-mantle) |
+| Auth is a bearer token | From `aws_bedrock_token_generator.provide_token`, not SigV4 request signing. Tokens are short-lived, so one is minted per call. IAM needs `bedrock-mantle:CreateInference` (managed policy `AmazonBedrockMantleInferenceAccess`) — a different action prefix from both `bedrock:` and `bedrock-agentcore:` |
+| These are reasoning models | `temperature` / `top_p` / `top_k` are ignored; use `reasoning={"effort": ...}`. Both `low` and `medium` returned a valid 21-key object; `low` is the default because the master prompt is an explicit instruction set, not a puzzle |
+| No `global.*` or `us.*` prefix, no cross-region inference | The id is bare (`openai.gpt-5.6-luna`) and the call is in-region only — which is why the region comes from a measurement rather than from `AWS_REGION` |
+| Regional availability differs per variant | Luna and Terra: us-east-1, us-east-2, us-west-2. Sol: us-east-1 and us-east-2 only |
 
-<Step>
+## Still unknown
 
-**GPT-5.x is not on Bedrock Converse or InvokeModel.** `BedrockModel` rejects the id with
-`ValidationException: The provided model identifier is invalid`.
+<Callout type="warn" title="Luna's fraud reasoning has never been blind-judged against a Claude synthesizer">
+Stated as `TIER_RATIONALE` states it: *"WHAT IS UNPROVEN: that Luna's fraud REASONING matches
+Sonnet 5's. The 42 runs validated 21 keys every time and the verdict-stability check found 12 of
+14 applications stable, but no blind judge has scored Luna against a Claude synthesizer across
+the fixture set."*
+</Callout>
 
-</Step>
+What exists instead of that missing eval:
 
-<Step>
+| Evidence | What it is | What it is not |
+|---|---|---|
+| 42 runs, 21 keys every time, 0 repairs | A **contract** result | A reasoning result |
+| 12 of 14 applications verdict-stable across three repetitions of byte-identical input | Stability. APP-1005 and APP-1012 moved between HIGH RISK and MEDIUM RISK | Accuracy |
+| 24 matrix calls unanimous on HIGH RISK / DECLINE across three variants and three regions | A **determinism** observation | An accuracy observation |
+| Mild corroboration from the specialist cross-family study that Luna reasons acceptably on this fraud material | Adjacent evidence | A synthesizer result — the synthesis prompt is 31,343 chars against a specialist's ~7,500, and it emits a 21-key object rather than prose |
 
-**The hostname is `bedrock-mantle.{region}.api.aws`, not `.amazonaws.com`.** The
-`amazonaws.com` form does not resolve at all (NXDOMAIN), which looks exactly like a permissions
-problem and is not one.
+Closing it takes the calibration judge in `evals/evaluators/pp_calibration_judge.json`, run across the fixture set on both a Luna and a Claude synthesizer.
 
-</Step>
+Also unproven: **that the variant or region ranking holds for any other prompt size.** It is a property of a ~31K-character prompt with an ~800–1000 token reply, and a short-prompt probe ranks the regions differently.
 
-<Step>
-
-**The path is `/openai/v1`, not `/v1`, and the two are mutually exclusive.** The Strands
-documentation shows `/v1` with `openai.gpt-oss-120b`, which is correct for that pair and
-**wrong for GPT-5.6**. [Detail](/docs/platform/bedrock-mantle).
-
-</Step>
-
-<Step>
-
-**Auth is a bearer token** from `aws_bedrock_token_generator.provide_token`, not SigV4 request
-signing. Tokens are short-lived, so one is minted per call rather than cached across a
-long-running runtime. IAM needs `bedrock-mantle:CreateInference` (AWS managed policy
-`AmazonBedrockMantleInferenceAccess`) — a different action prefix from both `bedrock:` and
-`bedrock-agentcore:`.
-
-</Step>
-
-<Step>
-
-**These are reasoning models.** `temperature` / `top_p` / `top_k` are ignored; use
-`reasoning={"effort": ...}`. Measured on the synthesis prompt, both `low` and `medium` returned
-a valid 21-key object; `low` is the default because the master prompt is an explicit
-instruction set, not a puzzle.
-
-</Step>
-
-<Step>
-
-**No `global.*` or `us.*` prefix and no cross-region inference.** The id is bare
-(`openai.gpt-5.6-luna`) and the call is in-region only — which is why the region is chosen from
-a measurement rather than from `AWS_REGION`.
-
-</Step>
-
-<Step>
-
-**Regional availability differs per variant.** Luna and Terra: us-east-1, us-east-2, us-west-2.
-Sol: us-east-1 and us-east-2 only.
-
-</Step>
-
-</Steps>
+<Cards>
+  <Card title="Region selection" href="/docs/model-selection/regions" description="The measured model x region matrix, and why a short-prompt probe picks the wrong region." />
+  <Card title="GPT-5.6 on bedrock-mantle" href="/docs/platform/bedrock-mantle" description="The transport itself: endpoint, auth, usage normalisation." />
+</Cards>

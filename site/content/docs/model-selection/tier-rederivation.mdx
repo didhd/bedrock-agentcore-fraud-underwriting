@@ -1,39 +1,33 @@
 ---
-title: The tier re-derivation
+title: Tier re-derivation
 description: Reading the customer's prompts put fraud rings and synthetic identity on the largest model. Measurement contradicted it on both — and the padding finding is why.
 ---
 
-<Callout type="info" title="Audience">
-For the customer's engineer, and for any reviewer who wants to know how much of this
-engagement's model table is reasoning and how much is measurement. The answer is that the
-reasoning was wrong on both agents it touched, and the correction is the point of the page.
+*For the customer's engineer, and for any reviewer asking how much of this model table is reasoning and how much is measurement.*
 
-Artifact: `evals/results/tier_quality.json` + `.md`, plus
-`evals/results/pipeline_14x3_us-east-1.json` for the critical-path figures. Code:
-`agents/models.py:SPECIALIST_MODELS` / `TIER_RATIONALE`.
-</Callout>
+Reasoning was wrong on both agents it touched. A first version of the per-agent model table was authored by **reading** the customer's prompts, which put `rings` and `synthetic` on Claude Opus 5; a blind sweep of 48 analyses then contradicted the reading on both, and the correction is the point of this page.
 
-## The mistake, stated first
+## Two moves, and what decided each
 
-The first version of the per-agent model table was authored by **reading the customer's
-prompts**. The reasoning was:
+<Mermaid
+  title="Reading said HEAVY, measurement said MID"
+  chart={`
+flowchart LR
+  P["Read the prompt:<br/>multi-signal reasoning<br/>= heavyweight model"] --> O["Both agents<br/>on Opus 5"]
+  O --> S["Blind sweep, 48 analyses,<br/>tier_quality.json"]
+  S --> R["rings: same band,<br/>same false positive,<br/>10.8 s and $0.045 cheaper"]
+  S --> Y["synthetic: Opus made<br/>the only false negative"]
+  R --> M["Both on Sonnet 5"]
+  Y --> M
+`}
+/>
 
-> `rings_agent_prompt.txt` asks the model to correlate address, phone, email and employer
-> reuse across distinct SSNs and decide whether a cluster is coordinated. That is
-> multi-signal network reasoning, so give it the heavyweight model.
->
-> `synthetic_agent_prompt.txt` asks whether a thin-file identity is fabricated, which
-> requires weighing several weak indicators against each other. Heavyweight too.
+Neither correction is subtle. On `rings` the cheaper model reached the identical band with the identical false positive; on `synthetic` the *expensive* model produced the sweep's only false negative.
 
-Both agents went on Claude Opus 5. **On both, measurement contradicted the reading.** Neither
-correction is subtle: on `rings` the cheaper model reached the identical band with the
-identical false positive, and on `synthetic` the *expensive* model produced the sweep's only
-false negative.
-
-<Callout type="error" title="Why this belongs in a customer-facing document">
-The reasoning that produced the original assignment is exactly the reasoning a customer will
-apply to the next agent. "This dimension is harder, so it needs the bigger model" is
-intuitive, it is cheap to say, and it was measurably wrong twice out of two.
+<Callout type="error" title="Why a wrong first guess belongs in a customer-facing document">
+"This dimension is harder, so it needs the bigger model" is the reasoning a customer will apply
+to the next agent. It is intuitive, it is cheap to say, and it was measurably wrong twice out of
+two.
 </Callout>
 
 ## What was measured
@@ -50,13 +44,12 @@ intuitive, it is cheap to say, and it was measurably wrong twice out of two.
 | Measured spend | **$4.9088** — specialists $1.3586, judge $3.5501 |
 | Judge calls in this report | 0 made; **48 verdicts reused from cache** across three earlier sweeps |
 
-The band is read **twice** — once by regex, once by the blind judge — and rows where the two
-readers disagree are not counted as agreement.
+Each band is read **twice** — once by regex, once by the blind judge — and rows where the two readers disagree are not counted as agreement.
 
 <Callout type="warn" title="The judge is also a candidate, and that conflict is quantified rather than waved away">
-Opus 5 judges, and Opus 5 is one of the three candidates. On its own 16 rows it scored
-substance **+0.78** and calibration **+0.31** versus the other 32, while the deterministic
-band-agreement margin — which it cannot influence — moved only **−0.026**.
+Opus 5 judges, and Opus 5 is one of the three candidates. On its own 16 rows it scored substance
+**+0.78** and calibration **+0.31** versus the other 32, while the deterministic band-agreement
+margin — which it cannot influence — moved only **−0.026**.
 
 Quoted from the artifact: *"Treat any Opus-vs-cheaper margin below the substance margin as
 unsupported."* No conclusion on this page rests on such a margin.
@@ -65,31 +58,24 @@ unsupported."* No conclusion on this page rests on such a margin.
 
 ## `rings`: HEAVY → MID
 
-n=5 applications per cell (APP-1004, APP-1009, APP-1012, APP-1013, APP-1014), paired so only
-same-payload analyses are compared.
+n=5 applications per cell (APP-1004, APP-1009, APP-1012, APP-1013, APP-1014), paired so only same-payload analyses are compared.
 
-| | Opus 5 | Sonnet 5 | Haiku 4.5 |
-|---|---|---|---|
-| Band agreement vs pinned | 4/5 | **4/5** | **4/5** |
-| Judge-confirmed false positives | 1 | **1** | **1** |
-| Judge calibration mean / min | 4.20 / 2 | 4.00 / 2 | 3.40 / 1 |
-| Judge substance | 4.0 | 4.0 | 3.0 |
-| Output-contract violations | 5 | 5 | 5 |
-| Wall clock p50 | 32.81 s | **22.05 s** | 14.65 s |
-| $/call p50 | $0.0696 | **$0.0241** | $0.0081 |
-| Output tokens p50 | 2448 | 2026 | 1195 |
+| | Opus 5 | Sonnet 5 | Haiku 4.5 | Verdict |
+|---|---|---|---|---|
+| Band agreement vs pinned | 4/5 | **4/5** | **4/5** | tie |
+| Judge-confirmed false positives | 1 | **1** | **1** | tie |
+| Judge calibration mean / min | 4.20 / 2 | 4.00 / 2 | 3.40 / 1 | Opus +0.20, inside the bias floor |
+| Judge substance | 4.0 | 4.0 | 3.0 | Haiku loses |
+| Output-contract violations | 5 | 5 | 5 | tie |
+| Wall clock p50 | 32.81 s | **22.05 s** | 14.65 s | Sonnet −10.76 s |
+| $/call p50 | $0.0696 | **$0.0241** | $0.0081 | Sonnet −65% |
+| Output tokens p50 | 2448 | 2026 | 1195 | — |
 
-The report's own verdict for this cell: **"DEFENSIBLE on this sample:
-haiku-4-5-20251001-v1:0, sonnet-5"**.
+Report's own verdict for this cell: **"DEFENSIBLE on this sample: haiku-4-5-20251001-v1:0, sonnet-5"**.
 
-Opus's only surviving advantage is **+0.20 judge calibration**, and +0.20 sits inside the
-judge's own measured **+0.31** self-preference for its family. The artifact says so in the
-cell itself: *"that +0.20 lead is smaller than the judge's measured +0.31 self-preference for
-its own family, so it is not distinguishable from bias."*
+Opus keeps one surviving advantage, **+0.20 judge calibration**, and +0.20 sits inside the judge's own measured **+0.31** self-preference for its family. The artifact says so in the cell itself: *"that +0.20 lead is smaller than the judge's measured +0.31 self-preference for its own family, so it is not distinguishable from bias."*
 
-Sonnet 5 was taken rather than Haiku, which is the conservative half of the decision: Haiku
-lost on no band but scored 0.60 lower on calibration and 1.0 lower on substance, and this is
-the agent that owns the critical path.
+Sonnet 5 was taken rather than Haiku, which is the conservative half of the decision: Haiku lost on no band but scored 0.60 lower on calibration and 1.0 lower on substance, and this is the agent that owns the critical path.
 
 ### Why `rings` was worth more than any other row
 
@@ -99,62 +85,35 @@ the agent that owns the critical path.
 | Fan-out floor as a share of fan-out | **96.3%** | `tail_analysis.json` |
 | Slowest-minus-second-slowest p50 | **6.34 s** | `tail_analysis.json` |
 
-Fan-out cannot finish before its slowest member, and `rings` was that member in 25 of 42
-runs. But the third row is the ceiling on the whole idea: **even an instantaneous `rings`
-leaves the next agent as the floor, 6.34 s later.** This is a median improvement, not a tail
-fix. [Critical path](/docs/performance/critical-path).
+Fan-out cannot finish before its slowest member, and `rings` was that member in 25 of 42 runs. Row three is the ceiling on the whole idea: **even an instantaneous `rings` leaves the next agent as the floor, 6.34 s later.** A median improvement, not a tail fix. [Critical path](/docs/performance/critical-path).
 
-## `synthetic`: HEAVY → MID, on quality, accepting a latency loss
+## `synthetic`: HEAVY → MID on quality, accepting a latency loss
 
-| | Opus 5 | Sonnet 5 | Haiku 4.5 |
-|---|---|---|---|
-| Band agreement (n=5) | 4/5 | **5/5** | **5/5** |
-| Judge calibration mean / min | 4.20 / 1 | **4.80 / 4** | 4.40 / 3 |
-| Judge substance | 4.8 | 3.8 | 3.4 |
-| Judge-confirmed false positives | 0 | 0 | 0 |
-| **False negatives** | **1** | 0 | 0 |
-| Output-contract violations | 5 | 5 | **8** |
-| Wall clock p50 | **8.51 s** | 13.54 s | 9.56 s |
-| $/call p50 | $0.0293 | $0.0194 | **$0.0059** |
-| Output tokens p50 | 451 | 1123 | 654 |
+| | Opus 5 | Sonnet 5 | Haiku 4.5 | Verdict |
+|---|---|---|---|---|
+| Band agreement (n=5) | 4/5 | **5/5** | **5/5** | Opus loses |
+| Judge calibration mean / min | 4.20 / 1 | **4.80 / 4** | 4.40 / 3 | Sonnet best, against the judge's own family |
+| Judge substance | 4.8 | 3.8 | 3.4 | Opus best |
+| Judge-confirmed false positives | 0 | 0 | 0 | tie |
+| **False negatives** | **1** | 0 | 0 | **Opus disqualified** |
+| Output-contract violations | 5 | 5 | **8** | Haiku loses |
+| Wall clock p50 | **8.51 s** | 13.54 s | 9.56 s | Sonnet +5.03 s, accepted |
+| $/call p50 | $0.0293 | $0.0194 | **$0.0059** | — |
+| Output tokens p50 | 451 | 1123 | 654 | — |
 
-The report's verdict: **"DEFENSIBLE on this sample: haiku-4-5-20251001-v1:0, sonnet-5"**.
+Report's verdict: **"DEFENSIBLE on this sample: haiku-4-5-20251001-v1:0, sonnet-5"**.
 
-The deciding line is in the band-disagreement list:
+Deciding line sits in the band-disagreement list: `synthetic` on `opus-5`, application APP-1014, declared **LOW RISK** against a pinned **POSSIBLE RISK** (`SYN-008`). That is a false **negative** on a synthetic-identity dimension — the more dangerous error direction on a fraud product — and it is the sweep's only one. The judge scored it "dismisses".
 
-> `synthetic` / `opus-5` on APP-1014: declared **LOW RISK**, pinned **POSSIBLE RISK**
-> (`SYN-008`)
+**This row costs latency and is taken anyway.** Sonnet 5 runs 13.54 s against 8.51 s p50 and is slower on 4 of 5 paired applications, so roughly 5 s of median latency bought back a fraud dimension the faster, more expensive model missed. On a fraud product that is the right side to err on, and it is the clearest single evidence that this table is not cost-driven.
 
-That is a false **negative** on a synthetic-identity dimension — the more dangerous error
-direction on a fraud product — and it is the sweep's only one. The judge scored it
-"dismisses".
+Two further observations from the same cell. **A cost-driven table takes Haiku** — it banded 5/5 at $0.0059 and 9.56 s, cheaper *and* faster than the Sonnet now assigned, and was rejected on the customer's own output contract: 8 violations against Sonnet's 5, including citing numeric alert IDs on 3 of 5 calls, which her `synthetic` prompt forbids. And **no bias caveat is available here**, because the margin runs *against* the judge's own family.
 
-<Callout type="warn" title="This row costs latency and it is taken anyway">
-Sonnet 5 is **slower** here: 13.54 s vs 8.51 s p50, and slower on **4 of 5** paired
-applications. The trade is stated rather than buried: **roughly 5 s of median latency bought
-back a fraud dimension the faster, more expensive model missed.** On a fraud product that is
-the right side to err on, and it is the single clearest evidence that this table is not
-cost-driven.
-</Callout>
+## Padding finding: extra length is not extra evidence [#the-padding-finding-extra-length-is-not-extra-evidence]
 
-Two further observations from this cell:
+Mechanism behind both moves, and the finding worth keeping. Paired by (application, domain), so only analyses of the **same payload** are compared. Distinct evidence items are distinct numbers plus distinct snake_case signal names. Source: `tier_quality.json → verbosity_vs_substance`.
 
-- **A cost-driven table takes Haiku.** It banded 5/5 at $0.0059 and 9.56 s — cheaper *and*
-  faster than the Sonnet now assigned. It was rejected on the customer's own output
-  contract: **8 violations against Sonnet's 5**, including citing numeric alert IDs on 3 of 5
-  calls, which `synthetic_agent_prompt.txt` forbids.
-- **No bias caveat is available here.** The margin runs *against* the judge's own family, so
-  self-preference cannot explain a cheaper Claude model beating Opus on calibration.
-
-## The padding finding: extra length is not extra evidence
-
-This is the mechanism behind both moves, and it is the finding to keep. Paired by
-(application, domain), so only analyses of the **same payload** are compared. Distinct
-evidence items are distinct numbers plus distinct snake_case signal names.
-
-Source: `tier_quality.json → verbosity_vs_substance`.
-
-| Scope | Longer | Shorter | Paired | chars ratio | distinct-evidence ratio | Judge substance delta | Pairs where only the longer one escalates |
+| Scope | Longer | Shorter | Paired | chars ratio | distinct-evidence ratio | Judge substance delta | Pairs where only the longer escalates |
 |---|---|---|---:|---:|---:|---:|---:|
 | **ALL POOLED** | opus-5 | sonnet-5 | 16 | **1.31x** | **1.60x** | +0.0 | **0** |
 | `bustout` | opus-5 | sonnet-5 | 3 | 1.98x | 1.94x | +0 | 0 |
@@ -162,57 +121,34 @@ Source: `tier_quality.json → verbosity_vs_substance`.
 | **`rings`** | opus-5 | sonnet-5 | 5 | **1.76x** | **1.71x** | **+0** | **0** |
 | `synthetic` | opus-5 | sonnet-5 | 5 | 0.89x | 1.30x | +1 | 0 |
 
-The `rings` row is the one quoted everywhere else in this engagement: **1.76x the characters
-carrying 1.71x the distinct evidence, for a judge substance delta of +0.** The extra 76% of
-text bought 71% more evidence items and zero measured substance — i.e. it is length, not
-analysis.
+That `rings` row is the one quoted everywhere else in this engagement: **1.76x the characters carrying 1.71x the distinct evidence, for a judge substance delta of +0.** An extra 76% of text bought 71% more evidence items and zero measured substance — length, not analysis.
 
-<Callout type="info" title="The reading rule, quoted from the artifact">
-*"A chars ratio above the distinct-evidence ratio means the extra length is not carrying
-proportionally more evidence."*
-
-Pooled, Opus is 1.31x longer than Sonnet for 1.60x the evidence — so **pooled, Opus is
-slightly denser**, and the finding is agent-specific rather than global. Pooling four agents
-can cancel out the one that motivated the question, which is why the artifact reports both.
-</Callout>
+Reading rule, quoted from the artifact: *"A chars ratio above the distinct-evidence ratio means the extra length is not carrying proportionally more evidence."* Pooled, Opus is 1.31x longer than Sonnet for 1.60x the evidence — so **pooled, Opus is slightly denser**, and the finding is agent-specific rather than global. Pooling four agents can cancel out the one that motivated the question, which is why the artifact reports both.
 
 ### Verbosity does not drift toward over-escalation
 
-The obvious worry about a shorter analysis is that it under-escalates, and the obvious worry
-about a longer one is that it talks itself into a higher band. Neither happened: the last
-column is **0 in every scope, in all three pairings** — across 48 paired comparisons, there
-is **no** pair where the longer analysis escalated and the shorter one did not.
+An obvious worry about a shorter analysis is that it under-escalates, and about a longer one that it talks itself into a higher band. Neither happened: the last column is **0 in every scope, in all three pairings** — across 48 paired comparisons there is **no** pair where the longer analysis escalated and the shorter one did not.
 
-So the case against Opus on `rings` is cost and latency. It is **not** a false-positive risk
-argument, and stating it as one would be unsupported.
+So the case against Opus on `rings` is cost and latency. It is **not** a false-positive risk argument, and stating it as one would be unsupported.
 
-### And Haiku is not simply "the short one"
+### Haiku is not simply "the short one"
 
 | Scope | Longer | Shorter | Paired | chars ratio | evidence ratio | substance delta |
 |---|---|---|---:|---:|---:|---:|
 | ALL POOLED | opus-5 | haiku-4-5 | 16 | 1.0x | 1.17x | **+1.0** |
 | ALL POOLED | **haiku-4-5** | sonnet-5 | 16 | **1.33x** | 1.32x | **−1.0** |
 
-Haiku writes **more** characters than Sonnet 5 pooled (1.33x) and scores **1.0 lower** on
-substance. Length and quality are close to orthogonal on this workload, which is the reason
-neither can substitute for the other in a model decision.
+Haiku writes **more** characters than Sonnet 5 pooled (1.33x) and scores **1.0 lower** on substance. Length and quality are close to orthogonal on this workload, which is why neither substitutes for the other in a model decision. [Length versus evidence](/docs/model-selection/length-vs-evidence).
 
 ## What the sweep could not settle
 
-`bustout` and `identity` were swept at **n=3**, and the study's own bar for a band claim is
-**5** (`MIN_APPLICATIONS_FOR_A_BAND_CLAIM`). Both cells return the same mechanical verdict:
+`bustout` and `identity` were swept at **n=3**, and the study's own bar for a band claim is **5** (`MIN_APPLICATIONS_FOR_A_BAND_CLAIM`). Both cells return the same mechanical verdict:
 
-> **n TOO SMALL TO TELL — 3 applications per cell. One case moves the band rate by 33
-> points; haiku-4-5-20251001-v1:0 did not lose on any axis here**
+> **n TOO SMALL TO TELL — 3 applications per cell. One case moves the band rate by 33 points; haiku-4-5-20251001-v1:0 did not lose on any axis here**
 
-That verdict is generated mechanically on purpose. Quoted from `evals/set_comparison.py`,
-which shares the machinery: *"the honest answer to several of these questions is 'n is too
-small', and that answer must not depend on the author's mood."*
+That verdict is generated mechanically on purpose. Quoted from `evals/set_comparison.py`, which shares the machinery: *"the honest answer to several of these questions is 'n is too small', and that answer must not depend on the author's mood."* Both were **HELD**. Detail and the money sitting on the unrun eval: [model assignment](/docs/model-selection/assignment#bustout-and-identity--held-at-n3).
 
-Both were **HELD**. Detail and the money sitting on the unrun eval:
-[the assignment](/docs/model-selection/assignment#bustout-and-identity--held-at-n3).
-
-## The eight band disagreements, in full
+## Eight band disagreements, in full
 
 Every row where a model's declared band differed from the fixture's pinned expectation:
 
@@ -227,44 +163,28 @@ Every row where a model's declared band differed from the fixture's pinned expec
 | `rings` | sonnet-5 | APP-1014 | POSSIBLE RISK | LOW RISK | `RNG-020` |
 | `synthetic` | opus-5 | APP-1014 | LOW RISK | POSSIBLE RISK | `SYN-008` |
 
-<Callout type="error" title="Seven of those eight are two fixtures">
-APP-1004 `bustout` is wrong on **all three tiers**. APP-1014 `rings` is wrong on **all three
-tiers**. The cross-family study later reproduced both on GPT-5.6 Luna, Terra and Sol as well
-— **0 of 5 models correct on either, across two families, every one wrong the same way.**
-
-That is the signature of a shared prompt defect, not of a model tier.
-[Open questions](/docs/open-questions#3-the-calibration-failures-no-model-choice-fixes).
-</Callout>
+**Seven of those eight are two fixtures.** APP-1004 `bustout` is wrong on all three tiers; APP-1014 `rings` is wrong on all three tiers. The cross-family study later reproduced both on GPT-5.6 Luna, Terra and Sol as well — **0 of 5 models correct on either, across two families, every one wrong the same way.** That is the signature of a shared prompt defect, not of a model tier. [Open questions](/docs/open-questions#3-the-calibration-failures-no-model-choice-fixes).
 
 ## What the re-derivation changed in the code
 
 Beyond the two model ids:
 
-1. **`MAX_TOKENS_BY_TIER` → `MAX_TOKENS_BY_AGENT`.** Under the old table, `rings` drew its
-   cap from `tier_label(model)`, so this very re-assignment would have silently changed the
-   truncation risk of one of only two agents ever measured to truncate. Both values happen to
-   be 4096 today, so nothing changed in effect — a future move to LIGHT would have dropped it
-   to 3072. `test_per_agent_caps_preserve_the_shipped_effective_values` pins that no effective
-   cap moved.
-2. **`TIER_RATIONALE` entries now open with a grade.** `MEASUREMENT` / `HELD` / `UNPROVEN`,
-   and `evidence_grade()` reads the grade out of the text rather than re-deciding, so the
-   rendered table cannot disagree with the prose. An entry stating no grade returns
-   `UNRECORDED`, which is treated as a defect rather than a fourth category.
-3. **`QUALITY_SWEPT_AGENTS` was added**, separately from the grade, because `dealer` and
-   `straw` are graded MEASUREMENT on latency and cost and have never had their analysis
-   quality compared to anything.
+1. **`MAX_TOKENS_BY_TIER` → `MAX_TOKENS_BY_AGENT`.** Under the old table `rings` drew its cap from `tier_label(model)`, so this very re-assignment would have silently changed the truncation risk of one of only two agents ever measured to truncate. Both values happen to be 4096 today, so nothing changed in effect — a future move to LIGHT would have dropped it to 3072. `test_per_agent_caps_preserve_the_shipped_effective_values` pins that no effective cap moved.
+2. **`TIER_RATIONALE` entries now open with a grade.** `MEASUREMENT` / `HELD` / `UNPROVEN`, and `evidence_grade()` reads the grade out of the text rather than re-deciding, so a rendered table cannot disagree with the prose. An entry stating no grade returns `UNRECORDED`, treated as a defect rather than a fourth category.
+3. **`QUALITY_SWEPT_AGENTS` was added**, separately from the grade, because `dealer` and `straw` are graded MEASUREMENT on latency and cost and have never had their analysis quality compared to anything.
 
-## What the re-derivation did not do
+## Still unknown
 
-- **It did not re-measure the pipeline.** The 42-run benchmark ran under the *previous*
-  assignment. Everything downstream of this page's two moves is a projection until
-  `evals.bench --pipeline --repetitions 3` runs again.
-- **It did not touch four of the eight agents.** `dealer`, `straw`, `employment` and `income`
-  were never in this sweep.
-- **It did not fix the two calibration failures**, and no tier does.
-- **It offers no new end-to-end p50.** Fan-out is bounded by a per-run *maximum*, which
-  per-agent medians cannot reconstruct. What *is* claimable is per-agent and paired: on the
-  same five applications `rings` ran **22.05 s p50 on Sonnet 5 against 32.81 s on Opus 5**,
-  faster on 3 of 5 paired draws, while `synthetic` ran **13.54 s against 8.51 s** — slower on
-  4 of 5. Both figures are medians of five and no p95 is offered for either, because five
-  samples do not support one.
+| Not done by this re-derivation | Consequence |
+|---|---|
+| Pipeline was not re-measured | The 42-run benchmark ran under the *previous* assignment; everything downstream of these two moves is a projection until `evals.bench --pipeline --repetitions 3` runs |
+| Four of the eight agents untouched | `dealer`, `straw`, `employment` and `income` were never in this sweep |
+| Two calibration failures unfixed | No tier fixes either, and neither does the other family |
+| No new end-to-end p50 | Fan-out is bounded by a per-run *maximum*, which per-agent medians cannot reconstruct |
+
+What *is* claimable is per-agent and paired: on the same five applications `rings` ran **22.05 s p50 on Sonnet 5 against 32.81 s on Opus 5**, faster on 3 of 5 paired draws, while `synthetic` ran **13.54 s against 8.51 s** — slower on 4 of 5. Both are medians of five and no p95 is offered for either, because five samples do not support one.
+
+<Cards>
+  <Card title="Model assignment" href="/docs/model-selection/assignment" description="The shipped table, every rationale, and the four agents with no quality evidence." />
+  <Card title="Judge methodology" href="/docs/model-selection/judge-methodology" description="Why a +0.20 margin inside a +0.31 self-preference is refused." />
+</Cards>

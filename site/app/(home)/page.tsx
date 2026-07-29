@@ -31,7 +31,7 @@ export default function HomePage() {
           Engagement record
         </p>
         <h1 className="mt-3 text-3xl font-bold sm:text-4xl">
-          Point Predictive on Amazon Bedrock AgentCore
+          AnyCompany on Amazon Bedrock AgentCore
         </h1>
         <p className="mt-4 text-fd-muted-foreground">
           A 1:1 port of eight specialist fraud agents plus a master synthesizer, off Snowflake

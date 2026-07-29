@@ -1,86 +1,61 @@
 ---
-title: Length vs evidence
+title: Length versus evidence
 description: >-
   "GPT writes a fifth of the words" was the intuitive objection to a cheaper
   specialist. Paired on identical payloads it is mostly padding — except on
   bustout, where it really is evidence lost.
 ---
 
-<Callout type="info" title="Audience">
-For the customer's engineer. This is the page that tests the objection an experienced fraud
-reviewer raises first, and it is the one page where the answer comes out **against** the
-cheaper model on a specific agent.
+*For the customer's engineer. This page tests the objection an experienced fraud reviewer raises first, and it is the one page where the answer comes out against the cheaper model on a specific agent.*
 
-Artifacts: `evals/results/set_comparison.json → length_gap` (30 paired comparisons, 6 model
-pairings x 5 scopes) and `evals/results/tier_quality.json → verbosity_vs_substance` (12 paired
-comparisons within Claude). Code: `evals/set_comparison.py:length_gap`.
-</Callout>
+**Mostly padding, and on `bustout` a real loss.** Pooled and paired on identical payloads, the longer Claude analysis is 2.95x the length for 1.08x the signals named, reaching the same band in 23 of 24 comparisons. On `bustout` alone the shorter analysis names proportionally fewer signals than its length predicts, and that is the one agent where the objection fires.
 
-## The objection
+## How the four ratios read
 
-Measured, pooled over the 120 cross-family analyses:
+<Mermaid
+  title="Which ratio decides, fixed before the numbers were read"
+  chart={`
+flowchart LR
+  P["Paired by<br/>application + domain"] --> R["chars ratio<br/>vs evidence ratios"]
+  R -->|"chars ratio well above<br/>signals and grounded"| PAD["PADDING:<br/>same evidence, more words"]
+  R -->|"chars ratio at or below<br/>those ratios"| LOST["EVIDENCE LOST:<br/>outweighs any<br/>latency or cost win"]
+  R -->|"metrics disagree"| TIE["grounded_ratio first,<br/>then the two judges"]
+`}
+/>
 
-| | Claude | GPT |
-|---|---:|---:|
-| Output tokens p50 | **1422.5** (n=48) | **288.0** (n=72) |
+Pairing is by **(application, domain)**, so only analyses of the *same payload* are compared and a length difference cannot be an artifact of one model drawing easier applications. Artifacts: `evals/results/set_comparison.json → length_gap` (30 paired comparisons, 6 model pairings x 5 scopes) and `evals/results/tier_quality.json → verbosity_vs_substance` (12 paired comparisons within Claude). Code: `evals/set_comparison.py:length_gap`.
 
-GPT writes roughly a fifth of the words. On a fraud product that reads as "a fifth of the
-analysis", and that intuition is why the study was designed to test it rather than assert
-either way.
+| Ratio, all Claude ÷ GPT, all medians | What it measures | Weight |
+|---|---|---|
+| `chars_ratio` | Raw character count | The denominator for the question; says nothing alone |
+| `evidence_ratio` | Distinct numeric facts plus signal identifiers | **Style-sensitive** — a backticked identifier table inflates it. Reported, not decisive |
+| `signals_cited_ratio` | How many of the payload's OWN signals each names | **Also style-sensitive**, and [quantified below](#the-paraphrase-correction-07-of-a-17-signal-gap) |
+| `grounded_ratio` | `_context` fields actually validated | **The style-free one.** `context_grounding` counts only tokens unique to the `_context` row, which cannot be produced by restating the signals block. **Decisive** |
 
-The customer's own master prompt says the opposite. Rule `MSTR-018` in it states — in her
-words, kept in `prompts/verbatim/master_agent_prompt.txt` rather than reproduced here — that
-how much a specialist *writes* is not a signal of how severe the fraud is. That rule is the
-reason this comparison exists: she had already ruled out length as evidence, so a port that
-picked a model for writing more would be contradicting her.
+Plus `band_justified_both`, so a shorter analysis cannot pass by declaring a band with no reason attached.
 
-## The method
-
-Pairing is by **(application, domain)**, so only analyses of the *same payload* are compared
-and a length difference cannot be an artifact of one model drawing easier applications. Four
-ratios, all Claude ÷ GPT, all medians over the paired set:
-
-<Accordions>
-
-<Accordion title="chars_ratio — how much longer the Claude analysis is">
-Raw character count. Says nothing on its own; it is the denominator for the question.
-</Accordion>
-
-<Accordion title="evidence_ratio — distinct numeric facts plus signal identifiers">
-**Style-sensitive.** A backticked identifier table inflates it. Reported, not decisive.
-</Accordion>
-
-<Accordion title="signals_cited_ratio — how many of the payload's OWN signals each names">
-**Also style-sensitive**, and quantified: see [the paraphrase correction](#the-paraphrase-correction-07-of-a-17-signal-gap) below.
-</Accordion>
-
-<Accordion title="grounded_ratio — _context fields actually validated">
-**The style-free one.** `context_grounding` counts only tokens unique to the `_context` row,
-which cannot be produced by restating the signals block. This is the instruction the customer
-cares most about and the one brevity is most likely to sacrifice.
-</Accordion>
-
-</Accordions>
-
-Plus `band_justified_both`, so a shorter analysis cannot pass by declaring a band with no
-reason attached.
-
-The reading rule, quoted verbatim from `length_gap.reading`:
+Reading rule, quoted verbatim from `length_gap.reading`:
 
 > `chars_ratio` well above `signals_cited_ratio` and `grounded_ratio` means the longer
 > (Claude) analysis is **padding**: same evidence, more words. `chars_ratio` at or below those
 > ratios means the shorter (GPT) analysis really is **dropping evidence**, which outweighs any
 > latency or cost win.
 
-<Callout type="warn" title="Which ratio wins when they disagree, decided before the numbers were read">
-Quoted from the docstring: *"READ `grounded_ratio` FIRST WHERE THE TWO DISAGREE.
-`signals_cited_ratio` partly measures whether a model writes identifiers or prose ... When it
-and `grounded_ratio` point different ways, the honest reading is that the metrics disagree
-about a paraphrase, and the judges' substance scores are the tiebreak — not whichever number
-happens to support the conclusion already preferred."*
-</Callout>
+Which ratio wins when they disagree was decided before the numbers were read. Quoted from the docstring: *"READ `grounded_ratio` FIRST WHERE THE TWO DISAGREE. `signals_cited_ratio` partly measures whether a model writes identifiers or prose ... When it and `grounded_ratio` point different ways, the honest reading is that the metrics disagree about a paraphrase, and the judges' substance scores are the tiebreak — not whichever number happens to support the conclusion already preferred."*
 
-## The headline: padding, on the pooled result and on 3 of 4 agents
+## The objection, measured
+
+Pooled over the 120 cross-family analyses:
+
+| | Claude (n=48) | GPT (n=72) |
+|---|---:|---:|
+| Output tokens p50 | **1422.5** | **288.0** |
+
+GPT writes roughly a fifth of the words. On a fraud product that reads as "a fifth of the analysis", and that intuition is why the study was designed to test it rather than assert either way.
+
+Her own master prompt says the opposite. Rule `MSTR-018` in it states — in her words, kept in `prompts/verbatim/master_agent_prompt.txt` rather than reproduced here — that how much a specialist *writes* is not a signal of how severe the fraud is. That rule is why this comparison exists: she had already ruled out length as evidence, so a port picking a model for writing more would be contradicting her.
+
+## Headline: padding, pooled and on 3 of 4 agents
 
 `opus-5` vs `luna`, the widest pairing in the study:
 
@@ -92,25 +67,15 @@ happens to support the conclusion already preferred."*
 | **`rings`** | 6 | **2.83x** | 7.75x | **1.00x** | 1.5x | 6/6 | **PADDING** |
 | `synthetic` | 6 | 2.02x | 10.0x | 0.67x | 2.75x | 6/6 | length and evidence scale together |
 
-The `rings` row is the cleanest statement of the finding: **Opus writes 2.83x Luna's characters
-while naming 1.00x the payload's signals — exactly the same signals — and reaches the same band
-in 6 of 6 paired comparisons.** The extra 183% of text names no additional signal at all.
+That `rings` row is the cleanest statement of the finding: **Opus writes 2.83x Luna's characters while naming 1.00x the payload's signals — exactly the same signals — and reaches the same band in 6 of 6 paired comparisons.** An extra 183% of text names no additional signal at all.
 
-On `synthetic` the ratio inverts: Luna names **more** of the payload's signals than Opus does
-(0.67x means Opus names two thirds of what Luna names), in a third of the characters.
+On `synthetic` the ratio inverts: Luna names **more** of the payload's signals than Opus does (0.67x means Opus names two thirds of what Luna names), in a third of the characters.
 
-<Callout type="info" title="This reproduces the within-Claude result">
-The Claude-only tier study found the same shape at a smaller magnitude: on `rings`, Opus wrote
-**1.76x** Sonnet's characters carrying **1.71x** the distinct evidence for a judge substance
-delta of **+0** (n=5 paired). So verbosity-without-substance is not a cross-family artifact —
-it is a property of the larger model on this workload.
-[Tier re-derivation](/docs/model-selection/tier-rederivation#the-padding-finding-extra-length-is-not-extra-evidence).
-</Callout>
+This reproduces the within-Claude result at a smaller magnitude. On `rings`, Opus wrote **1.76x** Sonnet's characters carrying **1.71x** the distinct evidence for a judge substance delta of **+0** (n=5 paired). So verbosity-without-substance is not a cross-family artifact — it is a property of the larger model on this workload. [Tier re-derivation](/docs/model-selection/tier-rederivation#the-padding-finding-extra-length-is-not-extra-evidence).
 
-### The same pairing against the actual incumbent
+### Same pairing against the actual incumbent
 
-`rings`'s and `synthetic`'s incumbent at the time was Opus 5; `bustout`'s and `identity`'s was
-Sonnet 5. Against Sonnet 5, the gap narrows but the shape holds:
+`rings` and `synthetic` had Opus 5 as incumbent; `bustout` and `identity` had Sonnet 5. Against Sonnet 5 the gap narrows and the shape holds:
 
 | Scope | Paired | chars ratio | evidence ratio | signals-cited ratio | grounded ratio | Same band | Finding |
 |---|---:|---:|---:|---:|---:|---:|---|
@@ -122,8 +87,7 @@ Sonnet 5. Against Sonnet 5, the gap narrows but the shape holds:
 
 ## Where the objection is right: `bustout`
 
-**`bustout` returns EVIDENCE LOST against every Claude model in every GPT pairing.** It is the
-only agent that does, and it is unanimous across six pairings:
+**`bustout` returns EVIDENCE LOST against every Claude model in every GPT pairing.** It is the only agent that does, and it is unanimous across six pairings:
 
 | Claude | GPT | Paired | chars ratio | signals-cited ratio | Finding string from the artifact |
 |---|---|---:|---:|---:|---|
@@ -134,12 +98,9 @@ only agent that does, and it is unanimous across six pairings:
 | sonnet-5 | terra | 6 | 2.26x | 2.75x | *"names 0.36x the signals for 0.44x the length"* |
 | sonnet-5 | sol | 6 | 2.96x | 3.5x | *"names 0.29x the signals for 0.34x the length"* |
 
-The arithmetic in the top row: Luna's `bustout` analysis is **22% of Opus's length** but names
-**14% of the signals** — proportionally *fewer* signals than its length would predict. That is
-the definition the method set in advance, and it fires.
+Arithmetic in the top row: Luna's `bustout` analysis is **22% of Opus's length** but names **14% of the signals** — proportionally *fewer* signals than its length would predict. That is the definition the method set in advance, and it fires.
 
-Look at the underlying pairs and the mechanism is stark. From `length_gap.comparisons` →
-`opus-5` vs `luna` → pooled `pairs`, the `signals_cited` counts on `bustout`:
+Underlying pairs make the mechanism stark. From `length_gap.comparisons` → `opus-5` vs `luna` → pooled `pairs`, the `signals_cited` counts on `bustout`:
 
 | Application | opus-5 | luna |
 |---|---:|---:|
@@ -150,27 +111,24 @@ Look at the underlying pairs and the mechanism is stark. From `length_gap.compar
 | APP-1013 | 5 | **0** |
 | APP-1014 | 7 | 1 |
 
-Luna names **zero or one** of `bustout`'s signals by name on every application. Opus names five
-to seven.
+Luna names **zero or one** of `bustout`'s signals by name on every application. Opus names five to seven.
 
-<Callout type="warn" title="But read the paraphrase correction before concluding">
+<Callout type="warn" title="Read the paraphrase correction before concluding on bustout">
 `bustout` is precisely the agent the artifact's own caveat singles out as most affected by the
 identifier-vs-prose measurement problem. `grounded_ratio` — the style-free metric — is 3.0x on
-this pairing, i.e. Opus validates three times as many `_context` rows, which is a real gap but
-a much smaller one than 7.0x. And the judges scored **GPT better on substance on `bustout` on
-both judges** (+0.361 / +0.861).
+this pairing, i.e. Opus validates three times as many `_context` rows, a real gap but a much
+smaller one than 7.0x. And the judges scored **GPT better on substance on `bustout` on both
+judges** (+0.361 / +0.861).
 
-So the honest reading for `bustout` is: **the metrics disagree, and they disagree about
-paraphrasing.** `signals_cited` says evidence lost; `grounded_fraction` says a 3x gap; the two
-judges say GPT is denser. The study's own tiebreak rule puts `grounded_fraction` and the judges
-first — which still leaves a grounding gap, which is the reason `bustout` stays on Claude
-anyway.
+So the honest reading is that **the metrics disagree, and they disagree about paraphrasing.**
+`signals_cited` says evidence lost; `grounded_fraction` says a 3x gap; the two judges say GPT is
+denser. The study's own tiebreak puts `grounded_fraction` and the judges first — which still
+leaves a grounding gap, and that is why `bustout` stays on Claude anyway.
 </Callout>
 
-## The paraphrase correction: 0.7 of a 1.7-signal gap
+## Paraphrase correction: 0.7 of a 1.7-signal gap [#the-paraphrase-correction-07-of-a-17-signal-gap]
 
-Quoted verbatim from the artifact's caveats, because this is the single most self-critical
-measurement in the study:
+Quoted verbatim from the artifact's caveats, because this is the single most self-critical measurement in the study:
 
 > `signals_cited` is STYLE-SENSITIVE and partly measures whether a model writes signal
 > identifiers or paraphrases them. Opus writes a backticked table of every identifier; Luna
@@ -181,20 +139,16 @@ measurement in the study:
 > ~1.7 gap is paraphrasing rather than missing evidence**. The looser matcher was **rejected**
 > because it cannot keep `ssn_apps_last_7d` and `ssn_apps_last_30d` distinct.
 
-| Matcher | Claude signals/analysis | GPT signals/analysis | Gap |
-|---|---:|---:|---:|
-| Shipped (strict) | 4.56 | 2.86 | **1.70** |
-| Looser stemming (rejected) | 4.65 | 3.60 | **1.05** |
+| Matcher | Claude signals/analysis | GPT signals/analysis | Gap | Shipped? |
+|---|---:|---:|---:|---|
+| Strict | 4.56 | 2.86 | **1.70** | **Yes** — keeps 7-day and 30-day velocity distinct |
+| Looser stemming | 4.65 | 3.60 | **1.05** | No — blurs `ssn_apps_last_7d` into `ssn_apps_last_30d` |
 
-**About 41% of the measured citation gap is a style difference, not a missing-evidence
-difference.** The looser matcher was nevertheless rejected, and the reason is a fraud-domain
-reason: it cannot distinguish a 7-day velocity signal from a 30-day one, which is exactly the
-distinction a bust-out analysis turns on. A metric that improves the score by blurring two
-signals into one is worse than a metric with a known bias.
+**About 41% of the measured citation gap is a style difference, not a missing-evidence difference.** The looser matcher was nevertheless rejected, for a fraud-domain reason: it cannot distinguish a 7-day velocity signal from a 30-day one, which is exactly the distinction a bust-out analysis turns on. A metric that improves the score by blurring two signals into one is worse than a metric with a known bias.
 
 ## Band agreement survives the length gap
 
-The strongest single argument that brevity is not costing fraud judgement:
+Strongest single argument that brevity is not costing fraud judgement:
 
 | Pairing | Paired | Same band | Both bands justified |
 |---|---:|---:|---:|
@@ -205,16 +159,11 @@ The strongest single argument that brevity is not costing fraud judgement:
 | sonnet-5 vs terra | 20 | 18/20 | 20 |
 | sonnet-5 vs sol | 21 | 15/21 | 21 |
 
-**Terra reached the same band as Opus 5 in 23 of 23 paired comparisons**, in roughly 30% of the
-characters. Luna missed one of 24.
+**Terra reached the same band as Opus 5 in 23 of 23 paired comparisons**, in roughly 30% of the characters. Luna missed one of 24.
 
-The two low rows are both Sol, and the collapse is localised: `identity`/Sol agrees with Opus 5
-in **1 of 6** and with Sonnet 5 in **0 of 3**. That is the same cell that escalated both
-anti-false-positive fixtures. Sol's problem is not brevity — its per-cell output medians run
-126–370 tokens, in the same range as Luna's 206–421 — it is calibration, at 4x Luna's price.
-[Cross-family study](/docs/model-selection/cross-family-study#gpt-56-sol-is-the-worst-variant-on-quality-at-4x-lunas-price).
+Both low rows are Sol, and the collapse is localised: `identity`/Sol agrees with Opus 5 in **1 of 6** and with Sonnet 5 in **0 of 3**. That is the same cell that escalated both anti-false-positive fixtures. Sol's problem is not brevity — its per-cell output medians run 126–370 tokens, in the same range as Luna's 206–421 — it is calibration, at 4x Luna's price. [Cross-family study](/docs/model-selection/cross-family-study#gpt-56-sol-is-the-worst-variant-on-quality-at-4x-lunas-price).
 
-## And within Claude: length is not even monotonic in the tier
+## Within Claude, length is not monotonic in the tier
 
 From `tier_quality.json → verbosity_vs_substance`, pooled over 16 paired applications:
 
@@ -224,53 +173,24 @@ From `tier_quality.json → verbosity_vs_substance`, pooled over 16 paired appli
 | opus-5 | haiku-4-5 | 16 | 1.00x | 1.17x | +1.0 | **0** |
 | **haiku-4-5** | sonnet-5 | 16 | **1.33x** | 1.32x | **−1.0** | **0** |
 
-**Haiku 4.5 writes more characters than Sonnet 5 (1.33x) and scores a full point lower on
-substance.** The cheapest model in the study is not the shortest, and the longest is not the
-best. Length and quality are close to orthogonal on this workload, which is why neither can
-substitute for the other in a model decision.
+**Haiku 4.5 writes more characters than Sonnet 5 (1.33x) and scores a full point lower on substance.** The cheapest model in the study is not the shortest, and the longest is not the best. Length and quality are close to orthogonal on this workload, which is why neither substitutes for the other in a model decision.
 
-The last column is **0 in every row of every pairing** — across 48 paired comparisons in the
-tier study, there is no pair where the longer analysis escalated the band and the shorter one
-did not. So verbosity does not drift toward over-escalation either.
+Every row of every pairing shows **0 in the last column** — across 48 paired comparisons in the tier study, no pair exists where the longer analysis escalated the band and the shorter one did not. So verbosity does not drift toward over-escalation either.
 
-## What this page concludes
+## Conclusions
 
-<Steps>
+| Claim | Verdict on the evidence |
+|---|---|
+| "GPT writes a fifth of the words" is, by itself, an objection | **No.** Pooled and paired on identical payloads, the longer Claude analysis is 2.95x the length for 1.08x the signals named, and the same band 23 of 24 times |
+| On `bustout` it is a real objection | **Yes, on one metric.** `signals_cited` says 7.0x; `grounded_ratio` says 3.0x; both judges say GPT is denser. The metrics disagree about paraphrasing and the study says so rather than picking the convenient one |
+| Brevity is why the specialists stayed on Claude | **No.** The deciding measurement was `_context` grounding — 0.642 vs 0.357, lower on 4 of 4 agents, no judge involved. The length gap was tested, and it mostly exonerates GPT. [Cross-family study](/docs/model-selection/cross-family-study#what-decided-it-_context-grounding) |
+| Verbosity that does matter is `bustout`'s and `rings`'s own | **Yes.** Those two prompts carry no character cap and write **1,331 output tokens p50** against **381** for the six capped agents, with **30.1%** of their calls exceeding 4,000 characters against 3.6%. A prompt question for the customer, not a model question. [Open questions](/docs/open-questions#5-two-of-her-prompts-carry-no-character-cap) |
 
-<Step>
+## Still unknown
 
-**"GPT writes a fifth of the words" is not, by itself, an objection.** Pooled, paired on
-identical payloads, the longer Claude analysis is 2.95x the length for 1.08x the signals named
-and the same band 23 of 24 times.
+Every ratio here is a **median of six paired comparisons per scope**, so no p95 is offered and none is computable. `signals_cited`'s residual bias is bounded but not removed — 0.7 of the 1.7-signal gap is measured as paraphrasing and the remaining 1.0 is not attributed either way. And the four unswept agents (`dealer`, `straw`, `employment`, `income`) have no length comparison at all, in either family.
 
-</Step>
-
-<Step>
-
-**On `bustout` it is a real objection, on one metric, and a smaller one on the style-free
-metric.** `signals_cited` says 7.0x; `grounded_ratio` says 3.0x; both judges say GPT is denser.
-The metrics disagree about paraphrasing and the study says so rather than picking the
-convenient one.
-
-</Step>
-
-<Step>
-
-**Brevity is not why the specialists stayed on Claude.** The deciding measurement was
-`_context` grounding — 0.642 vs 0.357, lower on 4 of 4 agents, no judge involved. The length
-gap was tested, and it mostly exonerates GPT.
-[Cross-family study](/docs/model-selection/cross-family-study#what-decided-it-_context-grounding).
-
-</Step>
-
-<Step>
-
-**The verbosity that does matter is `bustout`'s and `rings`'s own.** Those two prompts carry no
-character cap and write **1,331 output tokens p50** against **381** for the six capped agents,
-with **30.1%** of their calls exceeding 4,000 characters against 3.6%. That is a prompt
-question for the customer, not a model question.
-[Open questions](/docs/open-questions#5-two-of-her-prompts-carry-no-character-cap).
-
-</Step>
-
-</Steps>
+<Cards>
+  <Card title="Cross-family study" href="/docs/model-selection/cross-family-study" description="The full Claude-versus-GPT table, per agent, with the verdict column." />
+  <Card title="What does not reduce cost" href="/docs/cost/what-does-not-work" description="Why capping max_tokens to shorten these two agents failed all three of its criteria." />
+</Cards>

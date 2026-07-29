@@ -1,26 +1,30 @@
 ---
 title: Open questions
-description: The five things that need a customer answer — the volume figure that decides the cost case, the enum conflict, the calibration failures no model fixes, the missing xlsx, and the two prompts with no character cap.
+description: Five things that need a customer answer — the volume figure that decides the cost case, the enum conflict, the calibration failures no model fixes, the missing xlsx, and the two prompts with no character cap.
 ---
 
-<Callout type="info" title="Audience">
-Mixed. Question 1 is for the executive conversation; 2, 3 and 5 are for the customer's
-engineer; 4 is for both. Each question states what we implemented, what we did **not** decide
-for them, and the exact ask.
-</Callout>
+*Mixed audience. Question 1 is for the executive conversation; 2, 3 and 5 are for the customer's engineer; 4 is for both.*
 
-Five items cannot be closed from our side. None of them is a gap in the port — each is a
-decision that belongs to the customer, or a document we never received. They are ordered by
-how much rests on the answer.
+Five items cannot be closed from our side. None is a gap in the port — each is a decision that
+belongs to the customer, or a document that never arrived. They are ordered by how much rests on
+the answer.
+
+| # | Question | Blocks | Who decides |
+|---|---|---|---|
+| 1 | Applications per day through the full eight-agent path | **The entire cost comparison** | Customer, one number |
+| 2 | Which artifact defines the authoritative enums | Downstream routing and the output DDL | Customer |
+| 3 | May we draft an alert-counting sentence for bustout and rings | Two calibration failures no model fixes | Customer owns the prompt |
+| 4 | The three documents never received | Signal set, output DDL, acceptance criteria | Customer, one email |
+| 5 | Should the 4,000-character cap be added to two prompts | Fan-out latency floor and 24 invented titles | Customer owns the prompt |
 
 ## 1. How many applications per day go through the full eight-agent path?
 
-<Callout type="error" title="This is the single most important open question in the engagement">
+<Callout type="error" title="Single most important open question in the engagement">
 Without this one number, the cost comparison against the customer's reported **$700K–$1M**
 Snowflake AI spend is **unresolvable**. With it, the comparison is decided in a sentence.
 </Callout>
 
-Our measured cost is **$0.1440 per adjudication** (p50, n=41 priced runs,
+Measured cost is **$0.1440 per adjudication** (p50, n=41 priced runs,
 `evals/results/pipeline_14x3_us-east-1.json`). Annualising it requires a volume:
 
 | Applications/day through the full 8-agent forensic path | Annualised at measured p50 |
@@ -28,72 +32,51 @@ Our measured cost is **$0.1440 per adjudication** (p50, n=41 priced runs,
 | ~3,000 | **~$158K** |
 | ~300,000 | **~$15.8M** |
 
-Arithmetic: volume x 365 x $0.14395847. The per-adjudication p50 is measured; the two volumes
-are illustrative brackets chosen to show the range, **not** the customer's figures.
+Arithmetic: volume x 365 x $0.14395847. The per-adjudication p50 is measured; the two volumes are
+illustrative brackets chosen to show the range, **not** the customer's figures. At the low end
+the port sits comfortably below the incumbent spend; at the high end it is an order of magnitude
+above it.
 
-Same architecture, opposite conclusion. At the low end the port is comfortably below the
-incumbent spend; at the high end it is an order of magnitude above it.
-
-**The exact ask.** Not "how many applications do you process" — the consortium volume is much
-larger than the forensic-underwriting volume, and mixing them is how this question gets
-answered wrongly. Ask: *of the applications you ingest, how many per day receive the full
-eight-agent forensic underwriting treatment, as opposed to a score-only or single-product
-path?*
+**Exact ask.** Not "how many applications do you process" — consortium volume is much larger than
+forensic-underwriting volume, and mixing them is how this question gets answered wrongly. Ask:
+*of the applications you ingest, how many per day receive the full eight-agent forensic
+underwriting treatment, as opposed to a score-only or single-product path?*
 
 Two secondary figures worth asking for at the same time, because they change the arithmetic
 rather than just the total:
 
 - What fraction of that volume is re-run (repeat submissions, retro backfills)?
-- Is the eight-agent path applied to every application, or only to those over a score
-  threshold?
+- Is the eight-agent path applied to every application, or only above a score threshold?
+
+<Mermaid
+  title="One input, two opposite conclusions"
+  chart={`
+flowchart LR
+  Q["Applications/day on the<br/>full 8-agent path?"] --> L["~3,000/day"]
+  Q --> H["~300,000/day"]
+  L --> LR["~$158K/yr<br/>below reported spend"]
+  H --> HR["~$15.8M/yr<br/>above reported spend"]
+`}
+/>
 
 Full detail, including what the $700K–$1M does and does not cover:
-[the Snowflake comparison](/docs/cost/snowflake-comparison).
+[Snowflake comparison](/docs/cost/snowflake-comparison).
 
 ## 2. Which artifact defines the authoritative enums?
 
-The customer's own two artifacts disagree, and a third vocabulary sits between them. Recorded
-in `agents/contracts.py:ENUM_CONFLICT`.
+Her own two artifacts disagree, and a third vocabulary sits between them. Recorded in
+`agents/contracts.py:ENUM_CONFLICT`.
 
-<Tabs items={['Implemented (the prompt file)', 'Not implemented (the PDF)', 'The third vocabulary']}>
+| | `docs/master_agent_prompt.txt` — **implemented** | Process-guide PDF §5.1–5.2 — **not implemented** | The eight specialist prompts |
+|---|---|---|---|
+| Mid band | **`MEDIUM RISK`** | **`POSSIBLE RISK`** | **`POSSIBLE RISK`** |
+| Recommendation values | 3: `APPROVE`, `REVIEW AND APPLY STIPULATIONS`, `DECLINE` | 4: `APPROVE`, `APPROVE WITH STIPULATIONS`, **`MANUAL REVIEW`**, `DECLINE` | n/a — specialists classify, they do not recommend |
+| `top_risk_factors`, `*_flag` columns | Required | **Absent** | n/a |
+| Status | The string the production agent runs today, so it wins here | Narrative documentation | Their `CALIBRATION` blocks |
+| **Verdict** | **Implemented.** Executable artifact beats narrative | Exposed via `PDF_TO_PROMPT_ENUM_MAP`, never silently adopted | Recorded: the specialists agree with the **PDF**, not the master prompt |
 
-<Tab value="Implemented (the prompt file)">
-
-**`docs/master_agent_prompt.txt`** — the executable artifact. This is the string the
-production agent runs today, so it wins in this port.
-
-- `overall_risk_decision` ∈ `LOW RISK` | **`MEDIUM RISK`** | `HIGH RISK`
-- `recommendation_decision` ∈ `APPROVE` | `REVIEW AND APPLY STIPULATIONS` | `DECLINE`
-  — **three** values
-
-</Tab>
-
-<Tab value="Not implemented (the PDF)">
-
-**`docs/Agent_Underwriting_Process_Guide (1).pdf`** sections 5.1 and 5.2 — narrative
-documentation, and it conflicts with the prompt.
-
-- `overall_risk_decision` ∈ `LOW RISK` | **`POSSIBLE RISK`** | `HIGH RISK`
-- `recommendation_decision` ∈ `APPROVE` | `APPROVE WITH STIPULATIONS` | **`MANUAL REVIEW`** |
-  `DECLINE` — **four** values
-
-The PDF also shows **no** `top_risk_factors` column and no `*_flag` columns, which the prompt
-file requires.
-
-</Tab>
-
-<Tab value="The third vocabulary">
-
-**The eight `<domain>_agent_prompt.txt` CALIBRATION blocks** — the specialists classify in
-`LOW RISK` | **`POSSIBLE RISK`** | `HIGH RISK`.
-
-So the specialists agree with the **PDF**, not with the master prompt. A band rename happens
-between the analysis layer and the adjudication layer — by design or by drift, and only the
-customer knows which.
-
-</Tab>
-
-</Tabs>
+So a band rename happens between the analysis layer and the adjudication layer — by design or by
+drift, and only the customer knows which.
 
 **What is mechanically mappable and what is not.** `PDF_TO_PROMPT_ENUM_MAP` handles
 `POSSIBLE RISK` → `MEDIUM RISK` and `APPROVE WITH STIPULATIONS` → `REVIEW AND APPLY
@@ -102,30 +85,26 @@ STIPULATIONS`. **`MANUAL REVIEW` is deliberately absent** and `map_pdf_enum` rai
 outcome that does not exist in the executable artifact. Inventing a mapping there would be a
 business decision disguised as a default.
 
-<Callout type="warn" title="Blast radius">
-Quoted from `ENUM_CONFLICT`: *"the enum strings are persisted values in
-`UNDERWRITING_REPORT_OUTPUT` and are read by downstream workflow routing."* Anything keying
-off the band string — a queue router, a dashboard, an audit trail — is wrong for one of the
-two artifacts. This is a real DDL question, not a documentation tidy-up.
-</Callout>
+Blast radius, quoted from `ENUM_CONFLICT`: *"the enum strings are persisted values in
+`UNDERWRITING_REPORT_OUTPUT` and are read by downstream workflow routing."* Anything keying off
+the band string — a queue router, a dashboard, an audit trail — is wrong for one of the two
+artifacts. A real DDL question, not a documentation tidy-up.
 
-**The exact ask.** *Which of the two is canonical for `UNDERWRITING_REPORT_OUTPUT`, and if the
-PDF is, what does `MANUAL REVIEW` map to in the routing that consumes it? Separately: is the
+**Exact ask.** *Which of the two is canonical for `UNDERWRITING_REPORT_OUTPUT`, and if the PDF
+is, what does `MANUAL REVIEW` map to in the routing that consumes it? Separately: is the
 specialist-to-master band rename intentional?*
 
 One related item recorded but not enforced: PDF section 5.3 lists a controlled stipulation
 vocabulary (proof of income, employment verification, proof of residence, driver's licence
-validation, …). It is captured in `contracts.STIPULATION_VOCABULARY` and **not** enforced,
-because the executable prompt places no constraint on that string. If downstream routing keys
-off those exact phrases, that is a third thing to settle.
+validation, and so on). It is captured in `contracts.STIPULATION_VOCABULARY` and **not**
+enforced, because the executable prompt places no constraint on that string. If downstream
+routing keys off those exact phrases, that is a third thing to settle.
 
-## 3. The calibration failures no model choice fixes
+## 3. Calibration failures no model choice fixes [#3-the-calibration-failures-no-model-choice-fixes]
 
-<Callout type="error" title="Raise this before Friday, not after">
-Two fixtures are mis-banded by **all five models across both families** — and every one of
-them is wrong the *same way*. That is the signature of a shared prompt defect, not five
-independent mistakes, and buying a bigger model does not buy the fix.
-</Callout>
+Two fixtures are mis-banded by **all five models across both families**, and every one is wrong
+the *same way*. That is the signature of a shared prompt defect rather than five independent
+mistakes, and a bigger model does not buy the fix.
 
 Source: `evals/results/set_comparison.json` (`known_failure_reproduction`) and
 `evals/results/tier_quality.json`.
@@ -135,44 +114,37 @@ Source: `evals/results/set_comparison.json` (`known_failure_reproduction`) and
 | **APP-1014 / rings** | `LOW RISK` | `POSSIBLE RISK` — Claude Opus 5, Claude Sonnet 5, GPT-5.6 Luna, Terra, Sol. **0 of 5 correct.** | `RNG-020` |
 | **APP-1004 / bustout** | `POSSIBLE RISK` | `HIGH RISK` — same five models. **0 of 5 correct.** | `BST-020` |
 
-The artifact records the reproduction explicitly: *"GPT reproduced it 3/3; Claude 2/2. Correct
+Reproduction is recorded explicitly in the artifact: *"GPT reproduced it 3/3; Claude 2/2. Correct
 band: GPT 0/3, Claude 0/2."*
 
 **The fault the judges named in every case is the same:** a second alert firing off the *same
-underlying behaviour* treated as independent corroboration.
+underlying behaviour*, treated as independent corroboration.
 
-<Callout type="warn" title="And the prompts already say not to do that">
-This is the sharpest form of the finding, and it is worth checking against her text rather
-than taking on trust. Both `bustout_agent_prompt.txt` and `rings_agent_prompt.txt` already
-carry a sentence making exactly this point — that alert volume alone does not necessarily
-indicate material fraud risk, because several alerts may share one underlying behaviour or
-one weak heuristic. (Her wording, not reproduced here; see the file.)
+Sharpest form of the finding, and worth checking against her text rather than taking on trust:
+both `bustout_agent_prompt.txt` and `rings_agent_prompt.txt` already carry a sentence making
+exactly this point — that alert volume alone does not necessarily indicate material fraud risk,
+because several alerts may share one underlying behaviour or one weak heuristic. Her wording is
+not reproduced here; see the file.
 
 So the principle **is** stated, in the exact terms of the failure, in both of the prompts that
 fail — and five models across two families still treat co-originating alerts as independent
-corroboration. That means the fix is not "state the principle"; it is to state it as an
+corroboration. Which means the fix is not "state the principle"; it is to state it as an
 operational counting rule rather than as guidance. Which sentence achieves that is the thing
 worth drafting with her.
 
-Six of the eight prompts additionally state *"LOW should be the most common outcome."* Neither
+Six of the eight prompts additionally state that LOW should be the most common outcome. Neither
 bustout nor rings contains that sentence — worth noting, since over-escalation is exactly what
-both failures are.
-</Callout>
+both failures are. The Claude-only tier study reached the same conclusion at three tiers; the
+cross-family study upgrades it from *"no tier fixes it"* to **"no model choice fixes it."**
 
-The Claude-only tier study reached the same conclusion at three tiers; the cross-family study
-upgrades it from *"no tier fixes it"* to **"no model choice fixes it."**
+**Exact ask.** *May we draft a sentence for the bustout and rings prompts stating that alerts
+arising from one underlying behaviour count as one signal, for your review?* We can draft it; she
+owns the artifact, and modifying a verbatim customer prompt is not our call.
 
-**The exact ask.** *May we draft a sentence for the bustout and rings prompts stating that
-alerts arising from one underlying behaviour count as one signal, for your review?* We can
-draft it; she owns the artifact, and modifying a verbatim customer prompt is not our call.
+**NOT MEASURED:** whether adding that sentence fixes either band. It requires a live run against
+modified prompt text, which is her artifact. It is the recommendation, not a result.
 
-<Callout type="warn" title="NOT MEASURED">
-Whether adding that sentence fixes either band is **unmeasured**. It requires a live run
-against modified prompt text, which is the customer's artifact. It is the recommendation, not
-a result.
-</Callout>
-
-## 4. The artifacts we never received
+## 4. Artifacts never received [#4-the-artifacts-we-never-received]
 
 Three documents would settle several of these questions at once, and none of them arrived.
 
@@ -182,81 +154,76 @@ Three documents would settle several of these questions at once, and none of the
 | **`CLEAN_MAIN_STREAM_FILE.sql`** | The output DDL and the real column set | Never received |
 | **`PP_Forensic_{Hi,M,L}...pdf`** (page 10 attachments) | Almost certainly gold-standard example outputs per risk band — i.e. the actual acceptance criteria | Never received |
 
-<Callout type="warn" title="What 'reconstructed' means for the signal registry">
-The registry is derived from the SIGNAL INTERPRETATION sections of the nine prompts. That is a
-defensible reconstruction — every threshold in it is the customer's verbatim sentence, read
-out of `prompts/verbatim/` at import rather than retyped — but it is **not** the same as
-having her contract. Two specific consequences:
+**What "reconstructed" means for the signal registry.** It derives from the SIGNAL INTERPRETATION
+sections of the nine prompts. That is a defensible reconstruction — every threshold in it is the
+customer's verbatim sentence, read out of `prompts/verbatim/` at import rather than retyped — but
+it is **not** the same as having her contract. Two specific consequences:
 
 - Signals she uses that no prompt names would be **missing**, and we cannot know how many.
 - Near-duplicate spellings across prompts are both materialised rather than aliased
-  (`employer_other_ssns_count` vs `employer_distinct_other_ssns_count`, and two other pairs),
-  because collapsing them would silently degrade one agent. Her dictionary would tell us
-  whether they are genuinely two signals or one signal spelled two ways.
+  (`employer_other_ssns_count` vs `employer_distinct_other_ssns_count`, plus two other pairs),
+  because collapsing them would silently degrade one agent. Her dictionary would tell us whether
+  they are genuinely two signals or one signal spelled two ways.
 
-Note also a discrepancy in our own documents: `CLAUDE.md` says *"~75-signal registry"* while
-the module contains **60** entries in `SIGNAL_OWNER` (55 single-owner plus 5 shared). The
-module is authoritative; the `CLAUDE.md` line is stale.
-</Callout>
+A discrepancy in our own documents, noted so nobody trips on it: `CLAUDE.md` says *"~75-signal
+registry"* while the module contains **60** entries in `SIGNAL_OWNER` (55 single-owner plus 5
+shared). The module is authoritative; the `CLAUDE.md` line is stale.
 
-**The exact ask.** *Can you send `full_underwriting_signal_dictionary.xlsx`,
+**Exact ask.** *Can you send `full_underwriting_signal_dictionary.xlsx`,
 `CLEAN_MAIN_STREAM_FILE.sql`, and the three `PP_Forensic_*` example outputs?* Between them they
-would settle the signal set, the output DDL, every enum conflict, and the acceptance criteria —
-four open items for one email.
+settle the signal set, the output DDL, every enum conflict, and the acceptance criteria — four
+open items for one email.
 
-One more platform-side question in the same family: **is the customer's Cortex Analyst backed
-by a semantic VIEW or by a stage-based semantic model YAML?** Snowflake's managed MCP server
-supports views only, so this single answer gates the whole "keep the semantic layer in place"
-option. See [the semantic layer](/docs/platform/semantic-layer).
+One more platform-side question in the same family: **is her Cortex Analyst backed by a semantic
+VIEW or by a stage-based semantic model YAML?** Snowflake's managed MCP server supports views
+only, so this single answer gates the whole "keep the semantic layer in place" option. See
+[Semantic layer](/docs/platform/semantic-layer).
 
-## 5. Two of her prompts carry no character cap
+## 5. Two prompts carry no character cap [#5-two-of-her-prompts-carry-no-character-cap]
 
-Six of the eight specialist prompts state *"max 4000 characters"*. `bustout_agent_prompt.txt`
-says only *"Return only the final analysis."* and `rings_agent_prompt.txt` only *"Return only
-final analysis."* — no length rule, no title, no emoji ban, no alert-number ban. (The two
-closing sentences differ from each other by one word, which is why
-`agents/output_contract.py` derives each agent's rules from its own prompt text instead of
-matching one string across all eight.)
+Six of the eight specialist prompts cap output at 4,000 characters. `bustout_agent_prompt.txt`
+and `rings_agent_prompt.txt` close with a one-line instruction to return only the analysis — no
+length rule, no title, no emoji ban, no alert-number ban. Their two closing sentences differ from
+each other by one word, which is why `agents/output_contract.py` derives each agent's rules from
+its own prompt text instead of matching one string across all eight.
 
-The measured consequence, from `evals/results/tail_analysis.json` over n=334 calls:
+Measured consequence, from `evals/results/tail_analysis.json` over n=334 calls:
 
 | | Domains | n calls | Output tokens p50 | Analyses over 4,000 chars |
 |---|---|---:|---:|---:|
 | Prompt caps at 4,000 chars | identity, dealer, straw, employment, income, synthetic | 251 | **381** | 9 (3.6%) |
 | **No cap in prompt** | **bustout, rings** | 83 | **1,331** | **25 (30.1%)** |
 
-3.5x the output tokens, and since wall clock is linear in output tokens at r²=0.9531, that is
-the structural owner of the fan-out floor. Those same two agents are also the **only** two
-ever measured to truncate, and the source of all
+3.5x the output tokens, and since wall clock is linear in output tokens at r²=0.9531, that is the
+structural owner of the fan-out floor. Those same two agents are also the **only** two ever
+measured to truncate, and the source of all
 [24 invented titles](/docs/fidelity/output-contract-defects).
 
-**The exact ask.** *Should the "max 4000 characters" sentence be added to the bustout and rings
-prompts?* It is a one-line change to two verbatim customer artifacts — her decision, not ours.
+**Exact ask.** *Should the "max 4000 characters" sentence be added to the bustout and rings
+prompts?* A one-line change to two verbatim customer artifacts — her decision, not ours.
 
-<Callout type="warn" title="NOT MEASURED">
-Whether adding the sentence actually shortens the output is **unmeasured**, because this work
-did not modify the customer's verbatim prompts. It is the recommended fix and it is unproven.
-</Callout>
+**NOT MEASURED:** whether adding the sentence actually shortens the output, because this work did
+not modify her verbatim prompts. It is the recommended fix and it is unproven.
 
-<Callout type="error" title="And do not reach for max_tokens instead">
-The obvious engineering substitute was measured and it **failed all three criteria**: no
-latency gain, 14 of 30 cells truncated, and only 13 of 30 kept the same band. A truncated call
-is the worst outcome available — full wall clock, fully billed, text discarded, fraud dimension
-lost. [The measurement](/docs/cost/what-does-not-work).
+<Callout type="warn" title="Do not reach for max_tokens instead">
+That obvious engineering substitute was measured and it **failed all three criteria**: no latency
+gain, 14 of 30 cells truncated, and only 13 of 30 kept the same band. A truncated call is the
+worst outcome available — full wall clock, fully billed, text discarded, fraud dimension lost.
+[The measurement](/docs/cost/what-does-not-work).
 </Callout>
 
 ## Also open, lower stakes
 
-Recorded so nothing is hidden, but none of these blocks Friday.
+Recorded so nothing is hidden; none of these blocks Friday.
 
 | Item | Status |
 |---|---|
 | **Bedrock quota headroom at high volume** | At 300,000 apps/day x 9 calls x ~2,250 tokens the workload approaches 6.1B tokens/day. Sonnet 5's daily ceiling is 8.64B and is **not adjustable** — an account-team escalation, not a self-serve ticket, and it should be raised **before** any load test. Depends entirely on the answer to question 1. |
-| **Does the customer's Snowflake account enforce network policies?** | AWS publishes no stable Gateway egress IPs, so a "keep the semantic layer" path may need PrivateLink. |
+| **Does her Snowflake account enforce network policies?** | AWS publishes no stable Gateway egress IPs, so a "keep the semantic layer" path may need PrivateLink. |
 | **`income` and `employment` have no quality evidence at all** | Never swept in either study, within-family or cross-family. `income` deserves it most: its p95/p50 spread (31.44 s / 8.09 s) is the second widest of the eight. |
 | **`dealer` and `straw` have no quality evidence either** | Their LIGHT assignment rests on n=42 latency and cost plus their own prompts' scope, not on a judged comparison. |
 | **Whether a grounding instruction closes GPT's `_context` gap** | The single experiment that would unlock a projected 47.8% cost reduction. Unmeasured. [Detail](/docs/model-selection/cross-family-study). |
-| **The end-to-end result of the current model assignment** | The 42-run benchmark ran under the previous assignment. One command re-measures it: `AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.bench --pipeline --repetitions 3`, roughly $5 of spend. |
+| **End-to-end result of the current model assignment** | The 42-run benchmark ran under the previous assignment. One command re-measures it: `AGENTCORE_BENCH_ALLOW_LIVE=1 python -m evals.bench --pipeline --repetitions 3`, roughly $5 of spend. |
 
 ## The one-page ask
 
@@ -265,12 +232,11 @@ If only one message goes to the customer before Friday, these five sentences are
 1. Of the applications you ingest, how many per day get the **full eight-agent forensic
    underwriting**, as opposed to a score-only path?
 2. Is `master_agent_prompt.txt` (`MEDIUM RISK`, three recommendations) or the process-guide PDF
-   (`POSSIBLE RISK`, four including `MANUAL REVIEW`) canonical for
-   `UNDERWRITING_REPORT_OUTPUT`?
+   (`POSSIBLE RISK`, four including `MANUAL REVIEW`) canonical for `UNDERWRITING_REPORT_OUTPUT`?
 3. May we draft the "alerts from one underlying behaviour count as one signal" sentence for
-   bustout and rings? Every model we tested, in both families, gets APP-1014 and APP-1004
-   wrong the same way without it.
-4. Can you send `full_underwriting_signal_dictionary.xlsx`, `CLEAN_MAIN_STREAM_FILE.sql`, and
-   the three `PP_Forensic_*` examples?
+   bustout and rings? Every model we tested, in both families, gets APP-1014 and APP-1004 wrong
+   the same way without it.
+4. Can you send `full_underwriting_signal_dictionary.xlsx`, `CLEAN_MAIN_STREAM_FILE.sql`, and the
+   three `PP_Forensic_*` examples?
 5. Should the "max 4000 characters" sentence be added to the bustout and rings prompts, which
    currently write 3.5x the output of the other six?
