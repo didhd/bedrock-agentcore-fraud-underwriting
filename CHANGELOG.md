@@ -88,7 +88,7 @@ thing to raise with the customer before Friday. The 23 invented titles on bustou
 
 ## 2026-07-27 — 1:1 fidelity pass, real measurement, and a sub-minute adjudication
 
-The goal of this pass was to make the repo a **1:1 replacement** of Point Predictive's
+The goal of this pass was to make the repo a **1:1 replacement** of AnyCompany's
 production agents rather than a demo that resembles them, and to replace every asserted
 number with a measured one.
 
