@@ -48,7 +48,6 @@ docs/.converted/
 # Test caches
 .pytest_cache/
 .ruff_cache/
-
 # Local agent-orchestration state (oh-my-claudecode); never shared
 .omc/
 
@@ -63,3 +62,22 @@ docs/*_agent_prompt.txt
 docs/*_orchestration*.rtf
 docs/Agent_Underwriting_Process_Guide*.pdf
 prompts/verbatim/
+
+# ---------------------------------------------------------------------------
+# Vendored shared packages produced by deploy/vendor.sh (copies of repo-root
+# packages placed next to each runtime's main.py for `agentcore package`).
+# Never commit these -- they are duplicates. francis's own tools/ is NOT here
+# and stays tracked.
+# ---------------------------------------------------------------------------
+app/underwriter/prompts/
+app/underwriter/signal_layer/
+app/underwriter/agents/
+app/underwriter/fixtures/
+app/underwriter/data/
+app/underwriter/app/
+app/francis/prompts/
+app/francis/signal_layer/
+app/francis/agents/
+app/francis/fixtures/
+app/francis/data/
+app/francis/app/
