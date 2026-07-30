@@ -1697,7 +1697,7 @@ def test_coverage_doc_generator_runs_as_a_module() -> None:
     # Fixed argument list, no shell, and the interpreter is `sys.executable` rather
     # than a name resolved off PATH. Nothing here is caller-influenced, so there is no
     # injection surface; the nosec records that this was reviewed rather than missed.
-    result = subprocess.run(  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit  # nosec B603 - static argv, shell=False, no external input
+    result = subprocess.run(  # nosec B603  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
         [sys.executable, "-m", "signal_layer.rules.catalog"],
         cwd=REPO_ROOT,
         capture_output=True,
