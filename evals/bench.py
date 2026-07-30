@@ -537,7 +537,7 @@ def _git(*args: str) -> str | None:
     if git is None:
         return None
     try:
-        return subprocess.run(  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit  # nosec B603 - absolute path via shutil.which, static argv, shell=False, no external input
+        return subprocess.run(  # nosec B603  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
             [git, *args],
             cwd=REPO_ROOT,
             capture_output=True,
