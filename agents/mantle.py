@@ -142,10 +142,12 @@ log = logging.getLogger("pp.mantle")
 
 #: Published in-region on-demand rates, $ per 1M tokens: (input, cache_read, output).
 #: There is no global/geo variant to discount against, unlike the Claude ids.
+#: Terra and Luna repriced per the AWS Bedrock pricing page on 2026-07-30 (Luna cut
+#: ~5x from 1.10/6.60; Terra from 2.75/16.50). Sol unchanged.
 MANTLE_RATES_PER_MTOK: Final[dict[str, tuple[float, float, float]]] = {
     "openai.gpt-5.6-sol": (5.50, 0.55, 33.00),
-    "openai.gpt-5.6-terra": (2.75, 0.28, 16.50),
-    "openai.gpt-5.6-luna": (1.10, 0.11, 6.60),
+    "openai.gpt-5.6-terra": (2.20, 0.22, 13.20),
+    "openai.gpt-5.6-luna": (0.22, 0.022, 1.32),
     "openai.gpt-5.5": (5.50, 0.55, 33.00),
     "openai.gpt-5.4": (2.75, 0.275, 16.50),
 }

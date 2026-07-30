@@ -650,8 +650,8 @@ output):
 
 | Variant | Input | Cache read | Output | Best measured p50 |
 |---|---|---|---|---|
-| GPT-5.6 Luna | $1.10 | $0.11 | $6.60 | 4.61 s |
-| GPT-5.6 Terra | $2.75 | $0.28 | $16.50 | 6.29 s |
+| GPT-5.6 Luna | $0.22 | $0.022 | $1.32 | 4.61 s |
+| GPT-5.6 Terra | $2.20 | $0.22 | $13.20 | 6.29 s |
 | GPT-5.6 Sol | $5.50 | $0.55 | $33.00 | 11.19 s |
 
 5x the token price is **2.4x slower** on this workload. There is no speed-for-money
