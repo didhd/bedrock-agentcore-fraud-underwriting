@@ -56,9 +56,7 @@ import json
 import math
 import os
 import platform
-import shutil
 import statistics
-import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -521,33 +519,53 @@ def summarize_latencies(values: Iterable[float], label: str = "") -> dict[str, A
 # ---------------------------------------------------------------------------
 
 
-def _git(*args: str) -> str | None:
-    """Run a read-only git command for run provenance, or return None.
+def _git_head() -> str | None:
+    """Raw contents of ``.git/HEAD``, or None outside a git checkout.
 
-    The executable is resolved to an ABSOLUTE path via ``shutil.which`` rather than
-    passed as the bare name ``git``. A partial path is resolved against ``PATH`` at
-    exec time, so on a machine with a writable directory earlier in ``PATH`` this
-    would run whatever ``git`` that directory contains. Provenance metadata is not
-    worth that, and the fix costs one lookup.
-
-    ``shell=False`` is explicit for the same reason: it is the default, but stating it
-    means a later edit has to remove it deliberately rather than inherit a shell.
+    Provenance is read directly from the repository's own files rather than by
+    shelling out to ``git``: no subprocess, no dependency on a ``git`` binary being
+    present or trustworthy on ``PATH``, and no command-execution surface for a static
+    analyzer to flag. Everything here is a plain file read under ``REPO_ROOT/.git``.
     """
-    git = shutil.which("git")
-    if git is None:
-        return None
     try:
-        return subprocess.run(  # nosec B603  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
-            [git, *args],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=True,
-            shell=False,
-        ).stdout.strip()
-    except Exception:
+        return (REPO_ROOT / ".git" / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
         return None
+
+
+def _git_sha() -> str | None:
+    """Resolve HEAD to a commit sha by reading refs on disk (no subprocess)."""
+    head = _git_head()
+    if head is None:
+        return None
+    if not head.startswith("ref:"):
+        return head or None  # detached HEAD stores the sha directly
+    ref = head[4:].strip()
+    gitdir = REPO_ROOT / ".git"
+    try:
+        return (gitdir / ref).read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    # Fall back to packed-refs for a ref that has no loose file.
+    try:
+        for line in (gitdir / "packed-refs").read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith(("#", "^")):
+                continue
+            sha, _, name = line.partition(" ")
+            if name == ref:
+                return sha
+    except OSError:
+        pass
+    return None
+
+
+def _git_branch() -> str | None:
+    """Current branch name from ``.git/HEAD``; None if detached or not a checkout."""
+    head = _git_head()
+    if head and head.startswith("ref: refs/heads/"):
+        return head[len("ref: refs/heads/") :].strip()
+    return None
 
 
 def _package_versions() -> dict[str, str]:
@@ -564,13 +582,15 @@ def _package_versions() -> dict[str, str]:
 
 def run_environment(mode: str, region: str, model_ids: dict[str, str]) -> dict[str, Any]:
     """Everything needed to reproduce or discredit this run's numbers."""
-    dirty = _git("status", "--porcelain")
     return {
         "mode": mode,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "git_sha": _git("rev-parse", "HEAD"),
-        "git_branch": _git("rev-parse", "--abbrev-ref", "HEAD"),
-        "git_dirty": bool(dirty) if dirty is not None else None,
+        "git_sha": _git_sha(),
+        "git_branch": _git_branch(),
+        # Working-tree cleanliness is not determined here: it would require either a
+        # git subprocess or parsing the binary index, and neither is worth it for
+        # provenance. Recorded as None ("not determined") rather than a guessed bool.
+        "git_dirty": None,
         "aws_region": region,
         "model_ids": model_ids,
         "host": {

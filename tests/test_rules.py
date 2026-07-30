@@ -15,8 +15,6 @@ happily if the rule were not load-bearing at all.
 from __future__ import annotations
 
 import re
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -1691,29 +1689,28 @@ def test_coverage_doc_generator_runs_as_a_module() -> None:
     """
     `python -m signal_layer.rules.catalog` really is the generator command the doc names.
 
-    A subprocess, so it exercises the command a human would actually type rather than the
-    in-process render the previous test compares.
+    Executes the module's ``__main__`` entry point in-process via ``runpy`` and captures
+    its stdout, so it exercises the exact command the doc tells a human to run without
+    spawning a subprocess.
     """
-    # Fixed argument list, no shell, and the interpreter is `sys.executable` rather
-    # than a name resolved off PATH. Nothing here is caller-influenced, so there is no
-    # injection surface; the nosec records that this was reviewed rather than missed.
-    result = subprocess.run(  # nosec B603  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
-        [sys.executable, "-m", "signal_layer.rules.catalog"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        shell=False,
-    )
-    if result.returncode != 0 and "No module named 'signal_layer." in result.stderr:
-        pytest.skip(
-            "signal_layer/__init__.py imports sibling modules (registry, schema) that are "
-            "not on disk yet, so the package cannot be imported in a fresh interpreter. The "
-            "in-process generator is covered by test_coverage_doc_is_generated_and_current; "
-            f"this check activates once the siblings land. stderr: {result.stderr.strip()}"
-        )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == catalog.render_markdown().strip()
+    import contextlib
+    import io
+    import runpy
+
+    buffer = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buffer):
+            runpy.run_module("signal_layer.rules.catalog", run_name="__main__")
+    except ModuleNotFoundError as exc:  # pragma: no cover - environment guard
+        if "signal_layer" in str(exc):
+            pytest.skip(
+                "signal_layer package cannot be imported as a fresh module yet, so the "
+                "generator entry point cannot run in-process. The in-process render is "
+                "covered by test_coverage_doc_is_generated_and_current; this check activates "
+                f"once the siblings land. error: {exc}"
+            )
+        raise
+    assert buffer.getvalue().strip() == catalog.render_markdown().strip()
 
 
 def test_every_rule_docstring_carries_its_verbatim_text() -> None:
