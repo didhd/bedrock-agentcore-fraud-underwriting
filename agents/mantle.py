@@ -142,12 +142,29 @@ log = logging.getLogger("pp.mantle")
 
 #: Published in-region on-demand rates, $ per 1M tokens: (input, cache_read, output).
 #: There is no global/geo variant to discount against, unlike the Claude ids.
+#: These are the CURRENT rates. Terra and Luna were repriced on
+#: :data:`MANTLE_REPRICE_DATE`; the pre-reprice card is
+#: :data:`MANTLE_RATES_PER_MTOK_PRIOR`, and :func:`rates_for` returns whichever was in
+#: effect for a given ``as_of`` so a run measured before the reprice still reproduces
+#: its recorded cost.
 MANTLE_RATES_PER_MTOK: Final[dict[str, tuple[float, float, float]]] = {
     "openai.gpt-5.6-sol": (5.50, 0.55, 33.00),
-    "openai.gpt-5.6-terra": (2.75, 0.28, 16.50),
-    "openai.gpt-5.6-luna": (1.10, 0.11, 6.60),
+    "openai.gpt-5.6-terra": (2.20, 0.22, 13.20),
+    "openai.gpt-5.6-luna": (0.22, 0.022, 1.32),
     "openai.gpt-5.5": (5.50, 0.55, 33.00),
     "openai.gpt-5.4": (2.75, 0.275, 16.50),
+}
+
+#: The date OpenAI's GPT-5.6 Terra and Luna reprice took effect on Amazon Bedrock (per
+#: the AWS Bedrock pricing page). A call dated strictly before this is priced at the
+#: prior card below.
+MANTLE_REPRICE_DATE: Final[_dt.date] = _dt.date(2026, 7, 30)
+
+#: Rates in effect BEFORE :data:`MANTLE_REPRICE_DATE`. Only the two ids that changed are
+#: listed; every other id is unchanged and falls through to the current card.
+MANTLE_RATES_PER_MTOK_PRIOR: Final[dict[str, tuple[float, float, float]]] = {
+    "openai.gpt-5.6-terra": (2.75, 0.28, 16.50),
+    "openai.gpt-5.6-luna": (1.10, 0.11, 6.60),
 }
 
 #: Where each variant is actually callable. Sol is absent from us-west-2.
@@ -465,8 +482,16 @@ def reset_region_log() -> None:
         _region_logged.clear()
 
 
-def rates_for(model_id: str) -> tuple[float, float, float]:
-    """(input, cache_read, output) $ per 1M tokens. Raises for an unpriced id."""
+def rates_for(model_id: str, *, as_of: _dt.date | None = None) -> tuple[float, float, float]:
+    """(input, cache_read, output) $ per 1M tokens as of ``as_of`` (default today).
+
+    Terra and Luna were repriced on :data:`MANTLE_REPRICE_DATE`; a call dated strictly
+    before it is priced at :data:`MANTLE_RATES_PER_MTOK_PRIOR` so a historical measured
+    run reproduces its recorded cost. Raises for an unpriced id.
+    """
+    when = as_of or _dt.date.today()
+    if when < MANTLE_REPRICE_DATE and model_id in MANTLE_RATES_PER_MTOK_PRIOR:
+        return MANTLE_RATES_PER_MTOK_PRIOR[model_id]
     try:
         return MANTLE_RATES_PER_MTOK[model_id]
     except KeyError as exc:
@@ -490,8 +515,10 @@ CACHE_WRITE_MULTIPLIER: Final[dict[str, float]] = {
 }
 
 
-def cost_usd(model_id: str, usage: dict[str, int] | None) -> float | None:
-    """Cost of one mantle call, or None when usage is unknown.
+def cost_usd(
+    model_id: str, usage: dict[str, int] | None, *, as_of: _dt.date | None = None
+) -> float | None:
+    """Cost of one mantle call as of ``as_of`` (default today), or None when usage is unknown.
 
     Never estimates: a missing usage dict yields None so a caller renders an em dash
     rather than a fabricated figure.
@@ -502,7 +529,7 @@ def cost_usd(model_id: str, usage: dict[str, int] | None) -> float | None:
     """
     if not usage:
         return None
-    rate_in, rate_cache, rate_out = rates_for(model_id)
+    rate_in, rate_cache, rate_out = rates_for(model_id, as_of=as_of)
     rate_write = rate_in * CACHE_WRITE_MULTIPLIER.get(model_id, 1.25)
     fresh = usage.get("inputTokens") or 0
     cached = usage.get("cacheReadInputTokens") or 0
