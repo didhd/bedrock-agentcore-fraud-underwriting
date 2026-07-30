@@ -157,6 +157,21 @@ python3 -m pytest -q --ignore=agentcore
 # 3. Package
 # ---------------------------------------------------------------------------
 log "3/4 agentcore package"
+# Vendor the shared repo-root packages into each runtime's codeLocation FIRST.
+# Without this, `agentcore package` ships a runtime that imports prompts/, agents/,
+# signal_layer/, app.runtime_support -- none of which are under codeLocation -- and
+# the deployed container crashes at import (30s init timeout on first invoke).
+bash "$REPO_ROOT/deploy/vendor.sh"
+# Guard: refuse to package if the vendoring did not land the shared modules.
+for rt in app/underwriter app/francis; do
+  [ -f "$REPO_ROOT/$rt/main.py" ] || continue
+  for must in prompts/loader.py app/runtime_support.py agents/models.py; do
+    if [ ! -f "$REPO_ROOT/$rt/$must" ]; then
+      echo "FATAL: $rt/$must missing after vendoring; run deploy/vendor.sh" >&2
+      exit 1
+    fi
+  done
+done
 # Resolves each runtime's pyproject.toml, installs its dependency closure for the
 # declared runtimeVersion, and writes agentcore/<runtime>.zip. Offline w.r.t. AWS,
 # but it does hit PyPI. Fails loudly if a codeLocation has no pyproject.toml.
