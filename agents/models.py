@@ -277,8 +277,8 @@ SPECIALIST_MODELS: Final[dict[str, str]] = {
 #: prompt, n=3 per cell, effort=low, all 24 calls valid and unanimous on HIGH RISK /
 #: DECLINE (``agents.mantle.MEASURED_SYNTHESIS_LATENCY``):
 #:
-#:     luna  us-east-1   4.61s p50     $0.22/$1.32 per 1M
-#:     terra us-east-2   6.29s p50     $2.20/$13.20 per 1M
+#:     luna  us-east-1   4.61s p50     $1.10/$6.60 per 1M
+#:     terra us-east-2   6.29s p50     $2.75/$16.50 per 1M
 #:     sol   us-east-1  11.19s p50     $5.50/$33.00 per 1M
 #:
 #: So paying 5x more per token buys 2.4x MORE latency here. There is no
