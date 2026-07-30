@@ -183,15 +183,18 @@ def _is_mantle(model_id: str) -> bool:
     return mantle.is_mantle_model(model_id)
 
 
-def _mantle_rates(model_id: str, *, cache_ttl: str = "5m", batch: bool = False) -> dict[str, Any]:
+def _mantle_rates(
+    model_id: str, *, as_of: _dt.date | None = None, cache_ttl: str = "5m", batch: bool = False
+) -> dict[str, Any]:
     """Rate record for a GPT-5.x model, in the same key schema :func:`rates_for` returns.
 
     The mantle endpoint has no batch inference API and no us./global. variants, so the
-    batch discount and regional multiplier are both inert here.
+    batch discount and regional multiplier are both inert here. ``as_of`` selects the
+    rate card in effect on that date (Terra/Luna were repriced 2026-07-30).
     """
     from agents import mantle
 
-    rate_in, rate_cache, rate_out = mantle.rates_for(model_id)
+    rate_in, rate_cache, rate_out = mantle.rates_for(model_id, as_of=as_of)
     write = rate_in * mantle.CACHE_WRITE_MULTIPLIER.get(model_id, 1.25)
     return {
         "model_id": model_id,
@@ -236,7 +239,7 @@ def rates_for(
     # no us./global. variants. Delegate rather than duplicate it here, so there is one
     # rate table per model family and neither can drift from the other.
     if _is_mantle(model_id):
-        return _mantle_rates(model_id, cache_ttl=cache_ttl, batch=batch)
+        return _mantle_rates(model_id, as_of=as_of, cache_ttl=cache_ttl, batch=batch)
 
     base_id = base_model_id(model_id)
     (in_rate, out_rate), introductory = _base_rates(base_id, as_of or _today())

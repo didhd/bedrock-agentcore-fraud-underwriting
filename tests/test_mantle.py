@@ -963,3 +963,39 @@ def test_the_client_uses_base_url_for(monkeypatch):
 
     mantle._client("us-east-2")
     assert captured["base_url"] == mantle.base_url_for("us-east-2")
+
+
+def test_luna_and_terra_are_repriced_date_aware_on_the_reprice_date():
+    """The 2026-07-30 Terra/Luna reprice is date-aware.
+
+    A call dated strictly before MANTLE_REPRICE_DATE is priced at the prior card so a
+    run measured before the reprice reproduces its recorded cost; a call on or after it
+    uses the current card. Sol has no prior entry and is date-invariant.
+    """
+    import datetime as _d
+
+    before = mantle.MANTLE_REPRICE_DATE - _d.timedelta(days=1)
+    on = mantle.MANTLE_REPRICE_DATE
+    for model_id in ("openai.gpt-5.6-luna", "openai.gpt-5.6-terra"):
+        assert (
+            mantle.rates_for(model_id, as_of=before)
+            == mantle.MANTLE_RATES_PER_MTOK_PRIOR[model_id]
+        )
+        assert (
+            mantle.rates_for(model_id, as_of=on) == mantle.MANTLE_RATES_PER_MTOK[model_id]
+        )
+    # Luna dropped on both input and output at the reprice.
+    old_luna = mantle.MANTLE_RATES_PER_MTOK_PRIOR["openai.gpt-5.6-luna"]
+    new_luna = mantle.MANTLE_RATES_PER_MTOK["openai.gpt-5.6-luna"]
+    assert new_luna[0] < old_luna[0] and new_luna[2] < old_luna[2]
+    # Sol is unchanged, so it prices identically on either side of the date.
+    assert mantle.rates_for("openai.gpt-5.6-sol", as_of=before) == mantle.rates_for(
+        "openai.gpt-5.6-sol", as_of=on
+    )
+    # The same date-awareness must flow through the pricing module's cost.
+    from agents import pricing
+
+    usage = {"inputTokens": 1000, "outputTokens": 1000}
+    assert pricing.cost_usd("openai.gpt-5.6-luna", usage, as_of=before) > pricing.cost_usd(
+        "openai.gpt-5.6-luna", usage, as_of=on
+    )

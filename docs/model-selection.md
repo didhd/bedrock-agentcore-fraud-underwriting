@@ -465,7 +465,7 @@ ran inside the promo window:
 | Priced as of | New assignment | Old assignment | Delta |
 |---|---|---|---|
 | 2026-07-28 (promo live) | $0.1247 | $0.1557 | **−$0.031 (−19.9%)** |
-| 2026-09-01 (promo lapsed) | $0.1773 | $0.1856 | **−$0.008 (−4.5%)** |
+| 2026-09-01 (promo lapsed) | $0.1688 | $0.1771 | **−$0.008 (−4.7%)** |
 
 Read that before it goes on a TCO slide. The re-assignment is a **latency and quality**
 decision that is also cheaper today; from September the cost argument is worth about
@@ -650,11 +650,15 @@ output):
 
 | Variant | Input | Cache read | Output | Best measured p50 |
 |---|---|---|---|---|
-| GPT-5.6 Luna | $1.10 | $0.11 | $6.60 | 4.61 s |
-| GPT-5.6 Terra | $2.75 | $0.28 | $16.50 | 6.29 s |
+| GPT-5.6 Luna | $0.22 | $0.022 | $1.32 | 4.61 s |
+| GPT-5.6 Terra | $2.20 | $0.22 | $13.20 | 6.29 s |
 | GPT-5.6 Sol | $5.50 | $0.55 | $33.00 | 11.19 s |
 
-5x the token price is **2.4x slower** on this workload. There is no speed-for-money
+Rates shown are current: Terra and Luna were repriced on 2026-07-30 (Luna cut ~5x from
+$1.10/$6.60). Costs for runs measured before that date are computed at the prior card, so
+the measured benchmark below still reproduces.
+
+25x the token price is **2.4x slower** on this workload. There is no speed-for-money
 trade to make here, and Luna is not the compromise pick — it is both the cheapest and
 the fastest. (Reasoning quality is the axis this table says nothing about.)
 

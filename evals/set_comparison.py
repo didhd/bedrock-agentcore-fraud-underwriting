@@ -738,13 +738,17 @@ def spend_estimate(
         each = _judge_cost_estimate(judge)
         per_judge[judge] = {"calls": count, "usd_each": round(each, 5), "usd": round(each * count, 4)}
         judge_total += each * count
+    specialist_estimate = round(total, 4)
+    judge_estimate = round(judge_total, 4)
     return {
         "specialist_calls": len(plan),
-        "specialist_usd_estimate": round(total, 4),
+        "specialist_usd_estimate": specialist_estimate,
         "specialist_calls_unpriced": unpriced,
         "judges": per_judge,
-        "judge_usd_estimate": round(judge_total, 4),
-        "total_usd_estimate": round(total + judge_total, 4),
+        "judge_usd_estimate": judge_estimate,
+        # Derived from the rounded components so the reported total always equals the
+        # reported parts exactly, independent of the underlying rate card.
+        "total_usd_estimate": round(specialist_estimate + judge_estimate, 4),
         "basis": (
             "specialist tokens are MEASURED per-domain means (rings/synthetic from this "
             "workload's own probe, bustout/identity from the 14x3 pipeline benchmark), "
