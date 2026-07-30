@@ -47,6 +47,10 @@ const VOLUME_OPTIONS = [
   { value: "4500", label: "4,500 applications / day" },
   { value: "10000", label: "10,000 applications / day" },
   { value: "50000", label: "50,000 applications / day" },
+  { value: "200000", label: "200,000 applications / day (POC)" },
+  { value: "1000000", label: "1,000,000 applications / day (launch)" },
+  { value: "3000000", label: "3,000,000 applications / day" },
+  { value: "4000000", label: "4,000,000 applications / day" },
 ]
 
 export function CostPanel({
