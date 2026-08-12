@@ -145,6 +145,34 @@ def agent_roster() -> list[dict[str, Any]]:
     return roster
 
 
+def _deployed_runtime_env() -> dict[str, str]:
+    """The envVars `agentcore.json` sets on the runtimes, merged.
+
+    All ten runtimes carry the same data-source variables -- `connect-rds.sh` writes them to
+    every one -- so a merge is the right shape and a disagreement between runtimes would be a
+    configuration bug worth seeing rather than hiding.
+
+    Never raises: an unreadable or absent config is reported as "not configured", which is the
+    honest answer for a clone that has not been deployed.
+    """
+    try:
+        import json as _json  # noqa: PLC0415
+        import pathlib as _pathlib  # noqa: PLC0415
+
+        path = _pathlib.Path(__file__).resolve().parent.parent / "agentcore" / "agentcore.json"
+        config = _json.loads(path.read_text())
+    except Exception:
+        return {}
+
+    merged: dict[str, str] = {}
+    for runtime in config.get("runtimes", []) or []:
+        for entry in runtime.get("envVars", []) or []:
+            name, value = entry.get("name"), entry.get("value")
+            if name and value:
+                merged.setdefault(str(name), str(value))
+    return merged
+
+
 def signal_mode() -> dict[str, Any]:
     """The data seam: where an agent's signals come from, and what else it could be.
 
@@ -153,18 +181,30 @@ def signal_mode() -> dict[str, Any]:
     agent goes through to get its data -- so the migration question has a concrete
     answer instead of a diagram.
     """
-    mode = (os.environ.get("SIGNAL_MODE") or "fixtures").strip().lower()
+    # WHAT THE DEPLOYED RUNTIME WILL SEE, falling back to this process.
+    #
+    # The CloudFront build bakes this object at deploy time, in a shell that is not the
+    # runtime's, so reading only `os.environ` reported "not configured" beside a live cluster
+    # with 840 seeded rows behind it. `agentcore/agentcore.json` is the file `agentcore deploy`
+    # acts on, so it is the truthful answer for a panel describing the deployment. A local run
+    # still wins, because there the process IS the thing being described.
+    deployed = _deployed_runtime_env()
+
+    def setting(name: str) -> str:
+        return (os.environ.get(name) or deployed.get(name) or "").strip()
+
+    mode = (setting("SIGNAL_MODE") or "fixtures").lower()
 
     # COMPUTED, not hardcoded. These were literal `False` from when nothing was connected, and
     # once a cluster existed the panel started lying in the other direction -- reporting "not
     # configured" beside a live connection with 840 seeded rows behind it. A hardcoded
     # availability flag is exactly the kind of stale claim this UI exists to avoid.
     aurora_ready = bool(
-        os.environ.get("AURORA_SECRET_ARN")
-        and os.environ.get("AURORA_DATABASE")
-        and (os.environ.get("AURORA_CLUSTER_ARN") or os.environ.get("PGHOST"))
+        setting("AURORA_SECRET_ARN")
+        and setting("AURORA_DATABASE")
+        and (setting("AURORA_CLUSTER_ARN") or setting("PGHOST"))
     )
-    cortex_ready = bool(os.environ.get("SNOWFLAKE_SECRET_ID"))
+    cortex_ready = bool(setting("SNOWFLAKE_SECRET_ID"))
 
     return {
         # True only while the active source really is the committed fixtures. When SIGNAL_MODE
@@ -235,14 +275,27 @@ def probe_datasource(mode: str) -> dict[str, Any]:
     if spec is None:
         return {"mocked": True, "mode": mode, "ok": False, "error": f"unknown mode {mode!r}"}
 
+    # Same source as signal_mode: the deployed config, then this process. The per-requirement
+    # checklist is the part of this panel people actually read to answer "why is it not
+    # connected", so it must agree with the availability flag above rather than answering from
+    # a different environment.
+    deployed = _deployed_runtime_env()
     checks = []
     for requirement in spec.get("requires", []):
         var = requirement.split()[0]
+        present = None
+        if var.isupper():
+            present = bool(os.environ.get(var) or deployed.get(var))
         checks.append(
             {
                 "requirement": requirement,
                 "env_var": var if var.isupper() else None,
-                "present": bool(os.environ.get(var)) if var.isupper() else None,
+                "present": present,
+                "from": (
+                    None
+                    if not var.isupper() or not present
+                    else "this process" if os.environ.get(var) else "agentcore.json"
+                ),
             }
         )
     return {
