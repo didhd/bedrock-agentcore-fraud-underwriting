@@ -51,7 +51,7 @@ report what you verified rather than what you ran.
 8. **Run what you write.** `MOCK_MODE=1 python3 -m pytest tests/ -q` — baseline is
    **1473 passed, 1 skipped**. A drop in the passed count is a regression, not a detail.
 
-## The seven traps, all of which fail silently
+## The eight traps, all of which fail silently
 
 Each of these has actually happened here. Three of them return HTTP 200.
 
@@ -64,6 +64,7 @@ Each of these has actually happened here. Three of them return HTTP 200.
 | 5 | Renaming a resource in `agentcore.json` | a normal-looking deploy | the CFN logical id changes, so the resource is **destroyed and recreated** |
 | 6 | `agentcore invoke` on a JSON SSE stream | `"success": true, "response": ""` | the runtime is streaming correctly. The CLI renders text deltas. Use boto3 `invoke_agent_runtime` and read the bytes |
 | 7 | Editing a shell script while it runs | syntax error after the work succeeded | bash reads scripts incrementally. Finish, then edit |
+| 8 | A green `connect-rds.sh --probe` | four stages `ok: true` | it ran on YOUR credentials. The runtime's execution role is a different principal and needs `rds-data:ExecuteStatement` + `secretsmanager:GetSecretValue`. Prove it by invoking the runtime, not by probing |
 
 ## Deploy
 

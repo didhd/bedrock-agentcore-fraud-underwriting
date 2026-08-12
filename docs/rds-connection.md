@@ -21,6 +21,7 @@ separate things with two separate security postures.
 | Consumers | all 8 specialists + synthesizer | Francis only |
 | Latency budget | inside the <1 min per application | a human is waiting |
 | Transport | `signal_layer/sources/aurora.py`, RDS Data API | Lambda behind AgentCore Gateway |
+| Runtime network mode | `PUBLIC` — verified working | `PUBLIC`; only the Lambda is in the VPC |
 | Writes | yes — `persist_adjudication` | **no** |
 | Enable with | `./deploy/connect-rds.sh --enable` | deployed by `./deploy/connect-rds.sh` |
 
@@ -59,7 +60,14 @@ verified. The signal path stays precomputed.
 
 **The one thing the blog gives us that we did not have.** Its Lambda holds the database
 connection, not the agent. That matters because all ten AgentCore runtimes are
-`networkMode: PUBLIC` and cannot open a socket into a private subnet:
+`networkMode: PUBLIC` — deliberately, and verified working — so they cannot open a socket
+into a private subnet:
+
+> **In-VPC runtimes were tried and reverted.** The CLI supports `networkMode: VPC` and all
+> ten came up `READY` that way, then returned `APITimeoutError` at request time: a
+> private-isolated subnet cannot reach the GPT-5.6 synthesizer through the `bedrock-mantle`
+> interface endpoint. Nothing on this page requires in-VPC runtimes, and the signal path is
+> verified with them `PUBLIC`.
 
 - `signal_layer/sources/aurora.py` runs **inside** the runtime, so it needs the RDS Data
   API — which requires Aurora with the Data API enabled. A plain `db.t3.micro` RDS
@@ -140,8 +148,20 @@ output would say so. Same posture as the Snowflake source, for the same reason.
   how it was found.
 - 1396 tests pass offline.
 
-**Not verified — there is no customer database on this side to call:**
-- A live round trip, in either transport. `--probe` exists for exactly that moment: it
+**Verified live on 2026-08-12, in our own account:**
+- Both transports. The Data API from the pipeline (840 signal rows read, output table
+  created) and `get_schema` through the VPC-attached Gateway Lambda. The runtimes were
+  `networkMode: PUBLIC` throughout — the Data API is a public IAM-authenticated endpoint,
+  so in-VPC runtimes are **not** required for this path and are not used.
+- A full adjudication with `SIGNAL_MODE=aurora`, after two defects that a green probe did
+  not catch: the runtime execution role lacked `rds-data:ExecuteStatement` (the probe runs
+  on the *operator's* credentials, a different principal), and
+  `build_aurora_payload` constructed a `SignalPayload` shape that does not exist, with a
+  bare `except Exception` turning the `TypeError` into `None` — so all eight specialists
+  reported "no signals" while the panel said the cluster was connected.
+
+**Still not verified — there is no CUSTOMER database on this side to call:**
+- A round trip against *their* cluster, in either transport. `--probe` exists for exactly that moment: it
   reports config → connect → signal table → write as four distinct stages, so a cluster
   without the Data API, a wrong database name, a missing signal table and a role without
   `CREATE` are four different messages rather than one failure.
