@@ -235,7 +235,7 @@ a `caveats` array stating what was not measured.
 
 ## Deploy to AgentCore Runtime
 
-**Deploying into your own account: read [`deploy/DEPLOY.md`](deploy/DEPLOY.md).** It
+**Deploying into your own account: read [`deploy/README.md`](deploy/README.md).** It
 is the end-to-end path, verified by execution, and it covers the two failure modes
 that cost the most time here: `./deploy/vendor.sh` is mandatory before every deploy
 (skip it and a missing module is reported as a 30-second init timeout), and
