@@ -57,4 +57,4 @@ PYTHON="$PY" ./deploy/deploy-sites.sh
 echo
 echo "Both stacks deployed. To verify the agents actually reached Bedrock rather"
 echo "than running offline, check that the first SSE frame says mock_mode: false --"
-echo "see the 'Verify' section of deploy/DEPLOY.md."
+echo "see the 'Verify' section of deploy/README.md."

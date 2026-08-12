@@ -340,7 +340,7 @@ def main(argv: list[str] | None = None) -> int:
     total = len(checks.rows)
     if checks.failed:
         print(f"\n{RED}{checks.failed} of {total} checks failed.{RESET}")
-        print(f"{DIM}Troubleshooting: deploy/DEPLOY.md{RESET}")
+        print(f"{DIM}Troubleshooting: deploy/README.md{RESET}")
         return 1
     print(f"\n{GREEN}All {total} checks passed.{RESET}")
     return 0
