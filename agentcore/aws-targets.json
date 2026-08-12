@@ -1,1 +1,8 @@
-[]
+[
+  {
+    "name": "default",
+    "description": "SA account, us-west-2. Named 'default' because `agentcore deploy` with no --target looks for exactly that name. One region covers all nine agents: GPT-5.6 Luna is served in us-west-2 and global.* Claude profiles resolve from anywhere.",
+    "account": "269550163595",
+    "region": "us-west-2"
+  }
+]

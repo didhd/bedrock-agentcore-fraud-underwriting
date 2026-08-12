@@ -1647,6 +1647,17 @@ def test_report_selection_skips_only_recognised_non_bench_schemas():
         "pointpredictive.agentcore.set-comparison/1",
         "pointpredictive.agentcore.set-comparison-analyses/1",
         "pointpredictive.agentcore.set-comparison-verdicts/1",
+        # One invocation of the DEPLOYED AgentCore runtime, recorded to prove the
+        # deployed path produces a valid 21-key adjudication from live Bedrock calls.
+        # Not a pipeline-bench run: n=1, so it has no distribution and cannot acquire
+        # one. It is the closest thing here to a bench report -- it does have
+        # end-to-end latency, a 21-key adjudication and a fan-out speedup -- which is
+        # exactly why it is registered explicitly rather than left to the filter. The
+        # bench guards below assert `raw_runs` and percentile suppression structures
+        # that only make sense for a sampled run; satisfying them for a single
+        # invocation would mean inventing the shape of a distribution that was never
+        # measured. The file publishes no percentile and says so in its own caveats.
+        "pointpredictive.agentcore.deployed-runtime-smoke/1",
     }
     collected = set(_committed_reports())
     for path in sorted(RESULTS_DIR.glob("*.json")):

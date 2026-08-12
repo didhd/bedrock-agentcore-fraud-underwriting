@@ -201,6 +201,69 @@ S3 before it can fail.
   histograms carry no attributes. Per-agent spend telemetry is our code's job.
 - AgentCore Memory does **not** work under `agentcore dev`.
 
+### A first real deploy hit four defects, and three of them succeed silently
+Verified 2026-08-11 deploying to us-west-2 (stack `AgentCore-ppFraud-default`).
+Listed in the order they surfaced, because each one masked the next:
+
+1. **The shared packages are not in the zip.** `agentcore package` roots the archive
+   at `codeLocation`, so `prompts/`, `signal_layer/`, `agents/` are absent and the
+   container dies on `ModuleNotFoundError: No module named 'app'`. It surfaces as
+   *"Runtime initialization time exceeded... 30s"*, which points at a timeout, not a
+   missing module — read CloudWatch, not the CLI error. `deploy/vendor.sh` fixes it
+   and must be run before **every** deploy.
+2. **`MOCK_MODE` defaults to mock.** `app.runtime_support.mock_mode()` is
+   `os.environ.get("MOCK_MODE", "1") == "1"`, so a runtime with no env block runs
+   entirely offline. It returns HTTP 200 with a complete, plausible SSE stream and
+   calls Bedrock zero times. The tell is in the data, not the status: the `start`
+   frame carries `"mock_mode": true`, and `underwriting_fanout` completes in
+   **0.11s**. `agentcore.json` now sets `MOCK_MODE=0` on both runtimes.
+3. **Each runtime's `pyproject.toml` is a second dependency list that drifts.**
+   Both still pinned `strands-agents==1.26.0` / `bedrock-agentcore==1.14.0` long
+   after `requirements.txt` moved to 1.50.2 / 1.19.0 — and
+   `strands.models.openai_responses` does not exist in 1.26.x, so the GPT-5.6
+   synthesizer could not be constructed at all. The pin is now
+   `strands-agents[openai]==1.50.2`; the extra is what pulls `openai` and
+   `aws-bedrock-token-generator`. (`aws-bedrock-token-generator` was missing from
+   `requirements.txt` too, and every local run still worked because it happened to
+   be installed in the dev environment.)
+4. **The CLI-generated execution role cannot reach GPT-5.6.** It grants
+   `bedrock:InvokeModel` on `foundation-model/*` + `inference-profile/*`, which
+   covers the eight Claude specialists and nothing else. Mantle is a separate IAM
+   namespace needing **two** actions with **different** resources:
+   `bedrock-mantle:CreateInference` on
+   `arn:aws:bedrock-mantle:*:<account>:project/*` and
+   `bedrock-mantle:CallWithBearerToken` on `*`. Granting one only reveals the other,
+   so the first fix looks complete and is not. This fails at the *last* step, after
+   all eight specialists have been paid for, and there is no degradation path
+   because the adjudication is the product. Both statements are added in
+   `agentcore/cdk/lib/cdk-stack.ts` — via CDK deliberately, since an out-of-band
+   `put-role-policy` is drift that the customer's own `agentcore deploy` would not
+   reproduce.
+
+`agentcore/cdk/` is checked in and the CLI does **not** regenerate it (verified: four
+deploys left `git status` clean there), so editing the stack is a supported extension
+point. Run `npm run build` in `agentcore/cdk` after editing — `agentcore deploy`
+compiles from `dist/`.
+
+### `agentcore invoke` renders nothing for a JSON SSE stream
+`--prompt '{"application_id":"APP-1004"}'` reports `"success": true, "response": ""`
+while the runtime is in fact streaming correctly. The CLI renders text deltas, and
+our frames are JSON objects. Do not debug the runtime off that empty string: call
+`bedrock-agentcore.invoke_agent_runtime` with boto3 and read the bytes. The same
+invocation that showed `response: ""` returned 16,224 bytes of valid frames.
+
+### There is no CloudFront (or any static hosting) in AgentCore
+`agentcore add` has no frontend/site/distribution subcommand and the config schema
+has no such resource, so "AgentCore + CloudFront" is not a deployment mode the CLI
+offers — it is a thing to build. Note also that CloudFront cannot front the runtime
+directly: OAC signs SigV4 for S3 / Lambda function URLs / VPC origins, not for
+`bedrock-agentcore`, so a compute shim is unavoidable. And a shim cannot be a plain
+passthrough, because **the repo has two SSE frame vocabularies**: the runtime emits
+`start / agent_start / agent_done / synthesis_start / done`, while `ui/server.py`
+emits — and `ui/src/hooks/useRun.ts` consumes — `run_started / agent_started /
+agent_completed / agent_failed / synthesis_started / synthesis_completed /
+run_completed`. Any browser-to-runtime path needs that translation somewhere.
+
 ## What was wrong before (do not reintroduce)
 
 - `agents/prompts.py` hand-rewrote all nine customer prompts ("verbatim in intent")
@@ -270,9 +333,12 @@ Landed and verified by execution:
       contract allows 4000-character POSSIBLE/HIGH narratives.
 - [ ] Move the cache point to `system prompt + stable payload prefix` so caching
       actually engages, then re-measure and only then quote a caching benefit.
-- [ ] Run `evals/bench.py --live` end-to-end for a real per-application p50/p95.
-      **No verified end-to-end latency or cost exists yet**, so the "<1 minute"
-      claim is still unproven in this repo.
+- [ ] Run `evals/bench.py --live` end-to-end for a real per-application **p50/p95**.
+      A single verified run now exists (`evals/results/deployed_runtime_e2e.json`,
+      2026-08-11, **n=1**) against the deployed runtime: 41.86s end-to-end,
+      $0.154764, 8/8 specialists, 21 keys valid. That is an existence proof, not a
+      distribution — no percentile may be quoted from it, and the "<1 minute" claim
+      still needs a real sample.
 - [ ] Consider moving `dealer` off Haiku (it can never cache there).
 - [ ] Evaluate whether `bustout` and the synthesizer belong on HEAVY — flagged in
       `TIER_RATIONALE`; needs an eval, not a judgement call.

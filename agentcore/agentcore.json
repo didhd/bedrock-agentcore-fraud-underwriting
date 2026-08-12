@@ -17,6 +17,12 @@
       "runtimeVersion": "PYTHON_3_12",
       "networkMode": "PUBLIC",
       "protocol": "HTTP",
+      "envVars": [
+        {
+          "name": "MOCK_MODE",
+          "value": "0"
+        }
+      ],
       "instrumentation": {
         "enableOtel": true
       }
@@ -30,6 +36,12 @@
       "runtimeVersion": "PYTHON_3_12",
       "networkMode": "PUBLIC",
       "protocol": "HTTP",
+      "envVars": [
+        {
+          "name": "MOCK_MODE",
+          "value": "0"
+        }
+      ],
       "instrumentation": {
         "enableOtel": true
       }

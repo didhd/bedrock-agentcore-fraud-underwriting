@@ -311,12 +311,42 @@ def build_francis(session_id: str) -> tuple[Any, ToolCapHook]:
     """
     from strands import Agent
 
-    from agents.models import build_bedrock_model, build_retry_strategy, model_for
+    from agents import mantle
+    from agents.models import (
+        build_bedrock_model,
+        build_retry_strategy,
+        max_tokens_for,
+        model_for,
+    )
 
     cap_hook = ToolCapHook()
     model_id = model_for("synthesizer")
+
+    # Route on the model id, exactly as agents/synthesize.py:_invoke_master does.
+    # Francis shares the synthesizer's model, and that model now defaults to
+    # `openai.gpt-5.6-luna` -- which is served ONLY by the bedrock-mantle endpoint
+    # through the OpenAI Responses API. Handing that id to `build_bedrock_model`
+    # builds a Converse client, and Converse rejects it:
+    #
+    #   ValidationException: ... calling the ConverseStream operation:
+    #   The provided model identifier is invalid.
+    #
+    # Measured against the deployed runtime on 2026-08-11: Francis emitted her
+    # `start` frame with all eight tools registered and then died on the first
+    # model call, 5.9s in. The bug was invisible locally because MOCK_MODE=1
+    # short-circuits before any model is built, and invisible to the type checker
+    # because both builders return `Any`. `OpenAIResponsesModel` is a full Strands
+    # provider, so tools, the ToolCapHook and ConcurrentToolExecutor all behave
+    # identically -- this only changes which transport carries the call.
+    if mantle.is_mantle_model(model_id):
+        model = mantle.build_responses_model(
+            model_id, max_tokens=max_tokens_for("synthesizer")
+        )
+    else:
+        model = build_bedrock_model(model_id)
+
     agent = Agent(
-        model=build_bedrock_model(model_id),
+        model=model,
         system_prompt=SYSTEM_PROMPT,
         tools=list(SPECIALIST_TOOLS),
         hooks=[cap_hook],
