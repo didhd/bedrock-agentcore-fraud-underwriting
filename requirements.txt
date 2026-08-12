@@ -98,3 +98,4 @@ pytest>=8
 # which `agentcore package` resolves and zips.
 fastapi>=0.110.0
 uvicorn>=0.29.0
+PyYAML==6.0.3

@@ -154,9 +154,27 @@ def signal_mode() -> dict[str, Any]:
     answer instead of a diagram.
     """
     mode = (os.environ.get("SIGNAL_MODE") or "fixtures").strip().lower()
+
+    # COMPUTED, not hardcoded. These were literal `False` from when nothing was connected, and
+    # once a cluster existed the panel started lying in the other direction -- reporting "not
+    # configured" beside a live connection with 840 seeded rows behind it. A hardcoded
+    # availability flag is exactly the kind of stale claim this UI exists to avoid.
+    aurora_ready = bool(
+        os.environ.get("AURORA_SECRET_ARN")
+        and os.environ.get("AURORA_DATABASE")
+        and (os.environ.get("AURORA_CLUSTER_ARN") or os.environ.get("PGHOST"))
+    )
+    cortex_ready = bool(os.environ.get("SNOWFLAKE_SECRET_ID"))
+
     return {
-        "mocked": True,
+        # True only while the active source really is the committed fixtures. When SIGNAL_MODE
+        # points at a cluster the agents read that cluster, so calling it "mocked" is wrong --
+        # even though this panel still opens no connection of its own, which the note says.
+        "mocked": mode == "fixtures",
         "active": mode,
+        "active_is_configured": (
+            True if mode == "fixtures" else aurora_ready if mode == "aurora" else cortex_ready
+        ),
         "swap_point": "app.runtime_support.build_signal_payload",
         "note": (
             "Every agent reads its signals through one function. Changing the source is "
@@ -178,7 +196,7 @@ def signal_mode() -> dict[str, Any]:
                 "is the target: the data already lives in Aurora, ~10 GB, 3.4M reads/day, "
                 "so the per-application path becomes one indexed read per domain instead "
                 "of eight text-to-SQL round trips.",
-                "available": False,
+                "available": aurora_ready,
                 "requires": [
                     "AURORA_SECRET_ARN (Secrets Manager)",
                     "AURORA_CLUSTER_ARN or host/port",
@@ -194,7 +212,7 @@ def signal_mode() -> dict[str, Any]:
                 "AgentCore Gateway target -- SigV4 outbound to Snowflake is not possible, "
                 "and Cortex Analyst /message returns generated SQL rather than rows, so a "
                 "second call executes it.",
-                "available": False,
+                "available": cortex_ready,
                 "requires": [
                     "AgentCore Gateway with a Lambda target",
                     "Snowflake PAT in Secrets Manager",
@@ -296,6 +314,10 @@ async def chat_stream(
         kind=agent["kind"],
         runtime=arn.rsplit("/", 1)[-1],
         session_id=session,
+        # Echoed so the UI can state whether this turn is actor-scoped. None means it went to
+        # the shared actor, and the header must say so instead of displaying an analyst id that
+        # had no effect -- which is exactly how a demo greets the wrong person by name.
+        analyst_id=analyst_id or None,
     )
 
     # Francis takes a prompt. A specialist takes an APPLICATION ID -- and only that.

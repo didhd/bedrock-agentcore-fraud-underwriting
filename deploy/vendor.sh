@@ -20,6 +20,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO_ROOT="$(pwd)"
+PYTHON_BIN="${PYTHON:-python3}"
 
 SHARED=(prompts signal_layer agents fixtures)
 # app/specialist is ONE directory shared by all eight specialist runtimes -- they
@@ -68,6 +69,55 @@ for rt in "${RUNTIMES[@]}"; do
   if [ -n "$missing" ]; then
     echo "ERROR: $rt/main.py imports modules that were not vendored:$missing" >&2
     echo "       They are probably not in app/*.py, or app/ has grown a package." >&2
+    exit 1
+  fi
+
+  # The check above only reads main.py's own top-level `from app.X` lines, which is not
+  # enough. `app/runtime_support.py` imports `signal_layer.sources.aurora` INSIDE the
+  # SIGNAL_MODE branch, so a submodule that was never vendored passes CI, passes
+  # `agentcore validate`, deploys clean, and then raises ModuleNotFoundError on the first
+  # aurora-mode invocation -- in front of the customer, looking like a broken agent.
+  #
+  # So: resolve every dotted import of a SHARED package found anywhere in the vendored
+  # tree, wherever in the file it appears.
+  deep_missing="$("$PYTHON_BIN" - "$rt" "${SHARED[@]}" <<'PYEOF'
+import pathlib, re, sys
+
+root = pathlib.Path(sys.argv[1])
+shared = set(sys.argv[2:])
+pattern = re.compile(
+    r"^\s*(?:from\s+(" + "|".join(map(re.escape, sorted(shared))) + r")((?:\.\w+)+)\s+import"
+    r"|\s*import\s+(" + "|".join(map(re.escape, sorted(shared))) + r")((?:\.\w+)+))",
+    re.MULTILINE,
+)
+
+missing = set()
+for source in root.rglob("*.py"):
+    if "__pycache__" in source.parts:
+        continue
+    text = source.read_text(encoding="utf-8", errors="replace")
+    for match in pattern.finditer(text):
+        package = match.group(1) or match.group(3)
+        trail = match.group(2) or match.group(4)
+        parts = [package, *trail.strip(".").split(".")]
+        # The whole dotted path left of `import` must resolve, as a module file or as a
+        # package directory. There is deliberately NO "well, the parent exists" fallback: the
+        # first version of this had one, and since `signal_layer/sources/` exists for any
+        # `signal_layer.sources.anything`, it accepted every typo and the check was a no-op.
+        # Caught by mutating the source to import a module that does not exist and watching
+        # vendor.sh pass.
+        base = root.joinpath(*parts)
+        if base.with_suffix(".py").exists() or (base / "__init__.py").exists():
+            continue
+        missing.add(".".join(parts))
+
+print(" ".join(sorted(missing)))
+PYEOF
+)"
+  if [ -n "${deep_missing// /}" ]; then
+    echo "ERROR: $rt has unresolvable imports of shared packages: $deep_missing" >&2
+    echo "       The vendored copy is stale or the submodule does not exist. These are" >&2
+    echo "       lazily imported, so nothing else in the pipeline would catch them." >&2
     exit 1
   fi
 

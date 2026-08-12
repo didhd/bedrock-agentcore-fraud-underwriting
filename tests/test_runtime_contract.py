@@ -91,7 +91,25 @@ def francis():
     # collides with the repo-root `tools` package. Her bootstrap resolves that by
     # putting her directory ahead of the repo root on sys.path; loading her here
     # (after the underwriter, in the same interpreter) proves the ordering holds.
-    return _load(FRANCIS_PATH, "pp_test_francis_main")
+    #
+    # THE COLLISION IS TWO-WAY AND ORDER-DEPENDENT, so `tools` is isolated around this
+    # fixture. Whichever of the two `tools` packages is imported first wins for the whole
+    # interpreter, and the loser then raises ModuleNotFoundError for a module that is plainly
+    # on disk:
+    #   - repo-root first (any test importing tools.usecases) -> francis cannot find
+    #     tools.specialists
+    #   - francis first -> tools.usecases cannot be imported
+    # Neither is a real defect in either package, and both produce 16 errors that point at the
+    # wrong file. Saving, purging and restoring makes this fixture independent of test order.
+    saved = {name: module for name, module in sys.modules.items() if name.split(".")[0] == "tools"}
+    for name in saved:
+        del sys.modules[name]
+    try:
+        yield _load(FRANCIS_PATH, "pp_test_francis_main")
+    finally:
+        for name in [n for n in sys.modules if n.split(".")[0] == "tools"]:
+            del sys.modules[name]
+        sys.modules.update(saved)
 
 
 class FakeContext:

@@ -1,0 +1,78 @@
+[
+ {
+  "name": "get_schema",
+  "description": "Read the live schema of the underwriting tables you are allowed to query: table names, column names, data types and nullability, straight from information_schema. ALWAYS call this before query_underwriting_data -- the column names belong to the customer's database, not to this tool, so guessing them wastes a turn. Returns which tables are readable and which are absent from this database.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {},
+   "required": []
+  }
+ },
+ {
+  "name": "query_underwriting_data",
+  "description": "Run ONE read-only SQL query against the underwriting database and return the rows. Use this for portfolio-level and historical questions that no single application's signals can answer -- decline rates over a period, how often an alert fires, comparing a dealer against the book. Do NOT use it to analyse one application's fraud risk: the fraud specialists already receive that application's signals and their judgement is what the analysis is for. Only SELECT and WITH are permitted, one statement at a time, and only the tables get_schema lists. Results are capped at 200 rows. Write values as %s placeholders and pass them in the parameters array -- never paste a value into the SQL string.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "sql": {
+     "type": "string",
+     "description": "A single read-only SELECT or WITH statement. Use %s for every value. Example: select count(*) from underwriting_report_output where overall_risk_decision = %s and adjudicated_at >= %s"
+    },
+    "parameters": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     },
+     "description": "Values for the %s placeholders, in order. Must contain exactly as many items as the statement has placeholders. Omit or send an empty array when the statement has none."
+    }
+   },
+   "required": [
+    "sql"
+   ]
+  }
+ },
+ {
+  "name": "list_use_cases",
+  "description": "List the verified analyst queries available to run, with what each answers and which parameters it takes. Call this first when you are unsure which use case fits the question. Available: borrower_application_history: Everything one borrower has applied for, across every lender in the consortium.; lender_application_volume: How much business a lender, or every lender, has sent over a period.; lender_directory: Which lenders exist, and their organisational details.; portfolio_default_rate: How the funded book is actually performing over a window.; score_bin_performance: Whether the score and the alerts are separating good from bad, bin by bin -- the question a lender asks when deciding where to set a cutoff.; identity_theft_reapplication: A borrower whose stated income and address jumped between applications at different lenders -- someone else using the identity, or the identity being prepared for use.; coborrower_removal: A co-borrower present on a recent application and absent from this one, where the dropped co-borrower had materially worse credit -- the shape of a straw-borrower arrangement or of shopping a file after a decline.; phone_fraud_tag_reuse: A phone number on a live application that has already been tagged for fraud elsewhere -- the cheapest true link between an application and known bad activity.; missed_fraud_patterns: Applications that defaulted while the score was low and no alert fired, grouped by the pattern they share. This is the false-negative review, and it is the query most likely to justify the whole engagement.; submitted_today: What has arrived for a lender today, from the real-time source.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {},
+   "required": []
+  }
+ },
+ {
+  "name": "run_use_case",
+  "description": "Run one of the customer's own verified analyst queries by name and return the rows. These queries were written and verified by the lender's fraud engineering team, so prefer them over writing SQL yourself: they already contain the correct joins and the exclusions for test and known-fake records. Use query_underwriting_data only when no use case fits. Results are capped.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "use_case": {
+     "type": "string",
+     "enum": [
+      "borrower_application_history",
+      "lender_application_volume",
+      "lender_directory",
+      "portfolio_default_rate",
+      "score_bin_performance",
+      "identity_theft_reapplication",
+      "coborrower_removal",
+      "phone_fraud_tag_reuse",
+      "missed_fraud_patterns",
+      "submitted_today"
+     ],
+     "description": "Which verified query to run. Call list_use_cases for what each does."
+    },
+    "parameters": {
+     "type": "object",
+     "description": "Optional named values for this use case, e.g. a lender name or a date range. Omit to run the query exactly as the customer verified it. list_use_cases reports which names each use case accepts.",
+     "additionalProperties": {
+      "type": "string"
+     }
+    }
+   },
+   "required": [
+    "use_case"
+   ]
+  }
+ }
+]

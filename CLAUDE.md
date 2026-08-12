@@ -42,7 +42,7 @@ PostgreSQL, ~10 GB, 3.4M reads/day).
 signal_layer/            precomputed governed signals + the customer's General Rules
   registry.py            SIGNAL_SPEC: every signal, owner domain(s), verbatim thresholds
   schema.py              SignalPayload / DomainView / AlertFinding / render_for_agent
-  alert_categories.py    the ten alert-ID categories (166 IDs), category_of, alerts_for_domain
+  alert_categories.py    the ten alert-ID categories (148 distinct IDs, 166 memberships)
   bands.py               fraud-score bands, dealer-score bands, PRODUCT decode, credit validity
   rules/                 one module per numbered General Rule + catalog.py coverage table
 
@@ -138,6 +138,55 @@ Function URLs verify SigV4). Snowflake's own official AgentCore guide uses an
 **OpenAPI** Gateway target with a PAT as an API-key header, not an MCP target.
 Recommended path: a **Lambda Gateway target** with a `SIGNAL_MODE` flag
 (`cortex` | `aurora`), so live-Cortex and precomputed-Aurora are one config change.
+That flag now exists on `app.runtime_support.build_signal_payload`
+(`fixtures` | `cortex` | `aurora`) and **neither non-fixture mode falls back** — a silent
+fall back to fixtures is the one failure this port must never produce.
+
+### Reaching the customer's RDS: which component holds the connection decides everything
+All ten runtimes are `networkMode: PUBLIC`, so nothing inside a runtime can open a socket
+into a private subnet. That gives exactly two transports, and the choice is not stylistic:
+- **Inside the runtime** (`signal_layer/sources/aurora.py`) → **RDS Data API**, which
+  requires Aurora with the Data API enabled. A plain `db.t3.micro` RDS PostgreSQL instance
+  cannot serve it.
+- **In a Gateway Lambda** (`deploy/cdk/lambda-rds/main.py`) → the Lambda can be
+  **VPC-attached**, so it reaches *any* RDS PostgreSQL while the ten runtimes stay `PUBLIC`.
+  `./deploy/connect-rds.sh --vpc <subnets> <sg>`. Bundles `pg8000`, not `psycopg2`: pure
+  Python, so no manylinux cross-compile from a Mac.
+
+`describe_transport()` reports which is live and every error carries it, because a Data API
+error and a subnet timeout look identical from the agent side and have opposite fixes.
+
+The AWS Database Blog's Aurora DSQL + AgentCore reference architecture (2026-05-18) is the
+right pattern **for the analyst tool only**. Its agent generates SQL for its primary
+workload; doing that per application would put 8 generated queries + 8 executions inside the
+sub-minute budget, which is the exact cost the migration removes. So: precomputed signals for
+the eight specialists, model-generated read-only SQL for Francis, and never the reverse.
+`tests/test_rds_connection.py` asserts in two directions that no specialist has a SQL tool.
+Also not adopted: DSQL (their data is already Aurora PostgreSQL) and A2A (the fan-out is
+`asyncio.gather` over `InvokeAgentRuntime`, already traced as one joined trace).
+
+Writes are `persist_adjudication` only, driven by the pipeline with columns taken from the
+21-key contract — **no write tool is reachable by a model**, and a test enforces it.
+`output_ddl()` emits `text` for both enum columns with no `CHECK`, because the prompt file
+says `MEDIUM RISK`/3 values and the PDF says `POSSIBLE RISK`/4; the eight `*_flag` columns
+are `integer` because the contract says `Literal[0, 1]` (a substring test on the annotation
+repr got this wrong and produced `text` for all eight).
+
+### `deploy/vendor.sh` must resolve LAZY imports, not just `from app.X` in main.py
+`runtime_support.py` imports `signal_layer.sources.aurora` inside the `SIGNAL_MODE` branch.
+A submodule that was never vendored therefore passes CI, passes `agentcore validate`, deploys
+clean, and raises `ModuleNotFoundError` only on the first aurora-mode invocation — same class
+as the `app.distributed_fanout` failure. `vendor.sh` now resolves every dotted import of a
+shared package anywhere in the vendored tree. **The first version of that check was a no-op**
+(a "the parent package exists" fallback accepted every typo, since `signal_layer/sources/`
+exists for any `signal_layer.sources.anything`); it was found by mutating the source and
+watching vendor.sh pass. Mutation-test any change to it.
+
+Related trap: the vendored `signal_layer/` copies sit beside each `main.py`, and Francis's
+bootstrap puts her directory ahead of the repo root on `sys.path`. Importing her in-process
+from a test makes the vendored copy shadow the repo-root one **for the rest of the
+interpreter**. `tests/test_rds_connection.py` reads her tool names in a subprocess for that
+reason.
 
 ### AgentCore CLI: the old commands do not exist, and which binary you have decides how badly
 `agentcore configure` and `agentcore launch` **do not exist** in
@@ -300,33 +349,55 @@ Landed and verified by execution:
   console errors via Playwright, no "Snowflake" string anywhere.
 - `agentcore/` — hand-authored project for the real CLI; `agentcore validate` passes.
 - `app/underwriter/main.py` — streaming AgentCore entrypoint.
+- `signal_layer/registry.py` + `schema.py`, `fixtures/applications/*.json` (14),
+  `app/francis/main.py` + its 8 `@tool` wrappers — all landed. `agents/prompts.py`
+  and `tests/test_local.py` are deleted.
+- 10 independent AgentCore runtimes (8 specialists + underwriter + francis) READY,
+  one joined trace across nine of them, native AgentCore Observability.
+- AgentCore Memory on Francis (SEMANTIC + SUMMARIZATION, actor-scoped) and a
+  Gateway (`ppfraud-reference`) whose alert-dictionary target is called live.
+- Data sources: `signal_layer/sources/{snowflake,aurora}.py` + `deploy/connect-*.sh`,
+  both probe-before-switch and both fail loud.
+- **The RDS connection is live.** `PpFraudData` (VPC + Aurora Serverless v2 + 12 interface
+  endpoints, no NAT), `PpFraudRdsTools` (the read-only SQL Gateway Lambda), 840 signal rows
+  seeded from the fixtures by `deploy/seed-rds.py`, and `connect-rds.sh --probe` green through
+  all four stages including the write. Both transports exercised. This closes the "no live round
+  trip has happened" item.
+- The customer's semantic model landed: `signal_layer/semantic/loader.py` (sha256-guarded, 24
+  tables / 12 databases / 21 relationships / 17 verified queries / 2409 columns / 25 rules) and
+  `tools/usecases/` (10 use cases over all 17 queries, SQL loaded not committed).
+  `docs/semantic-model-reconciliation.md`: **25/25 rules implemented, 0 numeric disagreements.**
+- **Runtimes are PUBLIC and the Lambdas hold the VPC path**, and that is measured rather than
+  chosen: all ten deployed fine as `networkMode: VPC` and then returned
+  `APITimeoutError` at request time, because a private-isolated subnet cannot reach the
+  synthesizer's model through the `bedrock-mantle` endpoint. See `ARCHITECTURE.md`.
+- **1473 tests pass offline.**
 
 ## TODO
 
 **Blocking a full end-to-end demo**
-- [ ] `signal_layer/registry.py` and `signal_layer/schema.py` have not landed.
-      `signal_layer/__init__.py` already imports them, so the whole package is
-      currently unimportable and `tests/test_rules.py` fails collection.
-- [ ] `fixtures/applications/*.json` (12+ scenarios) not yet written. Until then
-      the UI and bench fall back to the legacy 5-record `data/applications.py`,
-      and the anti-false-positive scenarios (dealer 900+ without coordination,
-      all-null employer contact fields, staffing agency, multi-unit address,
-      alert-volume-heavy) do not exist as data.
-- [ ] `app/francis/main.py` + its 8 `@tool` wrappers.
+- [ ] Nothing known. The blocking items above have landed; what remains is
+      measurement and the open questions with the customer.
 
 **Cleanup of superseded code**
-- [ ] Retire `agents/prompts.py` (paraphrases), and update
-      `agents/specialists.py` + `agents/orchestrator.py`, which still import it
-      and still import the deleted `nominal_latency` / `nominal_tokens`.
-- [ ] Rewrite or delete `tests/test_local.py` — it asserts the old vote-counting
-      synthesis and the deleted nominal tables, i.e. it currently encodes spec
-      violations.
-- [ ] Remove `SIM_LATENCY_SCALE` from `app.py`.
-- [ ] Fix the three stale `agentcore configure/launch` references that `ci.sh`
+- [ ] Remove `SIM_LATENCY_SCALE` from `app.py` (3 occurrences).
+- [ ] Fix the stale `agentcore configure/launch` references that `ci.sh`
       flags: `README.md:129`, `agentcore_runtime.py:6-7`.
-- [ ] `tools/cortex_analyst_mcp.py` still calls the fictional
-      `cortex_analyst_query`; replace with the Lambda Gateway target design, and
-      correct `docs/semantic-layer-mcp.md` (it claims SigV4 to Snowflake).
+- [ ] `tools/cortex_analyst_mcp.py:184` still calls the fictional
+      `cortex_analyst_query`. The replacement design now exists and is deployed
+      (`deploy/cdk/lambda-rds/main.py` + `deploy/connect-rds.sh`), so this is a
+      deletion or a rewrite against that, not a design question.
+      `docs/semantic-layer-mcp.md`'s three factual errors are corrected.
+
+**The RDS connection (the customer's stated first priority)**
+- [ ] Run `./deploy/connect-rds.sh --probe` against their staging cluster. **No live
+      round trip has happened in either transport** — there is no customer database
+      on this side to call. See `docs/rds-connection.md` for what is and is not
+      verified.
+- [ ] Get their signal table name and shape; `DEFAULT_ALLOWLIST` in
+      `deploy/cdk/lambda-rds/main.py` is a guess extended by `RDS_TABLE_ALLOWLIST`.
+- [ ] Ask for a SELECT-only database role for the Gateway Lambda. Every check in
+      that file is defence in depth; the grant is the actual boundary.
 
 **Then**
 - [ ] Raise `max_tokens` per tier — currently 1536/2048, while the customer's
@@ -384,6 +455,12 @@ python3 -m evals.bench --offline --concurrency 1,4,16 --iterations 40
 AGENTCORE_BENCH_ALLOW_LIVE=1 python3 -m evals.bench --live --iterations 3   # real Bedrock spend
 
 # deploy (see deploy/deploy.md; never `agentcore configure`/`launch`)
+./deploy/vendor.sh              # MUST run after adding any shared module; verifies imports
 agentcore validate --json
 agentcore deploy --dry-run
+
+# connect a real data source (both probe before they switch; neither falls back)
+./deploy/connect-rds.sh                                  # Aurora + RDS Data API
+./deploy/connect-rds.sh --vpc subnet-a,subnet-b sg-xxx   # any RDS PostgreSQL
+./deploy/connect-snowflake.sh                            # Cortex Analyst, PAT only
 ```

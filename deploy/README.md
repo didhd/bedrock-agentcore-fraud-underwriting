@@ -256,6 +256,62 @@ until someone tries to follow a request.
 
 ---
 
+## Step 3 (optional) — your own data
+
+Out of the box the agents analyse the committed fixtures, so the demo runs in a fresh
+account with no database. One environment variable, `SIGNAL_MODE`, decides where signals
+come from, and each source has a script that stores the connection, **probes it**, and only
+then offers to switch over.
+
+| `SIGNAL_MODE` | Source | Connect with |
+|---|---|---|
+| `fixtures` (default) | committed fixtures | — |
+| `aurora` | your RDS / Aurora PostgreSQL | `./deploy/connect-rds.sh` |
+| `cortex` | Snowflake Cortex Analyst | `./deploy/connect-snowflake.sh` |
+
+```bash
+# Aurora with the RDS Data API enabled — nothing enters a VPC
+./deploy/connect-rds.sh
+
+# any RDS PostgreSQL, including one with no Data API. Only the Gateway's Lambda joins the
+# VPC; the ten agent runtimes stay networkMode: PUBLIC.
+./deploy/connect-rds.sh --vpc subnet-a,subnet-b sg-xxxx
+
+./deploy/connect-rds.sh --probe    # test what is stored, change nothing
+./deploy/connect-rds.sh --enable   # specialists read signals from the cluster
+./deploy/connect-rds.sh --disable  # back to the committed fixtures
+```
+
+Snowflake needs a PAT and three addresses, and nothing else:
+
+```bash
+./deploy/connect-snowflake.sh           # prompts, stores one secret, probes it
+./deploy/connect-snowflake.sh --enable  # SIGNAL_MODE=cortex
+```
+
+Both scripts probe before they offer to switch. That is the point of them — otherwise the
+first real test of a credential is an agent invocation, where a wrong warehouse or a cluster
+without the Data API looks identical to a broken agent.
+
+**Neither mode falls back.** With `SIGNAL_MODE=aurora` and a missing connection, the
+invocation raises. A silent fall back would produce an adjudication computed from 14 demo
+applications while everyone believed it came from the real cluster, and nothing in the output
+would say so.
+
+`connect-rds.sh` also deploys a **read-only SQL tool** behind the Gateway, attached to the
+interactive agent only, for portfolio questions no precomputed signal answers. The eight
+fraud specialists never receive it — see [docs/rds-connection.md](../docs/rds-connection.md)
+for why that separation is load-bearing, which parts are verified, and what to ask the
+customer for.
+
+After either script, apply the change:
+
+```bash
+./deploy/vendor.sh && agentcore deploy --target default --yes
+```
+
+---
+
 ## Manual path (no CDK)
 
 If you would rather not run the website stack, everything works without it.

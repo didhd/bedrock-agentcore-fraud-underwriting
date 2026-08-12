@@ -1,0 +1,10 @@
+{
+ "note": "Digests only. The files themselves are customer confidential and gitignored under prompts/verbatim/.",
+ "files": {
+  "FRAUDBOT_SEMANTIC_VIEW.yaml": {
+   "sha256": "8839d5e23034dcfcccb45c93a9d646a8c190382c0bd8990830b6daa63d43e319",
+   "source": "customer-supplied Snowflake Cortex semantic model, received 2026-08-12",
+   "bytes": 947391
+  }
+ }
+}

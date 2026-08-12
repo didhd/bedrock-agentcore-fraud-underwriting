@@ -110,3 +110,16 @@ app/specialist/agents/
 app/specialist/fixtures/
 app/specialist/data/
 app/specialist/app/
+
+# Written by deploy/one-shot.sh from the data stack outputs. Describes the customer network.
+deploy/.vpc-config.json
+deploy/.rds-connection.json
+
+# CDK context cache: keyed by account id, so it carries our account into the repo and would
+# be a stale lookup for anyone else. Regenerated on demand.
+deploy/cdk/cdk.context.json
+
+# Generated at bundle time from the confidential semantic model. The customer's own
+# verified SQL; never commit it. deploy/cdk/lambda-rds/bundle.sh refuses to build if this
+# is not ignored.
+deploy/cdk/lambda-rds/use_cases.json
