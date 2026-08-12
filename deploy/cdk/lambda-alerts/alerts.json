@@ -1,0 +1,1102 @@
+{
+ "generated_from": "signal_layer.alert_categories.CATEGORY_ALERTS",
+ "note": "The ten alert-ID categories from the customer's General Rule 3. Generated, never retyped: the specialists and this lookup must agree on what an alert means.",
+ "category_count": 10,
+ "alert_count": 148,
+ "categories": {
+  "Identity": [
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   44,
+   45,
+   46,
+   47,
+   50,
+   51,
+   52,
+   53,
+   58,
+   59,
+   60,
+   61,
+   62,
+   63,
+   64,
+   65,
+   66,
+   67,
+   104,
+   105,
+   106,
+   107,
+   111,
+   112,
+   123,
+   128,
+   135,
+   137,
+   139,
+   141,
+   145,
+   146,
+   150,
+   151,
+   152,
+   153,
+   154,
+   155,
+   158,
+   159,
+   165,
+   166
+  ],
+  "Income": [
+   27,
+   28,
+   29,
+   30,
+   40,
+   42,
+   43,
+   89,
+   113,
+   133,
+   134,
+   164
+  ],
+  "Employment": [
+   68,
+   69,
+   70,
+   71,
+   73,
+   74,
+   75,
+   76,
+   77,
+   78,
+   79,
+   114,
+   116,
+   117,
+   132,
+   140,
+   142,
+   143,
+   144,
+   148,
+   156
+  ],
+  "Employment Deviation": [
+   68,
+   69,
+   70,
+   71,
+   73,
+   74,
+   75,
+   77,
+   79,
+   114
+  ],
+  "Straw Borrower": [
+   21,
+   22,
+   23,
+   24,
+   25,
+   26,
+   72,
+   110,
+   161,
+   168
+  ],
+  "Vehicle Risk": [
+   97,
+   162,
+   167
+  ],
+  "Default": [
+   40,
+   41,
+   42,
+   48,
+   49,
+   54,
+   55,
+   80,
+   81,
+   82,
+   83,
+   84,
+   85,
+   86,
+   87,
+   88,
+   89,
+   90,
+   91,
+   92,
+   113,
+   115,
+   116,
+   117,
+   119,
+   120,
+   129,
+   130,
+   131,
+   138,
+   160,
+   163,
+   169
+  ],
+  "Dealer Risk": [
+   56,
+   57,
+   93,
+   94,
+   95,
+   96,
+   103,
+   136,
+   147
+  ],
+  "Collateral": [
+   97,
+   98,
+   99,
+   100,
+   101,
+   102
+  ],
+  "Bust Out Risk": [
+   157,
+   164
+  ]
+ },
+ "alerts": {
+  "128": {
+   "id": 128,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "3": {
+   "id": 3,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "4": {
+   "id": 4,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "5": {
+   "id": 5,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "6": {
+   "id": 6,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "7": {
+   "id": 7,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "8": {
+   "id": 8,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "9": {
+   "id": 9,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "10": {
+   "id": 10,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "11": {
+   "id": 11,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "12": {
+   "id": 12,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "13": {
+   "id": 13,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "14": {
+   "id": 14,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "15": {
+   "id": 15,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "16": {
+   "id": 16,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "17": {
+   "id": 17,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "18": {
+   "id": 18,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "19": {
+   "id": 19,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "20": {
+   "id": 20,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "141": {
+   "id": 141,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "145": {
+   "id": 145,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "146": {
+   "id": 146,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "150": {
+   "id": 150,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "151": {
+   "id": 151,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "152": {
+   "id": 152,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "153": {
+   "id": 153,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "154": {
+   "id": 154,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "155": {
+   "id": 155,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "158": {
+   "id": 158,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "159": {
+   "id": 159,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "165": {
+   "id": 165,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "166": {
+   "id": 166,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "135": {
+   "id": 135,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "44": {
+   "id": 44,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "45": {
+   "id": 45,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "46": {
+   "id": 46,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "47": {
+   "id": 47,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "50": {
+   "id": 50,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "51": {
+   "id": 51,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "52": {
+   "id": 52,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "53": {
+   "id": 53,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "137": {
+   "id": 137,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "58": {
+   "id": 58,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "59": {
+   "id": 59,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "60": {
+   "id": 60,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "61": {
+   "id": 61,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "62": {
+   "id": 62,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "63": {
+   "id": 63,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "64": {
+   "id": 64,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "65": {
+   "id": 65,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "66": {
+   "id": 66,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "67": {
+   "id": 67,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "139": {
+   "id": 139,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "104": {
+   "id": 104,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "105": {
+   "id": 105,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "106": {
+   "id": 106,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "107": {
+   "id": 107,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "111": {
+   "id": 111,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "112": {
+   "id": 112,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "123": {
+   "id": 123,
+   "categories": [
+    "Identity"
+   ]
+  },
+  "164": {
+   "id": 164,
+   "categories": [
+    "Income",
+    "Bust Out Risk"
+   ]
+  },
+  "133": {
+   "id": 133,
+   "categories": [
+    "Income"
+   ]
+  },
+  "134": {
+   "id": 134,
+   "categories": [
+    "Income"
+   ]
+  },
+  "40": {
+   "id": 40,
+   "categories": [
+    "Income",
+    "Default"
+   ]
+  },
+  "42": {
+   "id": 42,
+   "categories": [
+    "Income",
+    "Default"
+   ]
+  },
+  "43": {
+   "id": 43,
+   "categories": [
+    "Income"
+   ]
+  },
+  "113": {
+   "id": 113,
+   "categories": [
+    "Income",
+    "Default"
+   ]
+  },
+  "89": {
+   "id": 89,
+   "categories": [
+    "Income",
+    "Default"
+   ]
+  },
+  "27": {
+   "id": 27,
+   "categories": [
+    "Income"
+   ]
+  },
+  "28": {
+   "id": 28,
+   "categories": [
+    "Income"
+   ]
+  },
+  "29": {
+   "id": 29,
+   "categories": [
+    "Income"
+   ]
+  },
+  "30": {
+   "id": 30,
+   "categories": [
+    "Income"
+   ]
+  },
+  "132": {
+   "id": 132,
+   "categories": [
+    "Employment"
+   ]
+  },
+  "140": {
+   "id": 140,
+   "categories": [
+    "Employment"
+   ]
+  },
+  "142": {
+   "id": 142,
+   "categories": [
+    "Employment"
+   ]
+  },
+  "143": {
+   "id": 143,
+   "categories": [
+    "Employment"
+   ]
+  },
+  "144": {
+   "id": 144,
+   "categories": [
+    "Employment"
+   ]
+  },
+  "148": {
+   "id": 148,
+   "categories": [
+    "Employment"
+   ]
+  },
+  "156": {
+   "id": 156,
+   "categories": [
+    "Employment"
+   ]
+  },
+  "68": {
+   "id": 68,
+   "categories": [
+    "Employment",
+    "Employment Deviation"
+   ]
+  },
+  "69": {
+   "id": 69,
+   "categories": [
+    "Employment",
+    "Employment Deviation"
+   ]
+  },
+  "70": {
+   "id": 70,
+   "categories": [
+    "Employment",
+    "Employment Deviation"
+   ]
+  },
+  "71": {
+   "id": 71,
+   "categories": [
+    "Employment",
+    "Employment Deviation"
+   ]
+  },
+  "73": {
+   "id": 73,
+   "categories": [
+    "Employment",
+    "Employment Deviation"
+   ]
+  },
+  "74": {
+   "id": 74,
+   "categories": [
+    "Employment",
+    "Employment Deviation"
+   ]
+  },
+  "75": {
+   "id": 75,
+   "categories": [
+    "Employment",
+    "Employment Deviation"
+   ]
+  },
+  "76": {
+   "id": 76,
+   "categories": [
+    "Employment"
+   ]
+  },
+  "77": {
+   "id": 77,
+   "categories": [
+    "Employment",
+    "Employment Deviation"
+   ]
+  },
+  "78": {
+   "id": 78,
+   "categories": [
+    "Employment"
+   ]
+  },
+  "79": {
+   "id": 79,
+   "categories": [
+    "Employment",
+    "Employment Deviation"
+   ]
+  },
+  "114": {
+   "id": 114,
+   "categories": [
+    "Employment",
+    "Employment Deviation"
+   ]
+  },
+  "116": {
+   "id": 116,
+   "categories": [
+    "Employment",
+    "Default"
+   ]
+  },
+  "117": {
+   "id": 117,
+   "categories": [
+    "Employment",
+    "Default"
+   ]
+  },
+  "161": {
+   "id": 161,
+   "categories": [
+    "Straw Borrower"
+   ]
+  },
+  "72": {
+   "id": 72,
+   "categories": [
+    "Straw Borrower"
+   ]
+  },
+  "168": {
+   "id": 168,
+   "categories": [
+    "Straw Borrower"
+   ]
+  },
+  "110": {
+   "id": 110,
+   "categories": [
+    "Straw Borrower"
+   ]
+  },
+  "21": {
+   "id": 21,
+   "categories": [
+    "Straw Borrower"
+   ]
+  },
+  "22": {
+   "id": 22,
+   "categories": [
+    "Straw Borrower"
+   ]
+  },
+  "23": {
+   "id": 23,
+   "categories": [
+    "Straw Borrower"
+   ]
+  },
+  "24": {
+   "id": 24,
+   "categories": [
+    "Straw Borrower"
+   ]
+  },
+  "25": {
+   "id": 25,
+   "categories": [
+    "Straw Borrower"
+   ]
+  },
+  "26": {
+   "id": 26,
+   "categories": [
+    "Straw Borrower"
+   ]
+  },
+  "97": {
+   "id": 97,
+   "categories": [
+    "Vehicle Risk",
+    "Collateral"
+   ]
+  },
+  "162": {
+   "id": 162,
+   "categories": [
+    "Vehicle Risk"
+   ]
+  },
+  "167": {
+   "id": 167,
+   "categories": [
+    "Vehicle Risk"
+   ]
+  },
+  "129": {
+   "id": 129,
+   "categories": [
+    "Default"
+   ]
+  },
+  "130": {
+   "id": 130,
+   "categories": [
+    "Default"
+   ]
+  },
+  "131": {
+   "id": 131,
+   "categories": [
+    "Default"
+   ]
+  },
+  "138": {
+   "id": 138,
+   "categories": [
+    "Default"
+   ]
+  },
+  "160": {
+   "id": 160,
+   "categories": [
+    "Default"
+   ]
+  },
+  "163": {
+   "id": 163,
+   "categories": [
+    "Default"
+   ]
+  },
+  "41": {
+   "id": 41,
+   "categories": [
+    "Default"
+   ]
+  },
+  "169": {
+   "id": 169,
+   "categories": [
+    "Default"
+   ]
+  },
+  "48": {
+   "id": 48,
+   "categories": [
+    "Default"
+   ]
+  },
+  "49": {
+   "id": 49,
+   "categories": [
+    "Default"
+   ]
+  },
+  "54": {
+   "id": 54,
+   "categories": [
+    "Default"
+   ]
+  },
+  "55": {
+   "id": 55,
+   "categories": [
+    "Default"
+   ]
+  },
+  "80": {
+   "id": 80,
+   "categories": [
+    "Default"
+   ]
+  },
+  "81": {
+   "id": 81,
+   "categories": [
+    "Default"
+   ]
+  },
+  "82": {
+   "id": 82,
+   "categories": [
+    "Default"
+   ]
+  },
+  "83": {
+   "id": 83,
+   "categories": [
+    "Default"
+   ]
+  },
+  "84": {
+   "id": 84,
+   "categories": [
+    "Default"
+   ]
+  },
+  "85": {
+   "id": 85,
+   "categories": [
+    "Default"
+   ]
+  },
+  "86": {
+   "id": 86,
+   "categories": [
+    "Default"
+   ]
+  },
+  "87": {
+   "id": 87,
+   "categories": [
+    "Default"
+   ]
+  },
+  "88": {
+   "id": 88,
+   "categories": [
+    "Default"
+   ]
+  },
+  "90": {
+   "id": 90,
+   "categories": [
+    "Default"
+   ]
+  },
+  "91": {
+   "id": 91,
+   "categories": [
+    "Default"
+   ]
+  },
+  "92": {
+   "id": 92,
+   "categories": [
+    "Default"
+   ]
+  },
+  "115": {
+   "id": 115,
+   "categories": [
+    "Default"
+   ]
+  },
+  "119": {
+   "id": 119,
+   "categories": [
+    "Default"
+   ]
+  },
+  "120": {
+   "id": 120,
+   "categories": [
+    "Default"
+   ]
+  },
+  "96": {
+   "id": 96,
+   "categories": [
+    "Dealer Risk"
+   ]
+  },
+  "103": {
+   "id": 103,
+   "categories": [
+    "Dealer Risk"
+   ]
+  },
+  "136": {
+   "id": 136,
+   "categories": [
+    "Dealer Risk"
+   ]
+  },
+  "147": {
+   "id": 147,
+   "categories": [
+    "Dealer Risk"
+   ]
+  },
+  "56": {
+   "id": 56,
+   "categories": [
+    "Dealer Risk"
+   ]
+  },
+  "57": {
+   "id": 57,
+   "categories": [
+    "Dealer Risk"
+   ]
+  },
+  "93": {
+   "id": 93,
+   "categories": [
+    "Dealer Risk"
+   ]
+  },
+  "94": {
+   "id": 94,
+   "categories": [
+    "Dealer Risk"
+   ]
+  },
+  "95": {
+   "id": 95,
+   "categories": [
+    "Dealer Risk"
+   ]
+  },
+  "98": {
+   "id": 98,
+   "categories": [
+    "Collateral"
+   ]
+  },
+  "99": {
+   "id": 99,
+   "categories": [
+    "Collateral"
+   ]
+  },
+  "100": {
+   "id": 100,
+   "categories": [
+    "Collateral"
+   ]
+  },
+  "101": {
+   "id": 101,
+   "categories": [
+    "Collateral"
+   ]
+  },
+  "102": {
+   "id": 102,
+   "categories": [
+    "Collateral"
+   ]
+  },
+  "157": {
+   "id": 157,
+   "categories": [
+    "Bust Out Risk"
+   ]
+  }
+ }
+}

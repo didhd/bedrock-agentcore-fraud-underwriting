@@ -1,0 +1,29 @@
+[
+  {
+    "name": "describe_alert",
+    "description": "Look up what a Point Predictive alert id means. Given a numeric alert id such as 164, returns which of the customer's ten General Rule 3 categories it belongs to and whether it is entitled to more than one fraud specialist. Use this when an analyst asks what an alert number is, or which discipline owns it. This is reference data about alert DEFINITIONS; it never reports what fired on a specific application.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "alert_id": {
+          "type": "string",
+          "description": "The alert id to describe, e.g. 164. Digits are extracted, so 'alert 164' also works."
+        }
+      },
+      "required": ["alert_id"]
+    }
+  },
+  {
+    "name": "list_alert_categories",
+    "description": "List the customer's ten alert categories from General Rule 3, with how many alert ids each contains. Pass a category name to get that category's alert ids instead. Use this when an analyst asks how alerts are grouped, or which alerts belong to a discipline.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string",
+          "description": "Optional. One category name, e.g. 'Income'. Omit for all ten with counts."
+        }
+      }
+    }
+  }
+]

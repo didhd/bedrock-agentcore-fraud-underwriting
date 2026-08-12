@@ -60,8 +60,22 @@
             "memoryArn": "arn:aws:bedrock-agentcore:us-west-2:269550163595:memory/ppFraud_francisMemory-S0IHFR3UPo"
           }
         },
+        "mcp": {
+          "gateways": {
+            "ppfraud-reference": {
+              "gatewayId": "ppfraud-ppfraud-reference-u1txlygaex",
+              "gatewayArn": "arn:aws:bedrock-agentcore:us-west-2:269550163595:gateway/ppfraud-ppfraud-reference-u1txlygaex",
+              "gatewayUrl": "https://ppfraud-ppfraud-reference-u1txlygaex.gateway.bedrock-agentcore.us-west-2.amazonaws.com/mcp",
+              "targets": {
+                "AlertDictionary": {
+                  "targetId": "HLVJZLRTMO"
+                }
+              }
+            }
+          }
+        },
         "stackName": "AgentCore-ppFraud-default",
-        "deployHash": "cd223594aafd4c67"
+        "deployHash": "ff47cb51ea3a34e9"
       }
     }
   }

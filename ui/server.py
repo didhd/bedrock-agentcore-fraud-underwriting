@@ -1411,6 +1411,7 @@ async def chat(
     message: str = Query("", max_length=4000),
     session_id: str | None = Query(None),
     application_id: str | None = Query(None, max_length=32),
+    analyst_id: str | None = Query(None, max_length=120),
 ) -> StreamingResponse:
     """SSE for one chat turn against a DEPLOYED runtime.
 
@@ -1426,7 +1427,7 @@ async def chat(
     from ui.chat import chat_stream
 
     return StreamingResponse(
-        chat_stream(agent_id, message, session_id, application_id),
+        chat_stream(agent_id, message, session_id, application_id, analyst_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"},
     )

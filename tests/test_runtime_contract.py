@@ -798,7 +798,7 @@ def test_francis_memory_is_off_without_the_env_var(francis, monkeypatch):
     monkeypatch.delenv("FRANCIS_MEMORY_ID", raising=False)
     monkeypatch.delenv("MEMORY_FRANCISMEMORY_ID", raising=False)
     assert francis._memory_id() is None
-    assert francis._session_manager("s" * 40) is None
+    assert francis._session_manager("s" * 40, "analyst-a") is None
 
     # The CLI generates MEMORY_<NAME>_ID from the francisMemory resource.
     monkeypatch.setenv("MEMORY_FRANCISMEMORY_ID", "mem-123")
@@ -869,3 +869,233 @@ def test_shim_delegates_to_the_real_entrypoint():
     assert inspect.isasyncgenfunction(agentcore_runtime.invoke)
     # Exactly one entrypoint: BedrockAgentCoreApp overwrites handlers["main"].
     assert list(agentcore_runtime.app.handlers) == ["main"]
+
+
+def test_francis_memory_is_scoped_per_analyst_not_per_persona(francis, monkeypatch):
+    """The actor is the ANALYST, from the allowlisted custom header.
+
+    It used to be the constant FRANCIS_NAME, which made every analyst in the company share
+    one memory: facts one person stated came back to everyone and one case's summary leaked
+    into the next. Wrong on privacy and wrong on usefulness, and invisible in the output.
+    """
+    monkeypatch.delenv("FRANCIS_ACTOR_ID", raising=False)
+
+    class Ctx:
+        request_headers = {"X-Amzn-Bedrock-AgentCore-Runtime-Custom-User-Id": "rebecca"}
+
+    assert francis.actor_id_of(Ctx()) == "rebecca"
+
+    # boto3's own `runtimeUserId` arrives on a DIFFERENT header, and reading only the
+    # custom one made every boto3 caller -- which is every call the UI makes -- fall back
+    # to the shared actor. Measured before this was fixed.
+    class FirstClassCtx:
+        request_headers = {"X-Amzn-Bedrock-AgentCore-Runtime-User-Id": "sanghwa"}
+
+    assert francis.actor_id_of(FirstClassCtx()) == "sanghwa"
+
+    # Case-insensitive: header names are case-insensitive on the wire and the SDK does not
+    # normalise them, so matching the exact casing would work only by luck.
+    class LowerCtx:
+        request_headers = {"x-amzn-bedrock-agentcore-runtime-custom-user-id": "darren"}
+
+    assert francis.actor_id_of(LowerCtx()) == "darren"
+
+
+def test_francis_actor_falls_back_to_the_persona_rather_than_failing(francis, monkeypatch):
+    """A missing header degrades to shared memory; it must not break the answer.
+
+    Degrading is right -- an analyst's question is more important than memory scoping --
+    but the fallback is the failure mode worth seeing, so the code logs a warning.
+    """
+    monkeypatch.delenv("FRANCIS_ACTOR_ID", raising=False)
+
+    class NoHeaders:
+        request_headers = {}
+
+    assert francis.actor_id_of(NoHeaders()) == francis.FRANCIS_NAME
+    assert francis.actor_id_of(object()) == francis.FRANCIS_NAME
+
+
+def test_francis_actor_override_wins(francis, monkeypatch):
+    """A single-tenant deployment can pin one actor without sending headers."""
+    monkeypatch.setenv("FRANCIS_ACTOR_ID", "pinned-tenant")
+
+    class Ctx:
+        request_headers = {"x-amzn-bedrock-agentcore-runtime-custom-user-id": "ignored"}
+
+    assert francis.actor_id_of(Ctx()) == "pinned-tenant"
+
+
+def test_the_custom_user_id_header_is_allowlisted_on_the_runtime():
+    """Without the allowlist AgentCore strips the header before the entrypoint sees it.
+
+    So per-analyst memory silently becomes shared memory -- the code is correct, the
+    config is not, and nothing in the response says so.
+    """
+    import json
+    from pathlib import Path
+
+    config = json.loads(
+        (Path(__file__).resolve().parent.parent / "agentcore" / "agentcore.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    francis_runtime = next(r for r in config["runtimes"] if r["name"] == "francis")
+    allowlist = [h.lower() for h in francis_runtime.get("requestHeaderAllowlist", [])]
+    assert "x-amzn-bedrock-agentcore-runtime-custom-user-id" in allowlist
+
+
+def test_the_memory_declares_long_term_strategies_with_matching_namespaces():
+    """Extraction and retrieval must name the SAME namespaces.
+
+    A strategy that writes to one path while retrieval reads another looks exactly like
+    memory not working, because the write side reports success. So the declared namespace
+    templates are pinned against the paths app/francis/main.py retrieves from.
+    """
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    config = json.loads((root / "agentcore" / "agentcore.json").read_text(encoding="utf-8"))
+    memory = next(m for m in config["memories"] if m["name"] == "francisMemory")
+
+    kinds = {s["type"] for s in memory["strategies"]}
+    assert {"SEMANTIC", "SUMMARIZATION"} <= kinds, (
+        "long-term recall needs both: facts to recognise a returning analyst, summaries to "
+        "carry a case forward"
+    )
+    # 3-365 days is the field's own bound; 2 and 366 both fail validate.
+    assert 3 <= memory["eventExpiryDuration"] <= 365
+
+    declared = {t for s in memory["strategies"] for t in s.get("namespaceTemplates", [])}
+    source = (root / "app" / "francis" / "main.py").read_text(encoding="utf-8")
+    for template in declared:
+        # `/analysts/{actorId}/facts` is retrieved as an f-string on actor_id.
+        probe = template.replace("{actorId}", "{actor_id}").replace("{sessionId}", "{session_id}")
+        assert probe in source, f"{template} is declared but never retrieved from"
+
+
+# ---------------------------------------------------------------------------
+# The reference Gateway
+# ---------------------------------------------------------------------------
+
+
+def test_the_gateway_env_var_name_matches_what_the_cdk_derives():
+    """A wrong name is SILENT: the client is never built and two tools vanish.
+
+    `AgentCoreMcp.wireGatewayUrlsToAgents` computes
+    `AGENTCORE_GATEWAY_${name.toUpperCase().replace(/-/g,'_')}_URL`, so the constant has to
+    be derived from the gateway's declared name, not typed independently.
+    """
+    import json
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    config = json.loads((root / "agentcore" / "agentcore.json").read_text(encoding="utf-8"))
+    gateways = config["agentCoreGateways"]
+    assert gateways, "no gateway declared"
+    name = gateways[0]["name"]
+    expected = f"AGENTCORE_GATEWAY_{name.upper().replace('-', '_')}_URL"
+
+    francis_dir = root / "app" / "francis"
+    sys.path.insert(0, str(francis_dir))
+    try:
+        for module in [m for m in list(sys.modules) if m.startswith("tools")]:
+            del sys.modules[module]
+        from tools.gateway import GATEWAY_URL_ENV
+    finally:
+        sys.path.remove(str(francis_dir))
+        for module in [m for m in list(sys.modules) if m.startswith("tools")]:
+            del sys.modules[module]
+
+    assert GATEWAY_URL_ENV == expected
+
+
+def test_the_gateway_target_points_at_a_real_arn_not_the_placeholder():
+    """agentcore.json ships a placeholder; deploy/reference-tools.sh replaces it.
+
+    Deploying with the placeholder creates a target that fails every tool call at request
+    time, which reads as the tools being broken rather than as an unrun setup step.
+    """
+    import json
+    from pathlib import Path
+
+    config = json.loads(
+        (Path(__file__).resolve().parent.parent / "agentcore" / "agentcore.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    for gateway in config["agentCoreGateways"]:
+        for target in gateway["targets"]:
+            block = target.get("lambdaFunctionArn")
+            if not block:
+                continue
+            arn = block["lambdaArn"]
+            assert "PLACEHOLDER" not in arn, (
+                "run ./deploy/reference-tools.sh before deploying: it creates the Lambda "
+                "and writes its ARN here"
+            )
+            assert arn.startswith("arn:aws"), arn
+            assert Path(
+                Path(__file__).resolve().parent.parent / block["toolSchemaFile"]
+            ).is_file(), block["toolSchemaFile"]
+
+
+def test_the_tool_schema_has_no_nested_json_wrapper():
+    """`inputSchema` must be a bare object schema.
+
+    A nested `{"json": {...}}` wrapper is accepted by the file but fails the deployment
+    with "Attribute type null is not yet supported", which names nothing useful.
+    """
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    config = json.loads((root / "agentcore" / "agentcore.json").read_text(encoding="utf-8"))
+    for gateway in config["agentCoreGateways"]:
+        for target in gateway["targets"]:
+            block = target.get("lambdaFunctionArn")
+            if not block:
+                continue
+            tools = json.loads((root / block["toolSchemaFile"]).read_text(encoding="utf-8"))
+            assert tools, "an empty tool schema exposes nothing"
+            for tool in tools:
+                assert tool["inputSchema"]["type"] == "object", tool["name"]
+                assert "json" not in tool["inputSchema"], (
+                    f"{tool['name']}: nested json wrapper fails deployment"
+                )
+                # The description is what the model reads to decide whether to call it.
+                assert len(tool["description"]) > 60, f"{tool['name']}: description too thin"
+
+
+def test_the_alert_table_is_generated_and_agrees_with_the_signal_layer():
+    """The Gateway's data must not be able to contradict the specialists.
+
+    If the lookup and the agents disagree about what an alert means, the agent is the one
+    that sounds authoritative -- so the table is generated from the same module the
+    specialists' entitlements come from, and this asserts they still match.
+    """
+    import json
+    from pathlib import Path
+
+    from signal_layer.alert_categories import CATEGORY_ALERTS
+
+    table = json.loads(
+        (
+            Path(__file__).resolve().parent.parent
+            / "deploy"
+            / "cdk"
+            / "lambda-alerts"
+            / "alerts.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert table["generated_from"] == "signal_layer.alert_categories.CATEGORY_ALERTS"
+    assert table["category_count"] == len(CATEGORY_ALERTS)
+    assert {c: sorted(i) for c, i in CATEGORY_ALERTS.items()} == table["categories"]
+
+    # Every id in every category is reachable by the lookup, and its categories round-trip.
+    for category, ids in CATEGORY_ALERTS.items():
+        for alert_id in ids:
+            entry = table["alerts"][str(alert_id)]
+            assert category in entry["categories"]

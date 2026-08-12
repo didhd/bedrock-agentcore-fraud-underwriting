@@ -347,7 +347,27 @@ def build_signal_payload(application_id: str) -> tuple[Any | None, dict[str, Any
     read is the entire data-layer migration. Nothing above it changes: the
     fan-out, the prompts and the adjudication contract are all downstream of the
     ``SignalPayload`` this returns.
+
+    ``SIGNAL_MODE`` selects the source, and the modes are NOT interchangeable in one
+    respect: `cortex` raises rather than falling back. A silent fall back to fixtures would
+    produce an adjudication computed from demo data while everyone believed it came from the
+    consortium, and nothing in the output would say so. That is the one failure this port
+    must not be able to produce, so a misconfigured Cortex mode fails the run instead.
     """
+    mode = (os.environ.get("SIGNAL_MODE") or "fixtures").strip().lower()
+
+    if mode == "cortex":
+        from signal_layer.sources.snowflake import (  # noqa: PLC0415
+            SnowflakeNotConfigured,
+            build_cortex_payload,
+        )
+
+        try:
+            return build_cortex_payload(application_id)
+        except SnowflakeNotConfigured:
+            # Propagated, not logged and swallowed. See the docstring.
+            raise
+
     try:
         from fixtures.loader import build_payload, get_application  # noqa: PLC0415
 

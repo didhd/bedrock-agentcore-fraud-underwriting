@@ -232,21 +232,59 @@
       ],
       "instrumentation": {
         "enableOtel": true
-      }
+      },
+      "requestHeaderAllowlist": [
+        "X-Amzn-Bedrock-AgentCore-Runtime-Custom-User-Id"
+      ]
     }
   ],
   "memories": [
     {
       "name": "francisMemory",
-      "eventExpiryDuration": 7,
-      "strategies": []
+      "eventExpiryDuration": 30,
+      "strategies": [
+        {
+          "type": "SEMANTIC",
+          "name": "analystFacts",
+          "description": "Facts an analyst states about themselves or their work -- which lender they cover, which fraud discipline they own, which applications they are reviewing. Retrieved on later sessions so a returning analyst does not restate them.",
+          "namespaceTemplates": [
+            "/analysts/{actorId}/facts"
+          ]
+        },
+        {
+          "type": "SUMMARIZATION",
+          "name": "caseSummaries",
+          "description": "A compressed summary of each review session, so a case picked up tomorrow carries what was already established rather than starting from the application record again.",
+          "namespaceTemplates": [
+            "/summaries/{actorId}/{sessionId}"
+          ]
+        }
+      ]
     }
   ],
   "knowledgeBases": [],
   "credentials": [],
   "evaluators": [],
   "onlineEvalConfigs": [],
-  "agentCoreGateways": [],
+  "agentCoreGateways": [
+    {
+      "name": "ppfraud-reference",
+      "protocolType": "MCP",
+      "description": "Reference-data tools for the fraud agents, MCP-ified behind one endpoint. Today the alert dictionary; the same gateway is where an Aurora or Cortex target goes.",
+      "authorizerType": "NONE",
+      "enableSemanticSearch": true,
+      "targets": [
+        {
+          "name": "AlertDictionary",
+          "targetType": "lambdaFunctionArn",
+          "lambdaFunctionArn": {
+            "lambdaArn": "arn:aws:lambda:us-west-2:269550163595:function:PpFraudReferenceTools-AlertDictionary-jnrqpQzEuk0S",
+            "toolSchemaFile": "agentcore/tool/alert_dictionary_schema.json"
+          }
+        }
+      ]
+    }
+  ],
   "policyEngines": [],
   "configBundles": [],
   "abTests": [],

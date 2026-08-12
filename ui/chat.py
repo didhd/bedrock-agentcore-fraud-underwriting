@@ -255,6 +255,7 @@ async def chat_stream(
     message: str,
     session_id: str | None = None,
     application_id: str | None = None,
+    analyst_id: str | None = None,
 ) -> AsyncIterator[str]:
     """SSE for one chat turn against a deployed runtime.
 
@@ -312,15 +313,59 @@ async def chat_stream(
         return
     payload = json.dumps(body).encode()
 
+    def _read(response: Any) -> tuple[str, bytes]:
+        body = response["response"]
+        raw = body.read() if hasattr(body, "read") else b"".join(body)
+        return str(response.get("contentType") or ""), raw
+
     def invoke() -> tuple[str, bytes]:
-        response = _client().invoke_agent_runtime(
-            agentRuntimeArn=arn,
-            runtimeSessionId=session,
-            qualifier="DEFAULT",
-            contentType="application/json",
-            accept="text/event-stream" if agent["conversational"] else "application/json",
-            payload=payload,
-        )
+        kwargs: dict[str, Any] = {
+            "agentRuntimeArn": arn,
+            "runtimeSessionId": session,
+            "qualifier": "DEFAULT",
+            "contentType": "application/json",
+            "accept": "text/event-stream" if agent["conversational"] else "application/json",
+            "payload": payload,
+        }
+        client = _client()
+        # WHO IS ASKING, and why this is a header hook rather than the obvious parameter.
+        #
+        # `runtimeUserId` looks like the right field -- it is a first-class
+        # InvokeAgentRuntime parameter and becomes
+        # X-Amzn-Bedrock-AgentCore-Runtime-User-Id. It does NOT reach the entrypoint:
+        # measured, calling with runtimeUserId="probe" still logged "none of ... on this
+        # request, so memory falls back to the shared actor". The service consumes that
+        # header itself. That is why the AgentCore workshop invents a CUSTOM header instead,
+        # and why the runtime allowlists it in agentcore.json.
+        #
+        # So the custom header is injected here. `before-sign`, NOT after: adding a header
+        # after botocore signs makes the signed value differ from the sent value, which is
+        # exactly how the traceparent attempt in app/distributed_fanout.py produced a 403.
+        # Signing it means SigV4 covers it.
+        #
+        # Verified: with this hook, `list-actors` on the memory shows the analyst as its own
+        # actor instead of everything pooling into the shared persona.
+        if analyst_id:
+            actor = analyst_id[:120]
+
+            def _add_actor_header(request: Any, **_: Any) -> None:
+                request.headers.add_header(
+                    "X-Amzn-Bedrock-AgentCore-Runtime-Custom-User-Id", actor
+                )
+
+            client.meta.events.register(
+                "before-sign.bedrock-agentcore.InvokeAgentRuntime", _add_actor_header
+            )
+            try:
+                return _read(client.invoke_agent_runtime(**kwargs))
+            finally:
+                # Unregister, or the client -- which lives for the container's lifetime --
+                # would send the FIRST analyst's identity on every later request.
+                client.meta.events.unregister(
+                    "before-sign.bedrock-agentcore.InvokeAgentRuntime", _add_actor_header
+                )
+
+        return _read(client.invoke_agent_runtime(**kwargs))
         body = response["response"]
         raw = body.read() if hasattr(body, "read") else b"".join(body)
         return str(response.get("contentType") or ""), raw
