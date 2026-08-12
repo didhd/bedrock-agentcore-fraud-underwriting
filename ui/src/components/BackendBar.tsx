@@ -9,6 +9,12 @@
  * difference is the URL, the Authorization header, and the session-id header.
  *
  * The bearer token is held in component state and never written to localStorage.
+ *
+ * The "agentcore" option exists only in the LOCAL build. On the CloudFront build
+ * `/api/stream/*` is already an AgentCore call made server-side by a Lambda with
+ * SigV4 from its execution role, so a manual invocation URL and a bearer token
+ * pasted into a public page would be redundant and unsafe both. The option is
+ * compiled out there -- see ui/src/lib/deployment.ts.
  */
 
 import { Play, RotateCcw } from "lucide-react"
@@ -24,6 +30,11 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import {
+  ALLOW_MANUAL_RUNTIME_BACKEND,
+  EDGE_BACKEND_DETAIL,
+  EDGE_BACKEND_LABEL,
+} from "@/lib/deployment"
 import { cn } from "@/lib/utils"
 import type { BackendConfig, BackendKind } from "@/lib/sse"
 import type { Health } from "@/lib/types"
@@ -59,21 +70,36 @@ export function BackendBar({
           >
             Backend
           </label>
-          <Select
-            value={backend.kind}
-            onValueChange={(kind) => onBackendChange({ ...backend, kind: kind as BackendKind })}
-          >
-            <SelectTrigger id="backend-kind" className="w-52">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="local">Local demo server</SelectItem>
-              <SelectItem value="agentcore">AgentCore Runtime</SelectItem>
-            </SelectContent>
-          </Select>
+          {ALLOW_MANUAL_RUNTIME_BACKEND ? (
+            <Select
+              value={backend.kind}
+              onValueChange={(kind) => onBackendChange({ ...backend, kind: kind as BackendKind })}
+            >
+              <SelectTrigger id="backend-kind" className="w-52">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="local">Local demo server</SelectItem>
+                <SelectItem value="agentcore">AgentCore Runtime</SelectItem>
+              </SelectContent>
+            </Select>
+          ) : (
+            // Edge build: there is no choice to offer. `/api/stream/*` already IS an
+            // AgentCore Runtime call, made server-side. A dropdown with one item and
+            // two empty credential boxes described a configuration step that does not
+            // exist on this deployment, so it is replaced by a statement of fact.
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge variant="secondary" className="h-8 cursor-help px-2.5 font-mono text-xs">
+                  {EDGE_BACKEND_LABEL}
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-sm">{EDGE_BACKEND_DETAIL}</TooltipContent>
+            </Tooltip>
+          )}
         </div>
 
-        {backend.kind === "agentcore" ? (
+        {ALLOW_MANUAL_RUNTIME_BACKEND && backend.kind === "agentcore" ? (
           <>
             <div className="flex min-w-[22rem] flex-1 flex-col gap-1.5">
               <label

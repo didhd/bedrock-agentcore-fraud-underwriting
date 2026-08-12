@@ -55,7 +55,9 @@ new SitesStack(app, app.node.tryGetContext('stackName') ?? 'PpFraudSites', {
   runtimeRegion,
   runtimeQualifier: app.node.tryGetContext('runtimeQualifier') ?? 'DEFAULT',
   docsDir: builtDir('site/out', 'cd site && npm install && npm run build'),
-  demoDir: builtDir('ui/dist', 'cd ui && npm install && npm run build'),
+  // dist-edge, not dist: the deployed bundle is the one with the manual runtime
+  // backend compiled out. ui/dist stays the localhost artefact.
+  demoDir: builtDir('ui/dist-edge', 'cd ui && npm install && npm run build -- --mode edge'),
   apiDir: builtDir(
     'deploy/cdk/.build/api',
     'python3 deploy/cdk/scripts/build-static-api.py --out deploy/cdk/.build'

@@ -98,9 +98,15 @@ echo "    site/out: $(find site/out -name '*.html' | wc -l | tr -d ' ') html fil
 # ---------------------------------------------------------------------------
 # 2. Demo UI -> ui/dist
 # ---------------------------------------------------------------------------
-echo "==> building demo UI"
-( cd ui && [[ -d node_modules ]] || npm install --silent; npm run build >/dev/null )
-test -f ui/dist/index.html || { echo "error: ui/dist/index.html missing after build" >&2; exit 1; }
+# `--mode edge` writes ui/dist-edge, NOT ui/dist. ui/dist is what ui/server.py
+# serves on localhost, and the edge build differs from it: it compiles out the manual
+# "AgentCore Runtime" backend and its bearer-token box, which are meaningful on your
+# own machine and are redundant plus unsafe on a public URL where /api/stream/* is
+# already a server-side AgentCore call. Separate directories mean deploying never
+# changes what you see locally. See ui/src/lib/deployment.ts.
+echo "==> building demo UI (edge variant)"
+( cd ui && [[ -d node_modules ]] || npm install --silent; npm run build -- --mode edge >/dev/null )
+test -f ui/dist-edge/index.html || { echo "error: ui/dist-edge/index.html missing after build" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
 # 3. Bake the three static API responses + the Lambda's bootstrap.json
