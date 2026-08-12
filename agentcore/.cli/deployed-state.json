@@ -1,3 +1,28 @@
 {
-  "targets": {}
+  "targets": {
+    "default": {
+      "resources": {
+        "runtimes": {
+          "francis": {
+            "runtimeId": "ppFraud_francis-PejCjZ75UF",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:269550163595:runtime/ppFraud_francis-PejCjZ75UF",
+            "roleArn": "arn:aws:iam::269550163595:role/AgentCore-ppFraud-default-ApplicationAgentFrancisRu-tE4kVZ8OPnQL"
+          },
+          "underwriter": {
+            "runtimeId": "ppFraud_underwriter-CYDR91C95Y",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:269550163595:runtime/ppFraud_underwriter-CYDR91C95Y",
+            "roleArn": "arn:aws:iam::269550163595:role/AgentCore-ppFraud-default-ApplicationAgentUnderwrit-uyHy7oyyIXqm"
+          }
+        },
+        "memories": {
+          "francisMemory": {
+            "memoryId": "ppFraud_francisMemory-S0IHFR3UPo",
+            "memoryArn": "arn:aws:bedrock-agentcore:us-west-2:269550163595:memory/ppFraud_francisMemory-S0IHFR3UPo"
+          }
+        },
+        "stackName": "AgentCore-ppFraud-default",
+        "deployHash": "d34389065c6e4efd"
+      }
+    }
+  }
 }

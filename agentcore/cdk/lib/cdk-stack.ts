@@ -113,6 +113,71 @@ export class AgentCoreStack extends Stack {
     }
     this.application = new AgentCoreApplication(this, 'Application', appProps as any);
 
+    // ---------------------------------------------------------------------
+    // GPT-5.6 (bedrock-mantle) access for every runtime execution role.
+    //
+    // WHY THIS BLOCK EXISTS. The role @aws/agentcore-cdk generates grants
+    // `bedrock:InvokeModel` / `InvokeModelWithResponseStream` / `CountTokens` on
+    // `foundation-model/*` and `inference-profile/*`. That covers the Converse
+    // path -- the eight Claude specialists -- and nothing else. The master
+    // synthesizer is `openai.gpt-5.6-luna`, which is served by the
+    // **bedrock-mantle** endpoint through the OpenAI Responses API, and mantle is
+    // a SEPARATE IAM service namespace. So the generated role is silently
+    // insufficient for exactly one call in the pipeline.
+    //
+    // It fails late and it fails loudly. Measured against the deployed runtime on
+    // 2026-08-11: all eight specialists completed live (real tokens, real cost),
+    // then synthesis returned HTTP 401 twice --
+    //
+    //   is not authorized to perform: bedrock-mantle:CreateInference on resource:
+    //   arn:aws:bedrock-mantle:us-east-1:269550163595:project/default
+    //   because no identity-based policy allows the bedrock-mantle:CreateInference action
+    //
+    // -- i.e. ~28 seconds of paid model work discarded at the last step. There is
+    // no graceful degradation available: `agents/synthesize.py` treats a missing
+    // adjudication as a contract failure, correctly, because the 21-key
+    // adjudication IS the product.
+    //
+    // TWO ACTIONS, NOT ONE, AND THEY TAKE DIFFERENT RESOURCES. This was found by
+    // granting one and re-invoking; the 401 simply names the next missing action,
+    // so the first fix looked complete and was not:
+    //
+    //   1. `bedrock-mantle:CreateInference` on the per-account *project* resource,
+    //      `arn:aws:bedrock-mantle:<region>:<account>:project/default`. Note it is
+    //      a project ARN, not a model ARN -- a `foundation-model/openai.gpt-5.6-*`
+    //      resource does not authorize this call.
+    //   2. `bedrock-mantle:CallWithBearerToken` on `*`. The service reports the
+    //      resource as `*` in its own denial message, which is what the bearer
+    //      token minted by `aws_bedrock_token_generator.provide_token` is checked
+    //      against. It is not scopeable to the project.
+    //
+    // REGION. Not this stack's region. `agents/mantle.py` deliberately excludes
+    // AWS_REGION from its region resolution and routes to the measured-fastest
+    // region for the model -- us-east-1 for Luna (4.61s p50 against us-west-2's
+    // 5.02s). A stack-region-only grant would therefore still 401 from a us-west-2
+    // stack. Hence the region wildcard, with the account still pinned.
+    //
+    // Attaching this via CDK rather than `aws iam put-role-policy` is the point:
+    // an out-of-band inline policy is CloudFormation drift that no `agentcore
+    // deploy` reproduces, so the customer's own deployment would fail the same way
+    // ours did.
+    for (const env of this.application.environments.values()) {
+      env.runtime.role.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          sid: 'BedrockMantleCreateInferenceForGpt56Synthesizer',
+          actions: ['bedrock-mantle:CreateInference'],
+          resources: [`arn:${this.partition}:bedrock-mantle:*:${this.account}:project/*`],
+        })
+      );
+      env.runtime.role.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          sid: 'BedrockMantleBearerTokenForGpt56Synthesizer',
+          actions: ['bedrock-mantle:CallWithBearerToken'],
+          resources: ['*'],
+        })
+      );
+    }
+
     // Create AgentCoreMcp if there are gateways configured
     if (mcpSpec?.agentCoreGateways && mcpSpec.agentCoreGateways.length > 0) {
       new AgentCoreMcp(this, 'Mcp', {

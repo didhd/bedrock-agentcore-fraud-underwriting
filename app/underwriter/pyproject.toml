@@ -49,16 +49,21 @@ dependencies = [
     # Pinned, not floored: main.py depends on _takes_context() matching the
     # second parameter literally by the name `context`, and on an async-generator
     # entrypoint being auto-converted to text/event-stream.
-    "bedrock-agentcore==1.14.0",
+    "bedrock-agentcore==1.19.0",
     # [crt] for faster checksums on the Bedrock request path.
     "botocore[crt]>=1.43.54",
     "boto3>=1.43.54",
-    # Pinned in lockstep with the repo requirements.txt: 1.26.0 is the version
-    # every API decision here was verified against (BedrockModel's flat
-    # **model_config, `structured_output_model=` on Agent(...), the
-    # threading.Lock in stream_async that raises ConcurrencyException on a
-    # concurrently reused Agent).
-    "strands-agents==1.26.0",
+    # Pinned in lockstep with the repo requirements.txt, and the `[openai]` extra
+    # is load-bearing rather than optional. The synthesizer defaults to
+    # `openai.gpt-5.6-luna` (agents.models.DEFAULT_SYNTHESIZER_MODEL), which
+    # agents/mantle.py reaches through
+    # `strands.models.openai_responses.OpenAIResponsesModel(bedrock_mantle_config=...)`.
+    # That module is ABSENT from strands 1.26.x, and the extra is what pulls the
+    # two distributions it imports: `openai>=1.68` for the Responses client and
+    # `aws-bedrock-token-generator>=1.1` to mint the per-request bearer token
+    # mantle authenticates with. Without the extra the deployed runtime imports
+    # fine and then fails at synthesis -- the one call it cannot degrade around.
+    "strands-agents[openai]==1.50.2",
     # agents/contracts.py validates the 21-key adjudication with pydantic v2.
     "pydantic>=2.13",
 ]

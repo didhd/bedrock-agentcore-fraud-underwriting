@@ -79,6 +79,15 @@ pydantic>=2.13
 # every gpt-5.6 id (measured; see agents/mantle.py).
 openai>=2.49.0
 
+# Mints the short-term bearer token bedrock-mantle authenticates with. Listed
+# explicitly even though `strands-agents[openai]` would pull it, because this file
+# pins strands WITHOUT the extra and agents/mantle.py imports
+# `aws_bedrock_token_generator.provide_token` directly on its fallback path. It was
+# absent here while being present in the local environment -- so every local run
+# worked and the dependency closure was still incomplete, which is exactly how it
+# reached a deployed runtime that could not synthesize.
+aws-bedrock-token-generator>=1.1.0,<2.0.0
+
 # ---- Test / CI -------------------------------------------------------------
 # deploy/ci.sh gates on pytest. Floor only; test-time dependency.
 pytest>=8

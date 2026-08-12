@@ -62,6 +62,13 @@ docs/*_agent_prompt.txt
 docs/*_orchestration*.rtf
 docs/Agent_Underwriting_Process_Guide*.pdf
 prompts/verbatim/
+# An archive of that directory is the same confidential material with one layer of
+# compression over it, and the trailing-slash rule above does not match a sibling
+# file. `prompts/verbatim.zip` was sitting untracked and stageable; a `git add -A`
+# would have committed the customer's nine prompts verbatim.
+prompts/verbatim.zip
+prompts/verbatim*.zip
+prompts/verbatim*.tar.gz
 
 # ---------------------------------------------------------------------------
 # Vendored shared packages produced by deploy/vendor.sh (copies of repo-root

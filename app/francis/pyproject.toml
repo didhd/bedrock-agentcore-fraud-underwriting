@@ -41,13 +41,17 @@ dependencies = [
     # literally by the name `context`, on async-generator entrypoints becoming
     # text/event-stream, and on bedrock_agentcore.memory.integrations.strands
     # exposing AgentCoreMemorySessionManager + AgentCoreMemoryConfig(batch_size=).
-    "bedrock-agentcore==1.14.0",
+    "bedrock-agentcore==1.19.0",
     "botocore[crt]>=1.43.54",
     "boto3>=1.43.54",
     # Pinned: the ToolCapHook depends on BeforeToolCallEvent exposing a writable
     # `cancel_tool`, and on ConcurrentToolExecutor being the default tool executor
-    # (which is what makes a legitimate 2-tool turn parallel).
-    "strands-agents==1.26.0",
+    # (which is what makes a legitimate 2-tool turn parallel). The `[openai]`
+    # extra is required for the same reason as in app/underwriter/pyproject.toml:
+    # her specialist tools resolve models through agents/models.py, so any tool
+    # routed to a GPT-5.6 id needs OpenAIResponsesModel plus its openai /
+    # aws-bedrock-token-generator dependencies present in the image.
+    "strands-agents[openai]==1.50.2",
     "pydantic>=2.13",
 ]
 
