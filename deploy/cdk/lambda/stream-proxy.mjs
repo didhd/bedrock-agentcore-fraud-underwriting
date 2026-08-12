@@ -121,6 +121,7 @@ function translate(frame) {
             'AgentCore Runtime (bedrock-agentcore:InvokeAgentRuntime) -> ' +
             'agents.fanout.fan_out_streaming + agents.synthesize.synthesize',
           synthesizer_model: BOOTSTRAP.synthesizer_model,
+          synthesizer_config: BOOTSTRAP.synthesizer_config ?? null,
           agents: (frame.domains ?? []).map((domain) => {
             const spec = specOf(domain);
             return {
@@ -130,6 +131,10 @@ function translate(frame) {
               tier: spec.tier ?? null,
               rate: spec.rate ?? null,
               analysis_title: spec.analysis_title ?? null,
+              // Request-time config for the card tooltip. Comes from bootstrap.json
+              // because the runtime does not send it and reconstructing it in
+              // JavaScript would be a second source of truth for "is thinking on".
+              config: spec.config ?? null,
             };
           }),
         },
@@ -177,7 +182,11 @@ function translate(frame) {
           event: 'agent_failed',
           domain: frame.domain,
           agent_name: frame.agent_name,
-          error: frame.error,
+          // The runtime names this `failure`, not `error`, and the UI depends on that:
+          // any frame with an `error` key aborts the whole run, whereas one specialist
+          // dropping out must leave 7-of-8 degradation intact. Reading `error` here
+          // rendered every failed specialist as the literal string "undefined".
+          failure: frame.failure ?? frame.error ?? 'no reason reported',
         },
       ];
 

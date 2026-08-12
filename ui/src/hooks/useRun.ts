@@ -88,6 +88,7 @@ function blankCard(domain: Domain, agentName: string): AgentCard {
     measured: false,
     source: null,
     error: null,
+    config: null,
   }
 }
 
@@ -183,11 +184,19 @@ function reducer(state: RunState, action: Action): RunState {
 }
 
 function applyFrame(state: RunState, frame: StreamFrame): RunState {
-  // Checked first and unconditionally: an error can ride on any frame, and a
-  // terminal error frame arrives after HTTP 200 has already been committed.
-  const error = frameError(frame)
-  if (error) {
-    return { ...state, status: "error", errors: [...state.errors, error] }
+  // Checked first, because an error can ride on any frame and a terminal error frame
+  // arrives after HTTP 200 has already been committed.
+  //
+  // EXCEPT on agent_failed, which is the one non-terminal failure in the protocol.
+  // Without this exemption a single specialist dropping out aborts the entire run and
+  // no adjudication is ever shown -- the opposite of the 7-of-8 degradation the
+  // pipeline is built for. ui/server.py used to emit `error` on that frame, which
+  // tripped exactly this guard.
+  if (frame.event !== "agent_failed") {
+    const error = frameError(frame)
+    if (error) {
+      return { ...state, status: "error", errors: [...state.errors, error] }
+    }
   }
 
   switch (frame.event) {
@@ -211,6 +220,7 @@ function applyFrame(state: RunState, frame: StreamFrame): RunState {
               tier: a.tier,
               rate: a.rate,
               analysis_title: a.analysis_title,
+              config: a.config ?? null,
               state: "pending" as const,
             },
           ]),
@@ -238,13 +248,19 @@ function applyFrame(state: RunState, frame: StreamFrame): RunState {
         ...state,
         // An agent failing is surfaced on its card AND in the error list; it is
         // never absorbed into a green run.
-        errors: [...state.errors, `${frame.agent_name}: ${frame.error}`],
+        // `failure` first: that is what the runtime emits. Falling back to `error`
+        // keeps older streams readable, and the literal string keeps a missing field
+        // from rendering as "undefined" in front of a customer.
+        errors: [
+          ...state.errors,
+          `${frame.agent_name}: ${frame.failure ?? frame.error ?? "no reason reported"}`,
+        ],
         cards: {
           ...state.cards,
           [frame.domain]: {
             ...state.cards[frame.domain],
             state: "failed",
-            error: frame.error,
+            error: frame.failure ?? frame.error ?? "no reason reported",
           },
         },
       }
@@ -299,6 +315,7 @@ function mergeCompleted(state: RunState, frame: AgentCompleted): AgentCard {
     measured: frame.measured,
     source: frame.source,
     error: null,
+    config: null,
   }
 }
 

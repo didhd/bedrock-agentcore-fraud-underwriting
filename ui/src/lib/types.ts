@@ -128,7 +128,9 @@ export interface RunStarted {
     tier: string | null
     rate: Rate | null
     analysis_title: string | null
+    config?: AgentRuntimeConfig | null
   }[]
+  synthesizer_config?: AgentRuntimeConfig | null
 }
 
 export interface AgentStarted {
@@ -164,7 +166,16 @@ export interface AgentFailed {
   event: "agent_failed"
   domain: Domain
   agent_name: string
-  error: string
+  /**
+   * `failure`, NOT `error`, and the distinction is load-bearing. Any frame carrying
+   * `error` aborts the whole run (see `frameError` in lib/sse.ts) because a terminal
+   * mid-stream exception arrives behind an already-committed HTTP 200. One specialist
+   * dropping out is survivable -- seven of eight still adjudicates -- so it must not
+   * look terminal. The runtime emits `failure` for exactly this reason.
+   */
+  failure: string
+  /** Older streams used `error` here. Read as a fallback, never emitted. */
+  error?: string
 }
 
 export interface SynthesisStarted {
@@ -233,6 +244,54 @@ export type StreamFrame =
 /** Per-agent state held by the reducer while a run is in flight. */
 export type AgentState = "idle" | "pending" | "running" | "done" | "failed"
 
+/**
+ * One agent's request-time configuration, as reported by `agents/agent_config.py`.
+ *
+ * Read from the modules that actually build the agent, never restated, so this cannot
+ * drift from what runs. Note what is deliberately ABSENT: the prompt TEXT. It is
+ * customer-confidential and this object reaches a browser on a public URL, so only its
+ * provenance and size travel.
+ */
+export interface AgentReasoning {
+  enabled: boolean
+  effort: string | null
+  transport: string
+  request_field: string
+  why: string
+}
+
+export interface AgentPromptInfo {
+  source: string
+  chars: number
+  estimated_tokens: number
+  estimated: boolean
+  sha256_verified: boolean
+  orchestration_notes_chars: number | null
+  verbatim: string
+}
+
+export interface AgentPromptCache {
+  model_id?: string
+  prompt_tokens?: number
+  prompt_tokens_estimated?: boolean
+  min_cacheable_tokens?: number
+  will_cache?: boolean
+  reason?: string
+}
+
+export interface AgentRuntimeConfig {
+  role: string
+  agent_name: string
+  model_id: string
+  tier: string
+  max_output_tokens: number
+  reasoning: AgentReasoning
+  prompt: AgentPromptInfo
+  instance_lifetime: string
+  conversation_manager: string
+  prompt_cache?: AgentPromptCache | null
+}
+
 export interface AgentCard {
   domain: Domain
   agent_name: string
@@ -256,4 +315,6 @@ export interface AgentCard {
   measured: boolean
   source: string | null
   error: string | null
+  /** Request-time config for the hover tooltip. Null when the reporter was unavailable. */
+  config: AgentRuntimeConfig | null
 }

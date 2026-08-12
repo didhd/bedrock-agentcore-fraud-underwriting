@@ -3,15 +3,55 @@
     "default": {
       "resources": {
         "runtimes": {
-          "francis": {
-            "runtimeId": "ppFraud_francis-PejCjZ75UF",
-            "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:269550163595:runtime/ppFraud_francis-PejCjZ75UF",
-            "roleArn": "arn:aws:iam::269550163595:role/AgentCore-ppFraud-default-ApplicationAgentFrancisRu-tE4kVZ8OPnQL"
+          "rings": {
+            "runtimeId": "ppFraud_rings-CFLDtb5cVd",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:269550163595:runtime/ppFraud_rings-CFLDtb5cVd",
+            "roleArn": "arn:aws:iam::269550163595:role/AgentCore-ppFraud-default-ApplicationAgentRingsRunt-EcQWmlsj2oW3"
+          },
+          "identity": {
+            "runtimeId": "ppFraud_identity-EendS4GAfE",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:269550163595:runtime/ppFraud_identity-EendS4GAfE",
+            "roleArn": "arn:aws:iam::269550163595:role/AgentCore-ppFraud-default-ApplicationAgentIdentityR-go7xm71Xo8ps"
+          },
+          "employment": {
+            "runtimeId": "ppFraud_employment-oN9LZlCulU",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:269550163595:runtime/ppFraud_employment-oN9LZlCulU",
+            "roleArn": "arn:aws:iam::269550163595:role/AgentCore-ppFraud-default-ApplicationAgentEmploymen-oEXLgKv2TcsA"
+          },
+          "bustout": {
+            "runtimeId": "ppFraud_bustout-DS70ipF31p",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:269550163595:runtime/ppFraud_bustout-DS70ipF31p",
+            "roleArn": "arn:aws:iam::269550163595:role/AgentCore-ppFraud-default-ApplicationAgentBustoutRu-SzxQt0wyDm1y"
           },
           "underwriter": {
             "runtimeId": "ppFraud_underwriter-CYDR91C95Y",
             "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:269550163595:runtime/ppFraud_underwriter-CYDR91C95Y",
             "roleArn": "arn:aws:iam::269550163595:role/AgentCore-ppFraud-default-ApplicationAgentUnderwrit-uyHy7oyyIXqm"
+          },
+          "straw": {
+            "runtimeId": "ppFraud_straw-JkMRYU7ff9",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:269550163595:runtime/ppFraud_straw-JkMRYU7ff9",
+            "roleArn": "arn:aws:iam::269550163595:role/AgentCore-ppFraud-default-ApplicationAgentStrawRunt-3ud0Zz4ICxcz"
+          },
+          "synthetic": {
+            "runtimeId": "ppFraud_synthetic-kspU2j5We7",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:269550163595:runtime/ppFraud_synthetic-kspU2j5We7",
+            "roleArn": "arn:aws:iam::269550163595:role/AgentCore-ppFraud-default-ApplicationAgentSynthetic-5Zh0u2ARZTQQ"
+          },
+          "francis": {
+            "runtimeId": "ppFraud_francis-PejCjZ75UF",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:269550163595:runtime/ppFraud_francis-PejCjZ75UF",
+            "roleArn": "arn:aws:iam::269550163595:role/AgentCore-ppFraud-default-ApplicationAgentFrancisRu-tE4kVZ8OPnQL"
+          },
+          "dealer": {
+            "runtimeId": "ppFraud_dealer-a6tjN6GA0C",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:269550163595:runtime/ppFraud_dealer-a6tjN6GA0C",
+            "roleArn": "arn:aws:iam::269550163595:role/AgentCore-ppFraud-default-ApplicationAgentDealerRun-DMXazGk1Clx1"
+          },
+          "income": {
+            "runtimeId": "ppFraud_income-x0IoTzFYMA",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:269550163595:runtime/ppFraud_income-x0IoTzFYMA",
+            "roleArn": "arn:aws:iam::269550163595:role/AgentCore-ppFraud-default-ApplicationAgentIncomeRun-O9K93p8voUCg"
           }
         },
         "memories": {
@@ -21,7 +61,7 @@
           }
         },
         "stackName": "AgentCore-ppFraud-default",
-        "deployHash": "d34389065c6e4efd"
+        "deployHash": "cd223594aafd4c67"
       }
     }
   }

@@ -466,6 +466,21 @@ def _application_field(record: dict[str, Any], *names: str) -> Any:
     return None
 
 
+def _agent_config_of(role: str) -> dict[str, Any] | None:
+    """One agent's request-time config, or None if the reporter is unavailable.
+
+    Degrades to None rather than raising: a tooltip is not worth taking the run panel
+    down for, and this module already reports which capabilities are wired via
+    /api/health.
+    """
+    try:
+        from agents.agent_config import agent_config
+
+        return agent_config(role)
+    except Exception:
+        return None
+
+
 @app.get("/api/applications")
 def applications() -> JSONResponse:
     if list_application_ids is None:
@@ -961,7 +976,12 @@ def _normalize_fanout_event(event: Any, t0: float) -> dict[str, Any] | None:
             "event": "agent_failed",
             "domain": domain,
             "agent_name": AGENT_NAMES.get(domain, domain),
-            "error": str(event.get("error") or event.get("message") or "unknown error"),
+            # `failure`, not `error`. The UI treats an `error` key on ANY frame as
+            # terminal and aborts the run, so emitting it here made one specialist
+            # dropping out kill the whole adjudication -- the opposite of the 7-of-8
+            # degradation this pipeline is built for. app/underwriter/main.py already
+            # used `failure` for this reason; this is the local server catching up.
+            "failure": str(event.get("error") or event.get("message") or "unknown error"),
         }
 
     model_id = event.get("model") or event.get("model_id") or _model_of(domain)
@@ -1387,6 +1407,7 @@ async def stream(
                     else "server-local mock fallback (agents.fanout/synthesize unavailable)"
                 ),
                 "synthesizer_model": SYNTHESIZER_MODEL,
+                "synthesizer_config": _agent_config_of("synthesizer"),
                 "agents": [
                     {
                         "domain": d,
@@ -1395,6 +1416,11 @@ async def stream(
                         "tier": _tier_of(_model_of(d)),
                         "rate": _rate_for(_model_of(d)),
                         "analysis_title": ANALYSIS_TITLES[d],
+                        # The exact request-time configuration, read from the modules
+                        # that build the agent rather than restated here. "Is thinking
+                        # on?" was previously answerable only by constructing a model
+                        # object and inspecting additional_request_fields.
+                        "config": _agent_config_of(d),
                     }
                     for d in DOMAINS
                 ],
