@@ -29,10 +29,16 @@ without a ``context`` parameter. Each of those is a distinct defect.
 WHY THE COMMANDS IN THE OLD DOCSTRING WERE WRONG
 
 It documented ``agentcore configure --entrypoint ...`` and ``agentcore launch``.
-Neither subcommand exists in the real CLI (npm ``@aws/agentcore``): both print
-help and exit 0, which looks like success. They came from the deprecated
-``bedrock-agentcore-starter-toolkit``, whose console script is also named
-``agentcore`` and shadows the real one. The real commands are:
+Neither subcommand exists in the real CLI (npm ``@aws/agentcore``), which prints
+``error: unknown command 'configure'`` and **exits 1** -- the safe failure.
+
+An earlier version of this docstring said the npm CLI prints help and exits 0.
+That was the DEPRECATED ``bedrock-agentcore-starter-toolkit``'s behaviour
+attributed to the wrong program. Its console script is also named ``agentcore``
+and shadows the real one, and on that binary the subcommands parse and then do
+approximately nothing -- so whichever resolves first on ``PATH`` decides whether
+a script fails loudly or deploys nothing while reporting success. The real
+commands are:
 
     agentcore create / add / validate / package / deploy / dev / invoke
     agentcore logs / traces / status / run

@@ -418,10 +418,20 @@ count — offline runs cannot — and is not a guess.
 Verified against **@aws/agentcore 1.0.0-preview.22**.
 
 Two commands that older AgentCore write-ups still teach **do not exist** in this
-CLI — `agentcore configure` and `agentcore launch` both print help and exit 0,
-so a script built on them fails silently rather than loudly. The real verbs are
-`create`, `add`, `validate`, `deploy`, `dev`, `invoke`, `run`, `logs`, `traces`
-and `status`.
+CLI — `agentcore configure` and `agentcore launch`. The npm CLI *rejects* both:
+it prints `error: unknown command 'configure'` and **exits 1**, which is the safe
+failure and stops a `set -e` script.
+
+The silent failure comes from somewhere else, and the distinction matters because
+it decides where to look. The deprecated pip `bedrock-agentcore-starter-toolkit`
+installs a console script **also named `agentcore`**, and on that binary those
+subcommands parse and then do approximately nothing. So whichever resolves first
+on `PATH` decides whether a script fails loudly or deploys nothing while
+reporting success. `deploy/ci.sh` step 0 fails if the pip toolkit is installed at
+all, for exactly this reason.
+
+The real verbs are `create`, `add`, `validate`, `deploy`, `dev`, `invoke`, `run`,
+`logs`, `traces` and `status`.
 
 ### Register the evaluators
 

@@ -381,8 +381,14 @@ Landed and verified by execution:
 
 **Cleanup of superseded code**
 - [ ] Remove `SIM_LATENCY_SCALE` from `app.py` (3 occurrences).
-- [ ] Fix the stale `agentcore configure/launch` references that `ci.sh`
-      flags: `README.md:129`, `agentcore_runtime.py:6-7`.
+- [x] ~~Fix the stale `agentcore configure/launch` references~~ — done. Two files
+      attributed the DEPRECATED pip toolkit's exit-0 no-op to the npm CLI, which
+      actually prints `error: unknown command` and **exits 1**:
+      `evals/README.md` and `agentcore_runtime.py`. Both corrected, plus the same
+      misattribution in a `tests/test_bench.py` comment. `deploy/deploy.md` was already
+      right — `ci.sh` flags it only because it greps for the string, which appears
+      inside a correct console example showing the failure. That is a false positive in
+      `ci.sh`, not a defect in the doc.
 - [ ] `tools/cortex_analyst_mcp.py:184` still calls the fictional
       `cortex_analyst_query`. The replacement design now exists and is deployed
       (`deploy/cdk/lambda-rds/main.py` + `deploy/connect-rds.sh`), so this is a
@@ -400,8 +406,14 @@ Landed and verified by execution:
       that file is defence in depth; the grant is the actual boundary.
 
 **Then**
-- [ ] Raise `max_tokens` per tier — currently 1536/2048, while the customer's
-      contract allows 4000-character POSSIBLE/HIGH narratives.
+- [x] ~~Raise `max_tokens` per tier~~ — DONE and the TODO was stale. Caps are
+      **3072 (dealer, straw) / 4096 (everything else)**, not 1536/2048. Measured with
+      30 live calls in us-east-1 (`evals/results/tail_analysis.json` →
+      `live_cap_sweep`): `max_tokens` failed on all three criteria as a brevity
+      instrument — it does not lower latency (5 faster, 5 slower, mean −0.23s), it
+      truncates NON-monotonically (both agents truncated *and* completed at 1536 and
+      2048 depending on the draw, so the boundary is a probability), and it moves fraud
+      bands. Read the comment at `agents/models.py:913` before touching these.
 - [ ] Move the cache point to `system prompt + stable payload prefix` so caching
       actually engages, then re-measure and only then quote a caching benefit.
 - [ ] Run `evals/bench.py --live` end-to-end for a real per-application **p50/p95**.
