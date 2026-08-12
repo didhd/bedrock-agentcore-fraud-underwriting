@@ -178,6 +178,73 @@ export class AgentCoreStack extends Stack {
       );
     }
 
+    // ---------------------------------------------------------------------
+    // Distributed fan-out wiring: the orchestrator has to be able to FIND and
+    // INVOKE its eight specialist runtimes.
+    //
+    // WHY CDK DOES THIS AND NOT agentcore.json. The eight ARNs do not exist until
+    // the stack is deployed, and they are all created by this same stack, so there
+    // is no point at which a human could put them in a config file. CDK resolves
+    // them as CloudFormation references, which also means a renamed or replaced
+    // runtime updates the orchestrator's environment automatically instead of
+    // leaving a stale ARN that fails at request time.
+    //
+    // WHY THE IAM GRANT IS EXPLICIT. The AgentCore CDK's own note says in-project
+    // access is implicit and all-to-all, and `connections` only ADDS grants for
+    // resources OUTSIDE the project. That is a statement about the construct's
+    // intent, not something to rely on for the one call the whole batch path now
+    // depends on -- so the orchestrator is granted InvokeAgentRuntime explicitly,
+    // scoped to exactly these eight ARNs and their endpoints. If the implicit
+    // grant already covers it this is redundant and harmless; if it does not, the
+    // alternative is discovering that with eight simultaneous AccessDeniedExceptions
+    // in front of the customer.
+    //
+    // Nothing here forces the distributed topology on. `FANOUT_MODE` defaults to
+    // `inprocess`, so these variables sit unused until someone opts in.
+    const SPECIALIST_DOMAINS = [
+      'identity',
+      'dealer',
+      'straw',
+      'employment',
+      'income',
+      'synthetic',
+      'bustout',
+      'rings',
+    ];
+
+    const orchestrator = this.application.environments.get('underwriter');
+    if (orchestrator) {
+      const specialistArns: string[] = [];
+      for (const domain of SPECIALIST_DOMAINS) {
+        const specialist = this.application.environments.get(domain);
+        if (!specialist) {
+          // A project that declares only some specialists is legitimate mid-migration.
+          // app/distributed_fanout.py reports an unreachable domain as a failed
+          // specialist, so 7-of-8 degradation covers it rather than the deploy failing.
+          continue;
+        }
+        const arn = specialist.runtime.runtimeArn;
+        specialistArns.push(arn);
+        // app/distributed_fanout.py reads exactly this name.
+        orchestrator.runtime.addEnvironmentVariable(
+          `SPECIALIST_ARN_${domain.toUpperCase()}`,
+          arn
+        );
+      }
+
+      if (specialistArns.length > 0) {
+        orchestrator.runtime.role.addToPrincipalPolicy(
+          new iam.PolicyStatement({
+            sid: 'InvokeOwnSpecialistRuntimes',
+            actions: ['bedrock-agentcore:InvokeAgentRuntime'],
+            // Both the runtime ARN and its `/*` children: an endpoint qualifier is
+            // addressed as a sub-resource, and `DEFAULT` is one.
+            resources: specialistArns.flatMap((arn) => [arn, `${arn}/*`]),
+          })
+        );
+      }
+    }
+
     // Create AgentCoreMcp if there are gateways configured
     if (mcpSpec?.agentCoreGateways && mcpSpec.agentCoreGateways.length > 0) {
       new AgentCoreMcp(this, 'Mcp', {

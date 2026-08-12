@@ -104,3 +104,9 @@ site/out/
 
 # The CloudFront variant of the demo UI (ui/src/lib/deployment.ts).
 ui/dist-edge/
+app/specialist/prompts/
+app/specialist/signal_layer/
+app/specialist/agents/
+app/specialist/fixtures/
+app/specialist/data/
+app/specialist/app/
