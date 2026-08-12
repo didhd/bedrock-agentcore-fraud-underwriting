@@ -117,6 +117,60 @@ A `CHECK` constraint would encode one and reject the other. So both enum columns
 If the table already exists, `ensure_output_table()` leaves it alone
 (`create table if not exists`); it must not alter a schema someone else owns.
 
+## The verified queries are Snowflake dialect, and 7 of 10 do not run on PostgreSQL
+
+Measured, not predicted. `deploy/provision-semantic-schema.py` created all 24 of their tables
+in our Aurora cluster from the semantic model — every column, every type, empty — and then all
+ten use cases were executed against it. **3 ran, 7 failed**, and none of the failures was a
+missing table.
+
+| Use case | Runs on PostgreSQL | Blocker |
+|---|---|---|
+| `borrower_application_history` | yes | — |
+| `lender_directory` | yes | — |
+| `portfolio_default_rate` | yes | — |
+| `lender_application_volume` | no | `DATEADD` |
+| `submitted_today` | no | 3-part names |
+| `phone_fraud_tag_reuse` | no | 3-part names, `DATEADD` |
+| `identity_theft_reapplication` | no | 3-part names, `REGEXP_SUBSTR` |
+| `coborrower_removal` | no | 3-part names, `DATEADD`, `GROUP BY ALL` |
+| `score_bin_performance` | no | 3-part names, `IFF`, `QUALIFY` |
+| `missed_fraud_patterns` | no | `DATEADD`, `DATE_PART(year, …)`, `REGEXP_SUBSTR` |
+
+The full construct inventory across the 17 queries:
+
+| Construct | Occurrences | Use cases | PostgreSQL equivalent |
+|---|---|---|---|
+| `db.schema.table` (3-part) | 24 | 5 | **none** — see below |
+| `DATEADD(unit, n, d)` | 6 | 4 | `d + n * interval '1 unit'` |
+| `REGEXP_SUBSTR(s, p)` | 6 | 2 | `substring(s from p)` |
+| `IFF(c, a, b)` | 6 | 1 | `case when c then a else b end` |
+| `QUALIFY` | 2 | 1 | wrap in a subquery and filter in `where` |
+| `GROUP BY ALL` | 1 | 1 | enumerate the grouping columns |
+| `DATE_PART(year, d)` | 1 | 1 | `date_part('year', d)` — quote the field |
+
+`SPLIT_PART` appears once and is fine: PostgreSQL has it with the same signature.
+
+**The three-part names are the one that cannot be fixed by us.** PostgreSQL accepts
+`a.b.c` only when `a` is the current database, so a cross-database reference is a syntax that
+does not exist there. No amount of schema or view creation resolves it. The eight distinct
+references are listed by `provision-semantic-schema.py`.
+
+**What this means for the plan.** The signal path is unaffected — it reads precomputed signals
+and is verified end to end against Aurora. The *analyst tool* is where this lands, and there are
+three honest options:
+
+1. **Point `run_use_case` at Snowflake**, where these queries already work, and keep Aurora for
+   the signal path. Two sources, each doing what it is good at, and nothing gets rewritten.
+2. **Ask the customer to port the queries.** The list above is bounded and mechanical apart from
+   the table names, which are theirs to decide.
+3. **Ship only the three that run.** Honest, and less than they already have.
+
+We are not choosing. Rewriting SQL their engineer verified would silently change what a
+"verified" query means, and the table names are a data-architecture decision. This is the
+question to put in front of them, and it is a better question than the one we were going to
+ask, because it comes with the measurement.
+
 ## Failing loud
 
 `SIGNAL_MODE=aurora` with a missing or unusable connection **raises**. It does not fall back

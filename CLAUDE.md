@@ -172,6 +172,22 @@ says `MEDIUM RISK`/3 values and the PDF says `POSSIBLE RISK`/4; the eight `*_fla
 are `integer` because the contract says `Literal[0, 1]` (a substring test on the annotation
 repr got this wrong and produced `text` for all eight).
 
+### The customer's verified queries are Snowflake dialect: 7 of 10 do not run on PostgreSQL
+Measured, not predicted. `deploy/provision-semantic-schema.py` created all 24 of their tables in
+our Aurora cluster from the semantic model (2409 columns, 0 unmapped types, empty) and all ten
+use cases were then executed. **3 ran, 7 failed, and no failure was a missing table.**
+
+`db.schema.table` (24 occurrences, 5 use cases) is the one that cannot be fixed on our side —
+PostgreSQL accepts a three-part name only when the first part is the current database. The rest
+are mechanical: `DATEADD` ×6, `REGEXP_SUBSTR` ×6, `IFF` ×6, `QUALIFY` ×2, `GROUP BY ALL`,
+`DATE_PART(year, …)` with an unquoted field. `SPLIT_PART` is fine.
+
+The signal path is unaffected and is verified end to end against Aurora. This lands on the
+ANALYST TOOL, and the options are: point `run_use_case` at Snowflake where the queries already
+work, have the customer port them, or ship only the three that run. **Do not rewrite them** —
+that changes what "verified" means, and the table names are their data-architecture decision.
+Full table in `docs/rds-connection.md`.
+
 ### A green `--probe` does not prove the AGENT can read the database
 `./deploy/connect-rds.sh --probe` reported `ok: true` through all four stages — config,
 connect, signal table (840 rows), write — and the very next real invocation returned
