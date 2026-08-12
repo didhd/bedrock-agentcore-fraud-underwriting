@@ -1360,6 +1360,142 @@ def _mock_adjudication(per_agent: dict[str, dict[str, Any]]) -> dict[str, Any]:
     return adjudication
 
 
+# ---------------------------------------------------------------------------
+# Chat and agent inspection (ui/chat.py owns the behaviour)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/agents")
+def agents() -> JSONResponse:
+    """The nine seats, each agent's full configuration, and the data seam.
+
+    `include_prompt` defaults to the LOCAL answer -- true -- because this server runs on
+    the operator's own machine against their own `docs/`. The CloudFront build passes
+    `include_prompt=0`: that deployment is a public, unauthenticated URL and the prompts
+    are customer-confidential, so there the panel shows provenance and size only.
+    """
+    from ui.chat import agent_roster, signal_mode
+
+    include_prompt = _query_flag("include_prompt", default=True)
+
+    out = []
+    for entry in agent_roster():
+        role = "synthesizer" if entry["id"] == "francis" else entry["id"]
+        config = _agent_config_of(role)
+        item = {**entry, "config": config}
+        if include_prompt:
+            item["prompt_text"] = _prompt_text_of(entry["id"])
+        item["tools"] = _tools_of(entry["id"])
+        out.append(item)
+
+    return JSONResponse(
+        {
+            "agents": out,
+            "prompt_text_included": include_prompt,
+            "signal_source": signal_mode(),
+        }
+    )
+
+
+@app.get("/api/datasource/probe")
+def datasource_probe(mode: str = Query("fixtures")) -> JSONResponse:
+    """MOCKED. Reports what a connection WOULD need; never opens one."""
+    from ui.chat import probe_datasource
+
+    return JSONResponse(probe_datasource(mode))
+
+
+@app.get("/api/chat/{agent_id}")
+async def chat(
+    agent_id: str,
+    message: str = Query(..., min_length=1, max_length=4000),
+    session_id: str | None = Query(None),
+) -> StreamingResponse:
+    """SSE for one chat turn against a DEPLOYED runtime.
+
+    GET rather than POST so the browser can use the same streaming reader the batch tab
+    uses. A frame carrying `error` is terminal.
+    """
+    from ui.chat import chat_stream
+
+    return StreamingResponse(
+        chat_stream(agent_id, message, session_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"},
+    )
+
+
+def _query_flag(name: str, *, default: bool) -> bool:
+    """Read a 0/1 query flag without adding a dependency on request state."""
+    # FastAPI would inject Request; this keeps the signature of the route clean and the
+    # flag is only ever set by the build, never by a user.
+    raw = os.environ.get(f"UI_{name.upper()}")
+    if raw is None:
+        return default
+    return raw not in ("0", "false", "False")
+
+
+def _prompt_text_of(agent_id: str) -> str | None:
+    """The agent's verbatim prompt. Returns None if the loader is unavailable."""
+    try:
+        from prompts.loader import (
+            FRANCIS_ORCHESTRATION_PROMPT,
+            MASTER_SYNTHESIS_PROMPT,
+            SPECIALIST_PROMPTS,
+        )
+
+        if agent_id == "francis":
+            # Francis is the orchestration half of the master prompt plus the synthesis
+            # instructions; both come from the same customer file.
+            return f"{FRANCIS_ORCHESTRATION_PROMPT}\n\n{MASTER_SYNTHESIS_PROMPT}"
+        return SPECIALIST_PROMPTS.get(agent_id)
+    except Exception:
+        return None
+
+
+def _tools_of(agent_id: str) -> dict[str, Any]:
+    """What tools this agent has, and for the specialists why the answer is none.
+
+    "Agents interpret; they never query" is a load-bearing property of this port, not an
+    omission -- it is what keeps text-to-SQL latency out of the per-application path and
+    what stops an agent widening its own signal scope. So the empty list is reported with
+    its reason rather than as an empty list.
+    """
+    if agent_id == "francis":
+        try:
+            from prompts.loader import AGENT_NAMES, DOMAINS
+
+            return {
+                "count": len(DOMAINS),
+                "max_per_query": 2,
+                "why_capped": (
+                    "Her own prompt caps a turn at two specialists. The default "
+                    "ConcurrentToolExecutor runs a legitimate two-tool turn in parallel, "
+                    "so the cap is a latency win rather than a cost."
+                ),
+                "tools": [
+                    {
+                        "name": f"call_{d}_agent",
+                        "calls": AGENT_NAMES[d],
+                        "signature": "(question: str, application_id: str = '')",
+                    }
+                    for d in DOMAINS
+                ],
+            }
+        except Exception:
+            return {"count": None, "tools": []}
+
+    return {
+        "count": 0,
+        "tools": [],
+        "why_none": (
+            "Agents interpret; they never query. Each specialist receives only its own "
+            "domain's projected signals and has no data tool, so it cannot widen its own "
+            "scope and cannot put a text-to-SQL round trip in the per-application path."
+        ),
+    }
+
+
 @app.get("/api/stream/{application_id}")
 async def stream(
     application_id: str,

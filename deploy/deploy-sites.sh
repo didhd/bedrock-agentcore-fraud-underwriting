@@ -82,7 +82,24 @@ print(arn, parts[4], parts[3])
 PYEOF
 )"
 
+# Every seat, for the chat tab. Same source as the orchestrator's ARN -- the CLI's own
+# deployed state -- so nothing is typed by hand and a seat that is not deployed is simply
+# absent rather than wrong.
+CHAT_ARNS="$("$PY" - "$STATE" <<'PYEOF'
+import json, re, sys
+text = open(sys.argv[1]).read()
+pattern = re.compile(r"arn:aws[a-z-]*:bedrock-agentcore:[^:\"]+:\d+:runtime/[A-Za-z0-9_.-]+")
+out = {}
+for arn in sorted(set(pattern.findall(text))):
+    tail = arn.rsplit("/", 1)[-1]
+    short = tail.split("-", 1)[0]
+    out[short.split("_", 1)[-1] if "_" in short else short] = arn
+print(json.dumps(out))
+PYEOF
+)"
+
 echo "runtime : $RUNTIME_ARN"
+echo "seats   : $("$PY" -c "import json,sys; print(', '.join(sorted(json.loads(sys.argv[1]))))" "$CHAT_ARNS")"
 echo "account : $ACCOUNT"
 echo "region  : $REGION"
 echo
@@ -129,6 +146,7 @@ npx cdk deploy \
   -c "account=$ACCOUNT" \
   -c "runtimeArn=$RUNTIME_ARN" \
   -c "runtimeRegion=$REGION" \
+  -c "chatRuntimeArns=$CHAT_ARNS" \
   --require-approval never \
   --outputs-file "$REPO_ROOT/$BUILD_DIR/outputs.json" \
   "$@"
