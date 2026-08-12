@@ -434,6 +434,38 @@ def health() -> JSONResponse:
     )
 
 
+def _application_field(record: dict[str, Any], *names: str) -> Any:
+    """First present value for ``names``, searched across all three record shapes.
+
+    THE BUG THIS FIXES. A fixture record is nested --
+    ``{application_id, application: {...}, signals: {...}, context, alerts_fired}`` --
+    and the loan amount, vehicle and fraud score live in the ``application`` block.
+    This lookup previously tried ``record`` then ``signals`` and never
+    ``record["application"]``, which is the shape written for the legacy flat
+    ``data/applications.py`` dataset and never updated when ``fixtures/`` landed.
+
+    The result was silent rather than broken: three of the application table's
+    columns -- Loan, Vehicle and Fraud score -- rendered an em dash for all 14
+    fixtures. An em dash is this UI's honest marker for "not measured", so the table
+    looked correct and merely sparse, when the values were in the record the whole
+    time (APP-1001: $24,500, a 2021 Honda Civic, fraud score 142).
+
+    Order matters: ``application`` first, because a signal named the same thing is a
+    derived quantity and the application block is the source record.
+    """
+    blocks = (
+        record.get("application") if isinstance(record.get("application"), dict) else {},
+        record,
+        _record_signals(record),
+    )
+    for block in blocks:
+        for name in names:
+            value = block.get(name)
+            if value is not None:
+                return value
+    return None
+
+
 @app.get("/api/applications")
 def applications() -> JSONResponse:
     if list_application_ids is None:
@@ -443,7 +475,7 @@ def applications() -> JSONResponse:
         record = get_application(app_id) or {}
         signals = _record_signals(record)
         scenario = _scenario_label(app_id, record)
-        fraud_score = record.get("fraud_score", signals.get("fraud_score"))
+        fraud_score = _application_field(record, "fraud_score")
         dealer_score = signals.get(
             "dealer_consortium_score", record.get("dealer_consortium_score")
         )
@@ -458,8 +490,12 @@ def applications() -> JSONResponse:
                 "application_id": record.get("application_id", app_id),
                 "scenario": scenario,
                 "anti_false_positive": _is_anti_false_positive(record, scenario),
-                "loan_amount": record.get("loan_amount", signals.get("loan_amount")),
-                "vehicle": record.get("vehicle", signals.get("vehicle")),
+                "loan_amount": _application_field(record, "loan_amount"),
+                "vehicle": _application_field(record, "vehicle"),
+                # Shown together in the table's Loan column: an amount without an LTV
+                # is hard to read as risk, and both are in the record already.
+                "ltv_pct": _application_field(record, "ltv_pct"),
+                "credit_score": _application_field(record, "credit_score"),
                 "fraud_score": fraud_score,
                 "fraud_score_band": _fraud_band(fraud_score),
                 "dealer_consortium_score": dealer_score,
@@ -725,14 +761,40 @@ def _tier_of(model_id: str | None) -> str | None:
 
 
 def _parse_band(text: Any) -> str | None:
-    """Find the customer's risk band in a specialist's prose. HIGH before POSSIBLE."""
+    """Find the customer's risk band in a specialist's prose.
+
+    Delegates to ``app.runtime_support.parse_risk_band`` so there is ONE parser. There
+    were two, and they disagreed in a way that mattered:
+
+      * this one scanned in SEVERITY order -- HIGH, then POSSIBLE, then LOW -- so the
+        first severity present won regardless of where it appeared;
+      * the runtime's takes the FIRST band named in the text.
+
+    Severity order is the dangerous one for this customer. Their calibration is
+    explicitly anti-false-positive: a specialist is expected to name the escalation it
+    considered and then argue it away -- "the overlap could indicate HIGH RISK, but
+    context resolves every identifier to one household, so LOW RISK". Severity order
+    reports that analysis as HIGH, i.e. it inverts the exact judgement the prompt asks
+    for. Measured live outputs state the verdict in the opening lines, so first-named is
+    both safer and closer to the declared band.
+
+    The shared parser also accepts the labelled form (``**Risk Level: HIGH**``) that
+    live specialists produce, which this one returned None for.
+    """
     if not isinstance(text, str):
         return None
-    upper = text.upper()
-    for band in ("HIGH RISK", "POSSIBLE RISK", "LOW RISK"):
-        if band in upper:
-            return band
-    return None
+    try:
+        from app.runtime_support import parse_risk_band  # noqa: PLC0415
+
+        return parse_risk_band(text)
+    except Exception:
+        # The demo server runs against checkouts mid-migration; a missing shared module
+        # must not take the whole panel down.
+        upper = text.upper()
+        for band in ("HIGH RISK", "POSSIBLE RISK", "LOW RISK"):
+            if band in upper:
+                return band
+        return None
 
 
 def _sentence_count(text: str) -> int:

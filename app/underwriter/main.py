@@ -125,6 +125,7 @@ from app.runtime_support import (  # noqa: E402
     model_latency_ms_of,
     order_adjudication,
     parse_risk_band,
+    risk_band_form,
     session_id_of,
     tier_of,
     usage_frame_fields,
@@ -233,6 +234,11 @@ def _normalize_agent_event(event: dict[str, Any], started: float) -> tuple[str, 
         "analysis": analysis,
         "analysis_title": event.get("analysis_title", ANALYSIS_TITLES.get(str(domain))),
         "risk_band": parse_risk_band(analysis),
+        # "contract" | "labelled" | None. Emitted so a specialist that returned a
+        # correct verdict in the wrong SHAPE ("**Risk Level: HIGH**" rather than the
+        # contract's "HIGH RISK") is visible as a fidelity deviation instead of being
+        # smoothed over by the parser that accepts it.
+        "risk_band_form": risk_band_form(analysis),
         "char_count": len(analysis),
         "model": model_id,
         "tier": event.get("tier") or tier_of(model_id),

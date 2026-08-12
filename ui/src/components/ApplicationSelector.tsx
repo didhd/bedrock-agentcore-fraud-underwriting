@@ -152,6 +152,15 @@ export function ApplicationSelector({
                       </TableCell>
                       <TableCell className="text-right font-mono tabular-nums">
                         {money0(application.loan_amount)}
+                        {/* LTV beside the amount: $58,900 says little on its own,
+                            $58,900 at 112% LTV is the risk. Rendered only when the
+                            record carries it, so a dataset without LTV shows the
+                            amount alone rather than a fabricated 0%. */}
+                        {application.ltv_pct !== null ? (
+                          <span className="block text-[0.6875rem] text-muted-foreground tabular-nums">
+                            {application.ltv_pct}% LTV
+                          </span>
+                        ) : null}
                       </TableCell>
                       <TableCell className="text-sm whitespace-nowrap">
                         {dash(application.vehicle)}
