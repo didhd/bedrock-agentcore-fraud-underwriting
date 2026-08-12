@@ -114,6 +114,7 @@ def main() -> int:
     # layer to drift, and no chance of the deployed selector disagreeing with the
     # local one about which fixtures exist.
     from fixtures.loader import list_application_ids
+    from ui.server import agents as agents_route
     from ui.server import applications as applications_route
     from ui.server import health as health_route
     from ui.server import payload as payload_route
@@ -136,6 +137,22 @@ def main() -> int:
     # deploy/cdk/lib/sites-stack.ts.
     bake(out / "api" / "health", health_route())
     bake(out / "api" / "applications", applications_route())
+
+    # /api/agents WITHOUT prompt text. UI_INCLUDE_PROMPT=0 is set for this call only:
+    # the object is uploaded to a public, unauthenticated CloudFront URL, and the nine
+    # prompts are customer-confidential. The local server defaults to including them
+    # because it runs on the operator's own machine against their own docs/.
+    import os as _os
+
+    _prior = _os.environ.get("UI_INCLUDE_PROMPT")
+    _os.environ["UI_INCLUDE_PROMPT"] = "0"
+    try:
+        bake(out / "api" / "agents", agents_route())
+    finally:
+        if _prior is None:
+            _os.environ.pop("UI_INCLUDE_PROMPT", None)
+        else:
+            _os.environ["UI_INCLUDE_PROMPT"] = _prior
 
     ids = list(list_application_ids())
     for app_id in ids:

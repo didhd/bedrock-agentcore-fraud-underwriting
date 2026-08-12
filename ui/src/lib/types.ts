@@ -318,3 +318,58 @@ export interface AgentCard {
   /** Request-time config for the hover tooltip. Null when the reporter was unavailable. */
   config: AgentRuntimeConfig | null
 }
+
+
+// ---------------------------------------------------------------------------
+// Chat seats and agent inspection (/api/agents)
+// ---------------------------------------------------------------------------
+
+export interface AgentToolInfo {
+  count: number | null
+  max_per_query?: number
+  why_capped?: string
+  why_none?: string
+  tools: { name: string; calls?: string; signature?: string }[]
+}
+
+export interface AgentSeat {
+  id: string
+  kind: "orchestrator" | "specialist"
+  agent_name: string
+  label: string
+  description: string
+  /** Deployed runtime ARN, or null when that runtime does not exist yet. */
+  runtime: string | null
+  /** Francis holds session context; a specialist analyses one domain of one application. */
+  conversational: boolean
+  config: AgentRuntimeConfig | null
+  tools: AgentToolInfo | null
+  /**
+   * The verbatim customer prompt. Present ONLY when the server chose to include it --
+   * the local build does, the public CloudFront build does not, because these files are
+   * customer-confidential. The decision is the server's, not the client's.
+   */
+  prompt_text?: string | null
+}
+
+export interface SignalSourceMode {
+  id: string
+  label: string
+  detail: string
+  available: boolean
+  requires?: string[]
+}
+
+export interface SignalSourceInfo {
+  mocked: boolean
+  active: string
+  swap_point: string
+  note: string
+  modes: SignalSourceMode[]
+}
+
+export interface AgentsResponse {
+  agents: AgentSeat[]
+  prompt_text_included: boolean
+  signal_source: SignalSourceInfo
+}

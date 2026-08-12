@@ -41,6 +41,28 @@ function builtDir(relative: string, howToBuild: string): string {
 }
 
 const runtimeArn = required('runtimeArn');
+
+/**
+ * Every seat's runtime ARN, as `CHAT_ARN_<NAME>` environment variables for the proxy
+ * Lambda. Passed as one JSON context value by deploy/deploy-sites.sh, which reads them
+ * from the AgentCore deployment -- the same reason the orchestrator's ARN is not typed by
+ * hand. Absent seats simply do not appear, and the chat tab reports them unavailable.
+ */
+const chatRuntimeArns: Record<string, string> = (() => {
+  const raw = app.node.tryGetContext('chatRuntimeArns');
+  if (!raw) return {};
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, string>).map(([name, arn]) => [
+        `CHAT_ARN_${name.toUpperCase()}`,
+        arn,
+      ])
+    );
+  } catch {
+    throw new Error(`context 'chatRuntimeArns' is not valid JSON: ${String(raw).slice(0, 120)}`);
+  }
+})();
 const runtimeRegion = app.node.tryGetContext('runtimeRegion') ?? runtimeArn.split(':')[3];
 
 new SitesStack(app, app.node.tryGetContext('stackName') ?? 'PpFraudSites', {
@@ -63,6 +85,7 @@ new SitesStack(app, app.node.tryGetContext('stackName') ?? 'PpFraudSites', {
     'python3 deploy/cdk/scripts/build-static-api.py --out deploy/cdk/.build'
   ),
   bootstrapFile: path.join(REPO_ROOT, 'deploy/cdk/.build/bootstrap.json'),
+  chatRuntimeArns,
   description:
     'Two CloudFront endpoints for the Point Predictive engagement: the docs site ' +
     'and the live fraud-underwriting demo. The AgentCore runtimes are NOT owned ' +

@@ -63,6 +63,12 @@ export interface SitesStackProps extends StackProps {
   readonly apiDir: string;
   /** File holding the generated per-model facts (`deploy/cdk/.build/bootstrap.json`). */
   readonly bootstrapFile: string;
+  /**
+   * `{ CHAT_ARN_FRANCIS: arn, CHAT_ARN_IDENTITY: arn, ... }` for the chat tab. Empty when
+   * only the orchestrator is deployed, in which case the chat seats report themselves
+   * unavailable rather than answering from somewhere else.
+   */
+  readonly chatRuntimeArns?: Record<string, string>;
 }
 
 export class SitesStack extends Stack {
@@ -212,6 +218,9 @@ function handler(event) {
         RUNTIME_ARN: props.runtimeArn,
         RUNTIME_REGION: props.runtimeRegion,
         RUNTIME_QUALIFIER: props.runtimeQualifier ?? 'DEFAULT',
+        // Chat needs every seat, not just the orchestrator's batch path. Written below
+        // once the sibling runtimes are known.
+        ...(props.chatRuntimeArns ?? {}),
       },
     });
 
@@ -219,10 +228,14 @@ function handler(event) {
     // no keys, nothing to rotate. Scoped to the one runtime this stack fronts rather
     // than `runtime/*`: the account holds 39 other runtimes and none of them should
     // be reachable from a public URL.
+    // Every runtime this proxy is allowed to reach: the batch orchestrator plus each
+    // chat seat. Enumerated rather than wildcarded, because the account holds 39 other
+    // runtimes and none of them should be reachable from a public URL.
+    const reachable = [props.runtimeArn, ...Object.values(props.chatRuntimeArns ?? {})];
     streamProxy.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['bedrock-agentcore:InvokeAgentRuntime'],
-        resources: [props.runtimeArn, `${props.runtimeArn}/*`],
+        resources: [...new Set(reachable.flatMap((arn) => [arn, `${arn}/*`]))],
       })
     );
 
@@ -258,10 +271,30 @@ function handler(event) {
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
         },
+        // The nine seats and their configuration. Baked WITHOUT prompt text -- this is a
+        // public, unauthenticated URL and the prompts are customer-confidential; see
+        // build-static-api.py.
+        '/api/agents': {
+          origin: origins.S3BucketOrigin.withOriginAccessControl(demoBucket),
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+        },
         '/api/payload/*': {
           origin: origins.S3BucketOrigin.withOriginAccessControl(demoBucket),
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        },
+        // Chat with one agent. Same Lambda, same reason it exists: a browser cannot
+        // sign SigV4 to bedrock-agentcore, and CloudFront's OAC cannot sign for it either.
+        '/api/chat/*': {
+          origin: origins.FunctionUrlOrigin.withOriginAccessControl(streamUrl, {
+            readTimeout: Duration.seconds(60),
+            keepaliveTimeout: Duration.seconds(60),
+          }),
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
         },
         // The live run. OAC signs SigV4 to the function URL so the URL itself stays
         // IAM-authenticated and is not independently callable.

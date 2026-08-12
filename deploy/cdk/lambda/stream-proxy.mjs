@@ -262,6 +262,169 @@ function translate(frame) {
 // Handler
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Chat: one turn against one seat
+// ---------------------------------------------------------------------------
+
+/**
+ * The seat's runtime ARN, from `CHAT_ARN_<NAME>` written by CDK.
+ *
+ * Returns null for a seat that is not deployed, and the caller reports that instead of
+ * answering from somewhere else. A chat reply that cannot be traced to a runtime would
+ * make the panel unfalsifiable, which is the opposite of what this demo is for.
+ */
+function chatArn(agentId) {
+  return process.env[`CHAT_ARN_${agentId.toUpperCase()}`] || null;
+}
+
+/**
+ * Francis streams SSE; a specialist returns one JSON object. The distinction is the
+ * customer's own design -- a specialist's prompt makes it analyse one domain of one
+ * application, it is not a conversational agent -- so this reads both shapes rather than
+ * forcing one.
+ */
+async function handleChat(event, responseStream, write) {
+  const match = (event.rawPath ?? '').match(/\/api\/chat\/([^/?]+)/);
+  if (!match) {
+    write({ event: 'error', error: 'no agent id in path' });
+    return;
+  }
+  const agentId = decodeURIComponent(match[1]).toLowerCase();
+  if (!/^[a-z]{3,20}$/.test(agentId)) {
+    write({ event: 'error', error: `not a valid agent id: ${agentId}` });
+    return;
+  }
+
+  const params = new URLSearchParams(event.rawQueryString || '');
+  const message = (params.get('message') || '').slice(0, 4000);
+  if (!message.trim()) {
+    write({ event: 'error', error: 'empty message' });
+    return;
+  }
+
+  const arn = chatArn(agentId);
+  if (!arn) {
+    write({
+      event: 'error',
+      error:
+        `the ${agentId} runtime is not deployed, so there is nothing to chat with. ` +
+        'Deploy the specialist runtimes and redeploy the sites stack.',
+    });
+    return;
+  }
+
+  const conversational = agentId === 'francis';
+  const sessionId = params.get('session_id') || crypto.randomUUID();
+
+  write({
+    event: 'chat_started',
+    agent: agentId,
+    agent_name: (BOOTSTRAP.agents.find((a) => a.domain === agentId) || {}).agent_name || agentId,
+    kind: conversational ? 'orchestrator' : 'specialist',
+    runtime: arn.split('/').pop(),
+    session_id: sessionId,
+  });
+
+  const started = Date.now();
+  let response;
+  try {
+    response = await client.send(
+      new InvokeAgentRuntimeCommand({
+        agentRuntimeArn: arn,
+        qualifier: QUALIFIER,
+        runtimeSessionId: sessionId,
+        contentType: 'application/json',
+        accept: conversational ? 'text/event-stream' : 'application/json',
+        payload: new TextEncoder().encode(JSON.stringify({ prompt: message })),
+      })
+    );
+  } catch (error) {
+    write({ event: 'error', error: `${error.name}: ${error.message}` });
+    return;
+  }
+
+  const decoder = new TextDecoder();
+  let text = '';
+  for await (const chunk of response.response) text += decoder.decode(chunk, { stream: true });
+
+  if (conversational) {
+    // Re-emit Francis's own frames under the chat vocabulary.
+    let answer = '';
+    const tools = [];
+    let usage = {};
+    for (const line of text.split('\n')) {
+      if (!line.startsWith('data: ')) continue;
+      let frame;
+      try {
+        frame = JSON.parse(line.slice(6));
+      } catch {
+        continue;
+      }
+      if (frame.event === 'delta') {
+        const piece = frame.text ?? frame.delta ?? '';
+        if (piece) {
+          answer += piece;
+          write({ event: 'delta', text: piece });
+        }
+      } else if (frame.event === 'tool_start' || frame.event === 'tool_done') {
+        if (frame.event === 'tool_start' && (frame.tool || frame.name)) {
+          tools.push(frame.tool || frame.name);
+        }
+        write({ event: 'tool', phase: frame.event, tool: frame.tool ?? frame.name ?? null });
+      } else if (frame.event === 'error') {
+        write({ event: 'error', error: frame.error });
+        return;
+      } else if (frame.event === 'done') {
+        usage = frame;
+        if (!answer && (frame.answer || frame.text)) answer = frame.answer || frame.text;
+      }
+    }
+    write({
+      event: 'chat_completed',
+      answer,
+      tools,
+      latency_ms: Date.now() - started,
+      model: nullable(usage.model),
+      tier: nullable(usage.tier),
+      input_tokens: nullable(usage.input_tokens),
+      output_tokens: nullable(usage.output_tokens),
+      cost_usd: nullable(usage.cost_usd),
+    });
+    return;
+  }
+
+  let result;
+  try {
+    result = JSON.parse(text.trim());
+    if (typeof result === 'string') result = JSON.parse(result);
+  } catch {
+    write({ event: 'error', error: `specialist returned non-JSON: ${text.slice(0, 300)}` });
+    return;
+  }
+  if (!result.ok) {
+    write({ event: 'error', error: String(result.error ?? 'specialist failed') });
+    return;
+  }
+  write({ event: 'delta', text: result.analysis ?? '' });
+  write({
+    event: 'chat_completed',
+    answer: result.analysis ?? '',
+    tools: [],
+    application_id: nullable(result.application_id),
+    risk_band: nullable(result.risk_band),
+    analysis_title: nullable(result.analysis_title),
+    model: nullable(result.model),
+    tier: nullable(result.tier),
+    input_tokens: nullable(result.input_tokens),
+    output_tokens: nullable(result.output_tokens),
+    cache_read_tokens: nullable(result.cache_read_tokens),
+    cache_write_tokens: nullable(result.cache_write_tokens),
+    cost_usd: nullable(result.cost_usd),
+    latency_ms: Date.now() - started,
+    remote_elapsed_ms: nullable(result.elapsed_ms),
+  });
+}
+
 const APP_ID = /^APP-\d{3,6}$/i;
 
 export const handler = awslambda.streamifyResponse(async (event, responseStream) => {
@@ -281,6 +444,13 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream)
   const write = (obj) => responseStream.write(`data: ${JSON.stringify(obj)}\n\n`);
 
   try {
+    // Two paths reach this Lambda. Chat is handled entirely by handleChat; the rest of
+    // this function is the batch run.
+    if (rawPath.includes('/api/chat/')) {
+      await handleChat(event, responseStream, write);
+      return;
+    }
+
     const match = rawPath.match(/\/api\/stream\/([^/?]+)/);
     if (!match) {
       write({ event: 'error', error: `no application id in path ${JSON.stringify(rawPath)}` });
