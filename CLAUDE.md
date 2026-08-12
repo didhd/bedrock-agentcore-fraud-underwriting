@@ -172,6 +172,21 @@ says `MEDIUM RISK`/3 values and the PDF says `POSSIBLE RISK`/4; the eight `*_fla
 are `integer` because the contract says `Literal[0, 1]` (a substring test on the annotation
 repr got this wrong and produced `text` for all eight).
 
+### A green `--probe` does not prove the AGENT can read the database
+`./deploy/connect-rds.sh --probe` reported `ok: true` through all four stages — config,
+connect, signal table (840 rows), write — and the very next real invocation returned
+`AccessDeniedException ... calling the ExecuteStatement operation`. The probe runs on the
+**operator's** credentials; the runtime runs on its own execution role. Two principals, and
+only one of them was ever tested. A green probe means "the cluster is reachable and the data
+is there", never "the agent may read it".
+
+The CLI-generated execution role does not grant `rds-data:ExecuteStatement`, exactly as it
+does not grant `bedrock-mantle:*`. Both are now in `agentcore/cdk/lib/cdk-stack.ts` — via CDK
+deliberately, because an out-of-band `put-role-policy` is drift the customer's own
+`agentcore deploy` would not reproduce. `ExecuteStatement` only: `persist_adjudication` writes
+one row through the same single-statement API, so a transaction grant would widen what a
+compromised runtime can do for no capability it uses.
+
 ### `deploy/vendor.sh` must resolve LAZY imports, not just `from app.X` in main.py
 `runtime_support.py` imports `signal_layer.sources.aurora` inside the `SIGNAL_MODE` branch.
 A submodule that was never vendored therefore passes CI, passes `agentcore validate`, deploys

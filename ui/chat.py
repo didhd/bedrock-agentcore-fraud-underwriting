@@ -241,7 +241,14 @@ def signal_mode() -> dict[str, Any]:
                     "AURORA_SECRET_ARN (Secrets Manager)",
                     "AURORA_CLUSTER_ARN or host/port",
                     "AURORA_DATABASE",
-                    "VPC networkMode on the runtime, or RDS Data API",
+                    # Was "VPC networkMode on the runtime, or RDS Data API", which
+                    # over-stated it. The runtimes are networkMode PUBLIC and this works: the
+                    # Data API is a public IAM-authenticated endpoint. What DOES have to be
+                    # granted is the runtime role's own permission, which the CLI-generated
+                    # role omits -- and a green `connect-rds.sh --probe` does not prove it,
+                    # because the probe runs on the operator's credentials.
+                    "RDS Data API enabled on the cluster",
+                    "rds-data:ExecuteStatement on the runtime execution role",
                 ],
             },
             {

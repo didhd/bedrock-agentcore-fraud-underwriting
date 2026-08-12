@@ -204,6 +204,21 @@ def build_payload(app_id: str) -> dict[str, Any]:
         raise FixtureError(
             f"no fixture for {app_id!r}; known ids are {list(list_application_ids())}"
         )
+    return payload_from_record(record)
+
+
+def payload_from_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Assemble the payload from an already-loaded record, whatever loaded it.
+
+    Extracted from ``build_payload`` so a NON-fixture source can produce the identical
+    structure instead of inventing one. `signal_layer/sources/aurora.py` constructed a
+    plausible-looking object of its own shape, `SignalPayload` rejected it, and a bare
+    ``except Exception`` turned that into ``None`` -- so every specialist reported
+    "no signals" while the panel said the cluster was connected. One assembler means one
+    definition of the payload, and the registry completeness checks below apply to every
+    source rather than only to fixtures.
+    """
+    app_id = record.get("application_id", "<unknown>")
 
     unknown = [n for n in record["signals"] if n not in SIGNAL_NAMES]
     if unknown:
@@ -255,6 +270,7 @@ def iter_applications() -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "payload_from_record",
     "APPLICATIONS_DIR",
     "FixtureError",
     "build_payload",

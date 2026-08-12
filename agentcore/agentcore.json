@@ -37,6 +37,14 @@
         {
           "name": "AURORA_DATABASE",
           "value": "postgres"
+        },
+        {
+          "name": "SIGNAL_MODE",
+          "value": "aurora"
+        },
+        {
+          "name": "AURORA_SIGNAL_TABLE",
+          "value": "application_signals"
         }
       ],
       "instrumentation": {
@@ -72,6 +80,14 @@
         {
           "name": "AURORA_DATABASE",
           "value": "postgres"
+        },
+        {
+          "name": "SIGNAL_MODE",
+          "value": "aurora"
+        },
+        {
+          "name": "AURORA_SIGNAL_TABLE",
+          "value": "application_signals"
         }
       ],
       "instrumentation": {
@@ -107,6 +123,14 @@
         {
           "name": "AURORA_DATABASE",
           "value": "postgres"
+        },
+        {
+          "name": "SIGNAL_MODE",
+          "value": "aurora"
+        },
+        {
+          "name": "AURORA_SIGNAL_TABLE",
+          "value": "application_signals"
         }
       ],
       "instrumentation": {
@@ -142,6 +166,14 @@
         {
           "name": "AURORA_DATABASE",
           "value": "postgres"
+        },
+        {
+          "name": "SIGNAL_MODE",
+          "value": "aurora"
+        },
+        {
+          "name": "AURORA_SIGNAL_TABLE",
+          "value": "application_signals"
         }
       ],
       "instrumentation": {
@@ -177,6 +209,14 @@
         {
           "name": "AURORA_DATABASE",
           "value": "postgres"
+        },
+        {
+          "name": "SIGNAL_MODE",
+          "value": "aurora"
+        },
+        {
+          "name": "AURORA_SIGNAL_TABLE",
+          "value": "application_signals"
         }
       ],
       "instrumentation": {
@@ -212,6 +252,14 @@
         {
           "name": "AURORA_DATABASE",
           "value": "postgres"
+        },
+        {
+          "name": "SIGNAL_MODE",
+          "value": "aurora"
+        },
+        {
+          "name": "AURORA_SIGNAL_TABLE",
+          "value": "application_signals"
         }
       ],
       "instrumentation": {
@@ -247,6 +295,14 @@
         {
           "name": "AURORA_DATABASE",
           "value": "postgres"
+        },
+        {
+          "name": "SIGNAL_MODE",
+          "value": "aurora"
+        },
+        {
+          "name": "AURORA_SIGNAL_TABLE",
+          "value": "application_signals"
         }
       ],
       "instrumentation": {
@@ -282,6 +338,14 @@
         {
           "name": "AURORA_DATABASE",
           "value": "postgres"
+        },
+        {
+          "name": "SIGNAL_MODE",
+          "value": "aurora"
+        },
+        {
+          "name": "AURORA_SIGNAL_TABLE",
+          "value": "application_signals"
         }
       ],
       "instrumentation": {
@@ -317,6 +381,14 @@
         {
           "name": "AURORA_DATABASE",
           "value": "postgres"
+        },
+        {
+          "name": "SIGNAL_MODE",
+          "value": "aurora"
+        },
+        {
+          "name": "AURORA_SIGNAL_TABLE",
+          "value": "application_signals"
         }
       ],
       "instrumentation": {
@@ -348,6 +420,14 @@
         {
           "name": "AURORA_DATABASE",
           "value": "postgres"
+        },
+        {
+          "name": "SIGNAL_MODE",
+          "value": "aurora"
+        },
+        {
+          "name": "AURORA_SIGNAL_TABLE",
+          "value": "application_signals"
         }
       ],
       "instrumentation": {

@@ -176,6 +176,44 @@ export class AgentCoreStack extends Stack {
           resources: ['*'],
         })
       );
+
+      // SIGNAL_MODE=aurora reads through the RDS Data API from INSIDE the runtime,
+      // so the runtime's own role needs it. The CLI-generated role does not grant
+      // it, and the failure is a request-time
+      //   AccessDeniedException ... calling the ExecuteStatement operation:
+      //   User: arn:aws:sts::<account>:assumed-role/AgentCore... is not authorized
+      // after the runtime has already accepted the invocation.
+      //
+      // WHY THIS WAS NOT CAUGHT BY THE PROBE. `./deploy/connect-rds.sh --probe`
+      // reported ok:true through all four stages -- config, connect, signal table,
+      // write -- because it runs on the OPERATOR's credentials, not the runtime's.
+      // A green probe says the cluster is reachable and the data is there; it says
+      // nothing about whether the agent may read it. Two different principals, and
+      // only one of them was ever tested.
+      //
+      // ExecuteStatement only: no BatchExecuteStatement and no transaction verbs.
+      // `persist_adjudication` writes one row per adjudication through the same
+      // single-statement API, so a transaction grant would widen what a compromised
+      // runtime could do for no capability it uses.
+      env.runtime.role.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          sid: 'RdsDataApiForAuroraSignalMode',
+          actions: ['rds-data:ExecuteStatement'],
+          resources: ['*'],
+        })
+      );
+      // The Data API fetches the credentials itself and needs the caller to be
+      // allowed to read the secret, which is why no password ever reaches the agent.
+      // Scoped to the account rather than one ARN: the cluster is created by a
+      // separate stack (PpFraudData) and its secret name carries a CloudFormation
+      // suffix that is not knowable here.
+      env.runtime.role.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          sid: 'ReadAuroraCredentialSecret',
+          actions: ['secretsmanager:GetSecretValue'],
+          resources: [`arn:${this.partition}:secretsmanager:*:${this.account}:secret:*`],
+        })
+      );
     }
 
     // ---------------------------------------------------------------------

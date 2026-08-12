@@ -61,6 +61,12 @@ DEFAULT_OUTPUT_TABLE: Final[str] = "underwriting_report_output"
 SIGNAL_TABLE_ENV: Final[str] = "AURORA_SIGNAL_TABLE"
 DEFAULT_SIGNAL_TABLE: Final[str] = "application_signals"
 
+#: The non-signal half of a record: the application block, the paired context, the alerts that
+#: fired, and provenance. A payload needs all of it -- signals alone cannot be projected,
+#: because `domain_view` filters alerts by entitlement and reads context per signal.
+RECORD_TABLE_ENV: Final[str] = "AURORA_RECORD_TABLE"
+DEFAULT_RECORD_TABLE: Final[str] = "application_records"
+
 
 class AuroraNotConfigured(RuntimeError):
     """Raised when `SIGNAL_MODE=aurora` but the connection is absent or unusable.
@@ -174,6 +180,38 @@ def _quoted_identifier(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _read_record_meta(application_id: str) -> dict[str, Any]:
+    """The application's non-signal fields, or {} when the table is absent.
+
+    Returns {} rather than raising, and that asymmetry is deliberate: a missing SIGNAL table
+    means there is nothing to analyse and must fail, while a missing RECORD table means the
+    signals are there but their surrounding metadata is not. The second is a legitimate state
+    for a customer who has precomputed signals and not yet exposed the application block, and
+    `payload_from_record` will then reject it with a message naming exactly what is absent --
+    which is more useful than a connection error.
+    """
+    table = _setting(RECORD_TABLE_ENV, DEFAULT_RECORD_TABLE)
+    try:
+        response = _execute(
+            f"select record from {_quoted_identifier(table)} "  # noqa: S608
+            "where application_id = :application_id",
+            [{"name": "application_id", "value": {"stringValue": application_id}}],
+        )
+    except AuroraNotConfigured:
+        return {}
+
+    rows = _rows(response)
+    if not rows:
+        return {}
+    raw = rows[0].get("record")
+    if isinstance(raw, dict):
+        return raw
+    try:
+        return json.loads(raw) if raw else {}
+    except (TypeError, json.JSONDecodeError):
+        return {}
+
+
 def build_aurora_payload(application_id: str) -> tuple[Any, dict[str, Any] | None, str]:
     """One application's precomputed signals. Same shape as every other source.
 
@@ -196,6 +234,10 @@ def build_aurora_payload(application_id: str) -> tuple[Any, dict[str, Any] | Non
     # one row per (application, signal) -- what their architecture document describes -- or
     # one wide row per application. Both are handled, and the chosen reading is reported.
     signals: dict[str, Any] = {}
+    #: `<signal>_context` for every signal, kept SEPARATE from the signals rather than folded
+    #: in beside them. `domain_view` reads the two independently, and the specialists' own
+    #: anti-false-positive rules are exactly the comparison between a signal and its context.
+    context: dict[str, Any] = {}
     shape = "wide"
     if len(rows) > 1 or any(
         k in rows[0] for k in ("signal", "signal_name", "signal_value")
@@ -207,33 +249,52 @@ def build_aurora_payload(application_id: str) -> tuple[Any, dict[str, Any] | Non
             if not name:
                 continue
             signals[str(name)] = lowered.get("signal_value", lowered.get("value"))
-            context = lowered.get("signal_context") or lowered.get("context")
-            if context is not None:
-                signals[f"{name}_context"] = context
+            paired = lowered.get("signal_context") or lowered.get("context")
+            if paired is not None:
+                context[f"{name}_context"] = paired
     else:
         signals = {
             str(k): v for k, v in rows[0].items() if str(k).lower() != "application_id"
         }
 
-    record = {
+    # The non-signal half of the record: the application block, the paired context, the alerts
+    # that fired, and the provenance fields. A payload cannot be built from signals alone --
+    # `domain_view` needs `context[<signal>_context]` for every signal it projects and
+    # `alerts_fired` to filter by entitlement, and the guardrail checks read
+    # `application`. Stored as one JSON document per application because it is one document
+    # in their architecture, and because a column per field would have to be revised every
+    # time the customer adds one.
+    meta = _read_record_meta(application_id)
+
+    record: dict[str, Any] = {
         "application_id": application_id,
+        "record_id": meta.get("record_id") or application_id,
+        "application": meta.get("application") or {},
         "signals": signals,
+        "context": meta.get("context") or context,
+        "alerts_fired": meta.get("alerts_fired") or [],
+        "semantic_layer_rev": meta.get("semantic_layer_rev") or "",
+        "computed_at": meta.get("computed_at") or "",
         "source": "aurora.rds_data_api",
         "table": _setting(SIGNAL_TABLE_ENV, DEFAULT_SIGNAL_TABLE),
         "row_shape": shape,
         "rows_read": len(rows),
     }
 
-    try:
-        from signal_layer.schema import SignalPayload  # noqa: PLC0415
+    # ASSEMBLED BY THE ONE ASSEMBLER, and NOT wrapped in a try/except.
+    #
+    # This function used to construct `SignalPayload(application_id=..., signals=...)` -- a
+    # shape that does not exist; the real one takes record_id / hash_lender_id / application /
+    # views. The constructor raised TypeError, a bare `except Exception` returned None, and the
+    # pipeline then reported "no signals for APP-1004" from all eight specialists while the
+    # config panel said the cluster was connected. The read had worked perfectly.
+    #
+    # So the failure is propagated now. An adjudication is not worth producing from a payload
+    # nobody could build, and a caller that sees the TypeError can fix the shape; a caller that
+    # sees None cannot tell it from an empty database.
+    from fixtures.loader import payload_from_record  # noqa: PLC0415
 
-        return (
-            SignalPayload(application_id=application_id, signals=signals),
-            record,
-            "aurora.rds_data_api",
-        )
-    except Exception:
-        return None, record, "aurora.rds_data_api"
+    return payload_from_record(record), record, "aurora.rds_data_api"
 
 
 # ---------------------------------------------------------------------------

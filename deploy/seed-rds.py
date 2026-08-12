@@ -97,6 +97,21 @@ def main() -> int:
         """  # noqa: S608
     )
 
+    record_table = "application_records"
+    print(f"==> creating {record_table} if absent")
+    # One JSON document per application, not a column per field. It IS one document in their
+    # architecture, and a column-per-field schema would need revising every time the customer
+    # adds one. jsonb rather than text so their own reporting can query into it.
+    _execute(
+        f"""
+        create table if not exists {_quoted_identifier(record_table)} (
+          application_id text primary key,
+          record         jsonb not null,
+          loaded_at      timestamptz not null default now()
+        )
+        """  # noqa: S608
+    )
+
     files = sorted(glob.glob(str(REPO / "fixtures" / "applications" / "*.json")))
     if not files:
         sys.exit("no fixtures found under fixtures/applications/")
@@ -139,7 +154,29 @@ def main() -> int:
                 ],
             )
             total += 1
-        print(f"    {application_id}: {len(signals)} signals")
+        # The non-signal half. Everything `domain_view` and the guardrail checks read, and
+        # nothing else -- notably not `expected`, which is our golden-test data rather than
+        # anything the agents may see.
+        meta = {
+            "application_id": application_id,
+            "record_id": record.get("record_id"),
+            "application": record.get("application") or {},
+            "context": context,
+            "alerts_fired": record.get("alerts_fired") or [],
+            "semantic_layer_rev": record.get("semantic_layer_rev") or "",
+            "computed_at": record.get("computed_at") or "",
+        }
+        _execute(
+            f"""insert into {_quoted_identifier(record_table)} (application_id, record)
+                values (:aid, :rec::jsonb)
+                on conflict (application_id) do update set record = excluded.record,
+                                                           loaded_at = now()""",  # noqa: S608
+            [
+                {"name": "aid", "value": {"stringValue": application_id}},
+                {"name": "rec", "value": {"stringValue": json.dumps(meta)}},
+            ],
+        )
+        print(f"    {application_id}: {len(signals)} signals + record")
 
     print(f"==> {total} rows across {len(files)} applications")
     print(f"\nProbe it:  ./deploy/connect-rds.sh --probe")

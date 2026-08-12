@@ -318,19 +318,32 @@ def build_cortex_payload(application_id: str) -> tuple[Any, dict[str, Any] | Non
     # tolerant about which of several plausible names carries each part rather than assuming
     # one and failing opaquely.
     signals: dict[str, Any] = {}
+    #: Kept separate from the signals: `domain_view` reads the two independently, and the
+    #: anti-false-positive rules ARE the comparison between a signal and its context.
+    context: dict[str, Any] = {}
     for row in rows:
         lowered = {str(k).lower(): v for k, v in row.items()}
         name = lowered.get("signal") or lowered.get("signal_name") or lowered.get("name")
         if not name:
             continue
         signals[str(name)] = lowered.get("value", lowered.get("signal_value"))
-        context = lowered.get("context") or lowered.get("signal_context")
-        if context is not None:
-            signals[f"{name}_context"] = context
+        paired = lowered.get("context") or lowered.get("signal_context")
+        if paired is not None:
+            context[f"{name}_context"] = paired
 
     record = {
         "application_id": application_id,
+        "record_id": application_id,
+        # The semantic view decides its own column names, so these are the fields
+        # `payload_from_record` requires and the projection reads. Empty here rather than
+        # invented: a missing `application` block fails loudly at assembly with the field
+        # named, which is what the first live call needs to tell us.
+        "application": {},
         "signals": signals,
+        "context": context,
+        "alerts_fired": [],
+        "semantic_layer_rev": "",
+        "computed_at": "",
         "source": "snowflake.cortex_analyst",
         "semantic_view": settings["semantic_view"],
         # Kept with the data so an operator can see which SQL produced an adjudication.
@@ -340,11 +353,20 @@ def build_cortex_payload(application_id: str) -> tuple[Any, dict[str, Any] | Non
         "guardrails_enforced_by_the_view": list(EXPECTED_GUARDRAILS),
     }
 
-    try:
-        from signal_layer.schema import SignalPayload  # noqa: PLC0415
+    # ASSEMBLED BY THE ONE ASSEMBLER, and NOT wrapped in a try/except.
+    #
+    # This used to be `SignalPayload(application_id=..., signals=...)` inside a bare
+    # `except Exception: return None`. That shape does not exist -- the real one takes
+    # record_id / hash_lender_id / application / views -- so the constructor raised TypeError
+    # and the except turned it into None. The identical bug in the Aurora source produced
+    # "no signals for APP-1004" from all eight specialists while the config panel reported the
+    # cluster connected, and the read had worked perfectly. Fixed there and here.
+    #
+    # UNTESTED AGAINST A LIVE ACCOUNT, and this is the part most likely to need a shape
+    # adjustment on first contact: `payload_from_record` requires every registry signal, the
+    # paired `<signal>_context` for each, `alerts_fired`, and an `application` block. A
+    # semantic view that returns only signals will raise here naming exactly what is absent,
+    # which is the useful failure -- far better than a None that reads as an empty database.
+    from fixtures.loader import payload_from_record  # noqa: PLC0415
 
-        return SignalPayload(application_id=application_id, signals=signals), record, "snowflake.cortex"
-    except Exception:
-        # The projection layer can build from the raw record; returning None for the typed
-        # payload is what the fixtures path already does when the schema is unavailable.
-        return None, record, "snowflake.cortex"
+    return payload_from_record(record), record, "snowflake.cortex"
