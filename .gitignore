@@ -88,3 +88,16 @@ app/francis/agents/
 app/francis/fixtures/
 app/francis/data/
 app/francis/app/
+
+# ---------------------------------------------------------------------------
+# CloudFront site deployment (deploy/cdk). All build output or generated:
+#   .build/            baked API objects + bootstrap.json + cdk outputs
+#   lambda/bootstrap.json  copied in by deploy-sites.sh from .build
+#   site/out/          Next.js static export
+# The hand-written CDK sources under bin/ lib/ lambda/stream-proxy.mjs ARE tracked.
+deploy/cdk/.build/
+deploy/cdk/cdk.out/
+deploy/cdk/dist/
+deploy/cdk/node_modules/
+deploy/cdk/lambda/bootstrap.json
+site/out/

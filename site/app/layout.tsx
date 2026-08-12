@@ -21,7 +21,16 @@ export default function Layout({ children }: LayoutProps<'/'>) {
   return (
     <html lang="en" className={inter.className} suppressHydrationWarning>
       <body className="flex flex-col min-h-screen">
-        <RootProvider>{children}</RootProvider>
+        {/*
+          `type: 'static'` is the client half of app/api/search/route.ts, which
+          exports Fumadocs' `staticGET` so the search index is a build-time JSON
+          file rather than a server route. Both halves have to agree: leave the
+          default here and the dialog keeps querying the endpoint per keystroke,
+          gets handed the whole index instead of a result list, and reports "no
+          results" for everything -- a search box that fails while looking healthy.
+          This is what lets the site deploy to S3 + CloudFront with no compute.
+        */}
+        <RootProvider search={{ options: { type: 'static' } }}>{children}</RootProvider>
       </body>
     </html>
   );
