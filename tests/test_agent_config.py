@@ -191,3 +191,31 @@ def test_the_edge_bundle_forwards_config_and_never_the_prompt():
         "differs from the local one"
     )
     assert "synthesizer_config" in proxy
+
+
+def test_the_reducer_preserves_config_after_an_agent_completes():
+    """The config arrives ONCE, on run_started. Nothing may reset it later.
+
+    It was reset in `mergeCompleted`, so every tooltip fell back to "Per-agent
+    configuration was not reported by this backend" the moment its agent finished --
+    visible only while the card was still running, which is the least useful window and
+    reads as a backend limitation rather than a bug.
+    """
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parent.parent / "ui" / "src" / "hooks" / "useRun.ts"
+    ).read_text(encoding="utf-8")
+
+    start = source.index("function mergeCompleted")
+    body = source[start : source.index("\n}", start)]
+    assert "config: prior.config" in body, (
+        "mergeCompleted must carry the config forward; no completion frame supplies it"
+    )
+    assert "config: null" not in body, "mergeCompleted must not reset the config"
+
+    # blankCard is the ONE place a null config is correct: a card that exists before
+    # run_started genuinely has no config yet.
+    blank = source[source.index("function blankCard") :]
+    blank = blank[: blank.index("\n}")]
+    assert "config: null" in blank

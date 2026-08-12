@@ -315,7 +315,12 @@ function mergeCompleted(state: RunState, frame: AgentCompleted): AgentCard {
     measured: frame.measured,
     source: frame.source,
     error: null,
-    config: null,
+    // PRESERVED from the prior card, not reset. The config arrives once on
+    // `run_started` and no completion frame carries it, so overwriting it here made
+    // every tooltip read "Per-agent configuration was not reported by this backend"
+    // the moment its agent finished -- i.e. it was only visible while the card was
+    // still running, which is the least useful window.
+    config: prior.config,
   }
 }
 
