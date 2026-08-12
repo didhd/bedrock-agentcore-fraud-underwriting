@@ -289,6 +289,48 @@ function chatArn(agentId) {
  * application, it is not a conversational agent -- so this reads both shapes rather than
  * forcing one.
  */
+/**
+ * Scope AgentCore Memory to one analyst.
+ *
+ * WHY A MIDDLEWARE AND NOT A PARAMETER
+ *
+ * `InvokeAgentRuntimeCommand` has a `runtimeUserId` input and it looks like the right field.
+ * It is not: the service CONSUMES that header itself and it never reaches the entrypoint --
+ * measured, and it is why the AgentCore workshop invents a custom header instead. So the
+ * custom header has to be attached to the raw HTTP request.
+ *
+ * `step: 'build'` runs BEFORE the signing middleware. That ordering is the whole point: a
+ * header added after SigV4 signs makes the signed value differ from the sent value, which is
+ * exactly how the traceparent attempt in app/distributed_fanout.py produced a 403. Signing it
+ * means the header is covered.
+ *
+ * Added to the COMMAND, never to the shared client. The client lives for the container's
+ * lifetime, so a client-level middleware would send the first analyst's identity on every
+ * later request in that container -- one warm Lambda pooling every user into one memory.
+ *
+ * Without this, everything lands on the shared default actor. That is not a silent
+ * degradation: facts one analyst stated come back to the next one, which is how a demo ends up
+ * greeting the wrong person by name.
+ */
+function scopeToAnalyst(command, analystId) {
+  if (!analystId) return command;
+  command.middlewareStack.add(
+    (next) => async (args) => {
+      args.request.headers['X-Amzn-Bedrock-AgentCore-Runtime-Custom-User-Id'] = analystId;
+      return next(args);
+    },
+    { step: 'build', name: 'ppFraudAnalystActorHeader' }
+  );
+  return command;
+}
+
+/** `analyst_id`, normalised to what the runtime accepts (<=120 chars, no whitespace). */
+function analystIdFrom(params) {
+  const raw = (params.get('analyst_id') || '').trim();
+  if (!raw) return null;
+  return raw.replace(/\s+/g, '-').slice(0, 120);
+}
+
 async function handleChat(event, responseStream, write) {
   const match = (event.rawPath ?? '').match(/\/api\/chat\/([^/?]+)/);
   if (!match) {
@@ -304,6 +346,7 @@ async function handleChat(event, responseStream, write) {
   const params = new URLSearchParams(event.rawQueryString || '');
   const message = (params.get('message') || '').slice(0, 4000);
   const applicationId = (params.get('application_id') || '').toUpperCase();
+  const analystId = analystIdFrom(params);
 
   // The two seat kinds send different things, because they TAKE different things: Francis
   // needs a question, a specialist needs an application and accepts no question at all.
@@ -338,26 +381,35 @@ async function handleChat(event, responseStream, write) {
     kind: conversational ? 'orchestrator' : 'specialist',
     runtime: arn.split('/').pop(),
     session_id: sessionId,
+    // Echoed so the UI can show which actor this turn was attributed to. Null here means the
+    // turn went to the shared actor, and the header badge says so rather than implying
+    // per-analyst memory that is not in effect.
+    analyst_id: analystId,
   });
 
   const started = Date.now();
   let response;
   try {
     response = await client.send(
-      new InvokeAgentRuntimeCommand({
-        agentRuntimeArn: arn,
-        qualifier: QUALIFIER,
-        runtimeSessionId: sessionId,
-        contentType: 'application/json',
-        accept: conversational ? 'text/event-stream' : 'application/json',
-        // The id goes at the payload ROOT, where extract_application_id looks first,
-        // rather than being buried in prose for a regex to find.
-        payload: new TextEncoder().encode(
-          JSON.stringify(
-            applicationId ? { application_id: applicationId, ...(message ? { prompt: message } : {}) } : { prompt: message }
-          )
-        ),
-      })
+      scopeToAnalyst(
+        new InvokeAgentRuntimeCommand({
+          agentRuntimeArn: arn,
+          qualifier: QUALIFIER,
+          runtimeSessionId: sessionId,
+          contentType: 'application/json',
+          accept: conversational ? 'text/event-stream' : 'application/json',
+          // The id goes at the payload ROOT, where extract_application_id looks first,
+          // rather than being buried in prose for a regex to find.
+          payload: new TextEncoder().encode(
+            JSON.stringify(
+              applicationId
+                ? { application_id: applicationId, ...(message ? { prompt: message } : {}) }
+                : { prompt: message }
+            )
+          ),
+        }),
+        analystId
+      )
     );
   } catch (error) {
     write({ event: 'error', error: `${error.name}: ${error.message}` });

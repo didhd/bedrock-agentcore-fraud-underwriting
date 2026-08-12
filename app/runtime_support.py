@@ -356,6 +356,18 @@ def build_signal_payload(application_id: str) -> tuple[Any | None, dict[str, Any
     """
     mode = (os.environ.get("SIGNAL_MODE") or "fixtures").strip().lower()
 
+    if mode == "aurora":
+        from signal_layer.sources.aurora import (  # noqa: PLC0415
+            AuroraNotConfigured,
+            build_aurora_payload,
+        )
+
+        try:
+            return build_aurora_payload(application_id)
+        except AuroraNotConfigured:
+            # Same contract as cortex: raise rather than fall back. See the docstring.
+            raise
+
     if mode == "cortex":
         from signal_layer.sources.snowflake import (  # noqa: PLC0415
             SnowflakeNotConfigured,

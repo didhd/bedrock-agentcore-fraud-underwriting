@@ -69,13 +69,16 @@
               "targets": {
                 "AlertDictionary": {
                   "targetId": "HLVJZLRTMO"
+                },
+                "UnderwritingSql": {
+                  "targetId": "XHEX1AHKG3"
                 }
               }
             }
           }
         },
         "stackName": "AgentCore-ppFraud-default",
-        "deployHash": "ff47cb51ea3a34e9"
+        "deployHash": "163e99becbf36734"
       }
     }
   }

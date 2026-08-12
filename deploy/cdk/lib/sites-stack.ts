@@ -39,6 +39,7 @@ import {
   type StackProps,
 } from 'aws-cdk-lib';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
@@ -69,6 +70,32 @@ export interface SitesStackProps extends StackProps {
    * unavailable rather than answering from somewhere else.
    */
   readonly chatRuntimeArns?: Record<string, string>;
+  /**
+   * Put the stream proxy inside the VPC. Supply all three or none.
+   *
+   * WHY THE CALLING LAYER HAS TO BE VPC-CONNECTED ONCE THE RUNTIMES ARE
+   *
+   * `networkMode: VPC` governs where a runtime's own network interfaces live -- its EGRESS.
+   * The way you INVOKE it does not change: `bedrock-agentcore` stays a SigV4 AWS API, so a
+   * caller outside the VPC can still reach it. This is therefore NOT required for invocation
+   * to work.
+   *
+   * It is required for everything else the proxy does. Once the database is private, any path
+   * that touches it -- a signal payload read, a datasource probe -- needs a route into the
+   * subnet, and there is no route from Lambda's default network. So the proxy becomes what the
+   * customer described: a publicly reachable resource that is connected to the VPC. Its
+   * INGRESS is unchanged (a Lambda function URL fronted by CloudFront OAC, which is not
+   * affected by VPC attachment); only its egress moves.
+   *
+   * AND THE TRAP THAT COMES WITH IT: attaching a Lambda to a VPC REMOVES its default internet
+   * access. Without either NAT or a `bedrock-agentcore` interface endpoint in these subnets,
+   * every invocation then hangs to the timeout and reads as a broken runtime. `data-stack.ts`
+   * creates that endpoint, which is why these values come from its outputs rather than being
+   * typed in.
+   */
+  readonly vpcId?: string;
+  readonly subnetIds?: string[];
+  readonly securityGroupIds?: string[];
 }
 
 export class SitesStack extends Stack {
@@ -186,7 +213,36 @@ function handler(event) {
     // segment to be URI-encoded TWICE for non-S3 services, and the runtime ARN is a
     // path segment. See the handler's header comment. Bundling the SDK removes that
     // whole class of bug instead of patching one instance of it.
+    // Resolved before the function so the VPC props can be spread in conditionally: passing
+    // `vpc: undefined` is not the same as omitting it for NodejsFunction's validation.
+    const proxyVpc =
+      props.vpcId && props.subnetIds?.length
+        ? ec2.Vpc.fromVpcAttributes(this, 'ProxyVpc', {
+            vpcId: props.vpcId,
+            // Length must equal the subnet count; see the same note in data-stack.ts.
+            availabilityZones: props.subnetIds.map(
+              (_, index) => this.availabilityZones[index % this.availabilityZones.length]
+            ),
+            privateSubnetIds: props.subnetIds,
+          })
+        : undefined;
+
+    const proxyNetwork = proxyVpc
+      ? {
+          vpc: proxyVpc,
+          vpcSubnets: {
+            subnets: props.subnetIds!.map((id, index) =>
+              ec2.Subnet.fromSubnetId(this, `ProxySubnet${index}`, id)
+            ),
+          },
+          securityGroups: (props.securityGroupIds ?? []).map((id, index) =>
+            ec2.SecurityGroup.fromSecurityGroupId(this, `ProxySg${index}`, id)
+          ),
+        }
+      : {};
+
     const streamProxy = new nodejs.NodejsFunction(this, 'StreamProxy', {
+      ...proxyNetwork,
       description:
         'Streams one AgentCore underwriting run to the browser, translating the ' +
         "runtime's SSE vocabulary into the one ui/src/hooks/useRun.ts consumes",

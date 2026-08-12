@@ -25,6 +25,18 @@
         {
           "name": "FANOUT_MODE",
           "value": "distributed"
+        },
+        {
+          "name": "AURORA_CLUSTER_ARN",
+          "value": "arn:aws:rds:us-west-2:269550163595:cluster:ppfrauddata-clustereb0386a7-rgfx8gqmhj1l"
+        },
+        {
+          "name": "AURORA_SECRET_ARN",
+          "value": "arn:aws:secretsmanager:us-west-2:269550163595:secret:PpFraudDataClusterSecret660-DGmy0PA1s76h-M8KPVS"
+        },
+        {
+          "name": "AURORA_DATABASE",
+          "value": "postgres"
         }
       ],
       "instrumentation": {
@@ -48,6 +60,18 @@
         {
           "name": "SPECIALIST_DOMAIN",
           "value": "identity"
+        },
+        {
+          "name": "AURORA_CLUSTER_ARN",
+          "value": "arn:aws:rds:us-west-2:269550163595:cluster:ppfrauddata-clustereb0386a7-rgfx8gqmhj1l"
+        },
+        {
+          "name": "AURORA_SECRET_ARN",
+          "value": "arn:aws:secretsmanager:us-west-2:269550163595:secret:PpFraudDataClusterSecret660-DGmy0PA1s76h-M8KPVS"
+        },
+        {
+          "name": "AURORA_DATABASE",
+          "value": "postgres"
         }
       ],
       "instrumentation": {
@@ -71,6 +95,18 @@
         {
           "name": "SPECIALIST_DOMAIN",
           "value": "dealer"
+        },
+        {
+          "name": "AURORA_CLUSTER_ARN",
+          "value": "arn:aws:rds:us-west-2:269550163595:cluster:ppfrauddata-clustereb0386a7-rgfx8gqmhj1l"
+        },
+        {
+          "name": "AURORA_SECRET_ARN",
+          "value": "arn:aws:secretsmanager:us-west-2:269550163595:secret:PpFraudDataClusterSecret660-DGmy0PA1s76h-M8KPVS"
+        },
+        {
+          "name": "AURORA_DATABASE",
+          "value": "postgres"
         }
       ],
       "instrumentation": {
@@ -94,6 +130,18 @@
         {
           "name": "SPECIALIST_DOMAIN",
           "value": "straw"
+        },
+        {
+          "name": "AURORA_CLUSTER_ARN",
+          "value": "arn:aws:rds:us-west-2:269550163595:cluster:ppfrauddata-clustereb0386a7-rgfx8gqmhj1l"
+        },
+        {
+          "name": "AURORA_SECRET_ARN",
+          "value": "arn:aws:secretsmanager:us-west-2:269550163595:secret:PpFraudDataClusterSecret660-DGmy0PA1s76h-M8KPVS"
+        },
+        {
+          "name": "AURORA_DATABASE",
+          "value": "postgres"
         }
       ],
       "instrumentation": {
@@ -117,6 +165,18 @@
         {
           "name": "SPECIALIST_DOMAIN",
           "value": "employment"
+        },
+        {
+          "name": "AURORA_CLUSTER_ARN",
+          "value": "arn:aws:rds:us-west-2:269550163595:cluster:ppfrauddata-clustereb0386a7-rgfx8gqmhj1l"
+        },
+        {
+          "name": "AURORA_SECRET_ARN",
+          "value": "arn:aws:secretsmanager:us-west-2:269550163595:secret:PpFraudDataClusterSecret660-DGmy0PA1s76h-M8KPVS"
+        },
+        {
+          "name": "AURORA_DATABASE",
+          "value": "postgres"
         }
       ],
       "instrumentation": {
@@ -140,6 +200,18 @@
         {
           "name": "SPECIALIST_DOMAIN",
           "value": "income"
+        },
+        {
+          "name": "AURORA_CLUSTER_ARN",
+          "value": "arn:aws:rds:us-west-2:269550163595:cluster:ppfrauddata-clustereb0386a7-rgfx8gqmhj1l"
+        },
+        {
+          "name": "AURORA_SECRET_ARN",
+          "value": "arn:aws:secretsmanager:us-west-2:269550163595:secret:PpFraudDataClusterSecret660-DGmy0PA1s76h-M8KPVS"
+        },
+        {
+          "name": "AURORA_DATABASE",
+          "value": "postgres"
         }
       ],
       "instrumentation": {
@@ -163,6 +235,18 @@
         {
           "name": "SPECIALIST_DOMAIN",
           "value": "synthetic"
+        },
+        {
+          "name": "AURORA_CLUSTER_ARN",
+          "value": "arn:aws:rds:us-west-2:269550163595:cluster:ppfrauddata-clustereb0386a7-rgfx8gqmhj1l"
+        },
+        {
+          "name": "AURORA_SECRET_ARN",
+          "value": "arn:aws:secretsmanager:us-west-2:269550163595:secret:PpFraudDataClusterSecret660-DGmy0PA1s76h-M8KPVS"
+        },
+        {
+          "name": "AURORA_DATABASE",
+          "value": "postgres"
         }
       ],
       "instrumentation": {
@@ -186,6 +270,18 @@
         {
           "name": "SPECIALIST_DOMAIN",
           "value": "bustout"
+        },
+        {
+          "name": "AURORA_CLUSTER_ARN",
+          "value": "arn:aws:rds:us-west-2:269550163595:cluster:ppfrauddata-clustereb0386a7-rgfx8gqmhj1l"
+        },
+        {
+          "name": "AURORA_SECRET_ARN",
+          "value": "arn:aws:secretsmanager:us-west-2:269550163595:secret:PpFraudDataClusterSecret660-DGmy0PA1s76h-M8KPVS"
+        },
+        {
+          "name": "AURORA_DATABASE",
+          "value": "postgres"
         }
       ],
       "instrumentation": {
@@ -209,6 +305,18 @@
         {
           "name": "SPECIALIST_DOMAIN",
           "value": "rings"
+        },
+        {
+          "name": "AURORA_CLUSTER_ARN",
+          "value": "arn:aws:rds:us-west-2:269550163595:cluster:ppfrauddata-clustereb0386a7-rgfx8gqmhj1l"
+        },
+        {
+          "name": "AURORA_SECRET_ARN",
+          "value": "arn:aws:secretsmanager:us-west-2:269550163595:secret:PpFraudDataClusterSecret660-DGmy0PA1s76h-M8KPVS"
+        },
+        {
+          "name": "AURORA_DATABASE",
+          "value": "postgres"
         }
       ],
       "instrumentation": {
@@ -228,6 +336,18 @@
         {
           "name": "MOCK_MODE",
           "value": "0"
+        },
+        {
+          "name": "AURORA_CLUSTER_ARN",
+          "value": "arn:aws:rds:us-west-2:269550163595:cluster:ppfrauddata-clustereb0386a7-rgfx8gqmhj1l"
+        },
+        {
+          "name": "AURORA_SECRET_ARN",
+          "value": "arn:aws:secretsmanager:us-west-2:269550163595:secret:PpFraudDataClusterSecret660-DGmy0PA1s76h-M8KPVS"
+        },
+        {
+          "name": "AURORA_DATABASE",
+          "value": "postgres"
         }
       ],
       "instrumentation": {
@@ -280,6 +400,14 @@
           "lambdaFunctionArn": {
             "lambdaArn": "arn:aws:lambda:us-west-2:269550163595:function:PpFraudReferenceTools-AlertDictionary-jnrqpQzEuk0S",
             "toolSchemaFile": "agentcore/tool/alert_dictionary_schema.json"
+          }
+        },
+        {
+          "name": "UnderwritingSql",
+          "targetType": "lambdaFunctionArn",
+          "lambdaFunctionArn": {
+            "lambdaArn": "arn:aws:lambda:us-west-2:269550163595:function:PpFraudRdsTools-UnderwritingSql-28zT4I2S0p25",
+            "toolSchemaFile": "agentcore/tool/underwriting_sql_schema.json"
           }
         }
       ]

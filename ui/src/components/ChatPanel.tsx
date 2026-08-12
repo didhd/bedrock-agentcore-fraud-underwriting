@@ -75,10 +75,27 @@ interface Turn {
 export function ChatPanel({
   seats,
   applications,
+  analystId,
+  onSessionChange,
 }: {
   seats: AgentSeat[];
   /** Fixture ids, for the specialist seats. A specialist needs one; Francis does not. */
   applications: string[];
+  /**
+   * The memory actor. Sent as `analyst_id`, which `ui/chat.py` turns into a signed
+   * `X-Amzn-Bedrock-AgentCore-Runtime-Custom-User-Id` header. Without it every conversation
+   * pooled into the shared default actor and the actor-scoped memory that is deployed on
+   * Francis was unreachable from this page.
+   */
+  analystId: string;
+  /** Lets the header render the live session id; a ref inside this component cannot be. */
+  onSessionChange: (
+    session: {
+      seatId: string;
+      sessionId: string;
+      appliedAnalystId?: string | null;
+    } | null,
+  ) => void;
 }) {
   const [agentId, setAgentId] = React.useState<string>("francis");
   const [input, setInput] = React.useState("");
@@ -143,6 +160,7 @@ export function ChatPanel({
       else params.set("application_id", application);
       const existing = sessions.current[seat.id];
       if (existing) params.set("session_id", existing);
+      if (analystId) params.set("analyst_id", analystId);
 
       const response = await fetch(`/api/chat/${seat.id}?${params}`, {
         headers: { Accept: "text/event-stream" },
@@ -178,6 +196,19 @@ export function ChatPanel({
           switch (frame.event) {
             case "chat_started":
               sessions.current[seat.id] = String(frame.session_id);
+              // Published so the header shows the id the runtime actually assigned, not one
+              // the client guessed. On a first turn the server mints it, so this is the only
+              // place the real value is known.
+              onSessionChange({
+                seatId: seat.id,
+                sessionId: String(frame.session_id),
+                // What the BACKEND says the memory actor is, not what we sent. Null means the
+                // turn was attributed to the shared actor, and the header renders that
+                // difference rather than hiding it.
+                appliedAnalystId: frame.analyst_id
+                  ? String(frame.analyst_id)
+                  : null,
+              });
               break;
             case "delta":
               text += String(frame.text ?? "");
@@ -218,7 +249,16 @@ export function ChatPanel({
     } finally {
       setBusy(false);
     }
-  }, [application, busy, input, seat]);
+  }, [analystId, application, busy, input, onSessionChange, seat]);
+
+  // Each seat keeps its own session, so switching seats must switch what the header shows --
+  // otherwise it would keep displaying the previous seat's id and the operator would copy the
+  // wrong one into `agentcore traces get`.
+  React.useEffect(() => {
+    if (!seat) return;
+    const existing = sessions.current[seat.id];
+    onSessionChange(existing ? { seatId: seat.id, sessionId: existing } : null);
+  }, [onSessionChange, seat]);
 
   return (
     <Card className="flex h-[46rem] flex-col">

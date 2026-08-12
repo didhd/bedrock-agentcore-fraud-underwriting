@@ -29,8 +29,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CostPanel } from "@/components/CostPanel";
 import { FanoutPanel } from "@/components/FanoutPanel";
 import { LatencyChart } from "@/components/LatencyChart";
+import { SessionBar } from "@/components/SessionBar";
 import { SignalLayerPanel } from "@/components/SignalLayerPanel";
 import { useRun, useWallClock } from "@/hooks/useRun";
+import { loadAnalystId, saveAnalystId } from "@/lib/analyst";
 import type { BackendConfig } from "@/lib/sse";
 import type {
   ApplicationSummary,
@@ -47,7 +49,24 @@ async function getJson<T>(url: string): Promise<T> {
   return (await response.json()) as T;
 }
 
-function Header({ health }: { health: Health | null }) {
+/** What the header needs to show about who is asking and in which session. */
+type SessionIdentity = {
+  analystId: string;
+  onAnalystIdChange: (value: string) => void;
+  batchSessionId: string | null;
+  chatSessionId: string | null;
+  chatSeatId: string | null;
+  /** What the BACKEND reported as the memory actor. Null means the shared actor. */
+  appliedAnalystId: string | null;
+};
+
+function Header({
+  health,
+  session,
+}: {
+  health: Health | null;
+  session: SessionIdentity;
+}) {
   return (
     <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-5">
       <div className="flex flex-col gap-1.5">
@@ -63,6 +82,10 @@ function Header({ health }: { health: Health | null }) {
         </p>
       </div>
       <div className="flex items-center gap-2">
+        {/* Session identity sits left of the mode badge because it is the thing people ask
+            about mid-demo ("does it remember me", "which trace was that"), and the footer
+            was where it went unread. */}
+        <SessionBar {...session} />
         {health ? (
           <Badge variant="outline" className="font-mono text-[0.6875rem]">
             {health.mock_mode ? "MOCK_MODE" : "live"}
@@ -211,9 +234,37 @@ function Demo() {
 
   const seats = agents?.agents ?? [];
 
+  // Read once from localStorage rather than on every render: minting happens inside
+  // loadAnalystId, so calling it repeatedly in a hardened profile (where the write throws)
+  // would hand a NEW actor to every render and make memory unreachable.
+  const [analystId, setAnalystId] = React.useState(loadAnalystId);
+  const changeAnalystId = React.useCallback((value: string) => {
+    setAnalystId(value);
+    saveAnalystId(value);
+  }, []);
+
+  // Which chat session is live, lifted out of ChatPanel so the header can show it. It was a
+  // ref in there -- correct for not re-rendering on every frame, but a ref cannot be
+  // rendered, which is why the id was invisible.
+  const [chatSession, setChatSession] = React.useState<{
+    seatId: string;
+    sessionId: string;
+    appliedAnalystId?: string | null;
+  } | null>(null);
+
   return (
     <div className="mx-auto flex max-w-[92rem] flex-col gap-5 px-5 py-6">
-      <Header health={health} />
+      <Header
+        health={health}
+        session={{
+          analystId,
+          onAnalystIdChange: changeAnalystId,
+          batchSessionId: state.sessionId,
+          chatSessionId: chatSession?.sessionId ?? null,
+          chatSeatId: chatSession?.seatId ?? null,
+          appliedAnalystId: chatSession?.appliedAnalystId ?? null,
+        }}
+      />
 
       {/* Three surfaces, and the order is the customer's own: the batch pipeline is the
           product, the seats are how their analysts use it, and the configuration is the
@@ -243,6 +294,8 @@ function Demo() {
             applications={applications.map(
               (application) => application.application_id,
             )}
+            analystId={analystId}
+            onSessionChange={setChatSession}
           />
         </TabsContent>
 

@@ -233,38 +233,219 @@ minimum cacheable prefix. It refuses to print percentiles below a documented
 minimum sample count, and every report carries the git sha, region, model IDs and
 a `caveats` array stating what was not measured.
 
-## Deploy to AgentCore Runtime
+## Deploy: the ordered runbook
 
-**Deploying into your own account: read [`deploy/README.md`](deploy/README.md).** It
-is the end-to-end path, verified by execution, and it covers the two failure modes
-that cost the most time here: `./deploy/vendor.sh` is mandatory before every deploy
-(skip it and a missing module is reported as a 30-second init timeout), and
-`MOCK_MODE` defaults to mock (so a runtime with no env block returns a complete,
-plausible stream having called Bedrock zero times).
+Written to be followed straight through, by a person or by a coding agent, with no
+prior knowledge of this repo. **Do the steps in order.** The order is not stylistic —
+each step produces a value the next one needs, and three of the steps fail *silently*
+if skipped. Every "why" below is a failure that actually happened here, not a
+precaution.
+
+If you only read one thing: **`./deploy/vendor.sh` before every single
+`agentcore deploy`**, and **`MOCK_MODE=0`** must be set or the runtime answers
+convincingly without ever calling Bedrock.
+
+### Step 0 — prerequisites, and the one that silently corrupts a deploy
 
 ```bash
-npm install -g @aws/agentcore          # 1.0.0-preview.22, node >= 20
-(cd agentcore/cdk && npm install)      # required: the vended CDK pins its own tsc
-./deploy/vendor.sh                     # REQUIRED — vendors the shared packages
-agentcore validate --json
+node --version                         # >= 20
+npm install -g @aws/agentcore          # 1.0.0-preview.22
+agentcore --version                    # must print 1.0.0-preview.22
+pip show bedrock-agentcore-starter-toolkit   # MUST be "not found"
+python3 -m pip install -r requirements.txt
+(cd agentcore/cdk && npm install)      # the vended CDK pins its own tsc
+(cd deploy/cdk && npm install)
+aws sts get-caller-identity            # account must match agentcore/aws-targets.json
+```
+
+`agentcore configure` and `agentcore launch` **do not exist**. The npm CLI rejects
+them and exits 1 — the safe failure. The deprecated pip
+`bedrock-agentcore-starter-toolkit` installs a *different* binary also named
+`agentcore` on which those subcommands parse and then **no-op**, so a script calling
+them deploys nothing and reports success. Whichever binary is first on `PATH` decides.
+`./deploy/ci.sh` step 0 fails if the pip toolkit is installed at all — run it if you
+are unsure. The real verbs are `create` / `add` / `validate` / `deploy` / `status`.
+
+Set your target once, in `agentcore/aws-targets.json`. `agentcore deploy` has no
+`--region`, `--profile` or `--account` flag; it reads that file.
+
+### Step 1 — network and database, before any agent exists
+
+```bash
+./deploy/one-shot.sh --plan          # synth only, changes nothing, prints the mode
+./deploy/one-shot.sh                 # deploy (add --yes for non-interactive)
+```
+
+Three modes, selected by what you pass, printed as a `Mode` output so there is no
+guessing:
+
+| You have | Command | Stack creates |
+|---|---|---|
+| nothing | `./deploy/one-shot.sh` | VPC (2 AZs, private-isolated) + Aurora PostgreSQL + interface endpoints |
+| a VPC | `--vpc vpc-x --subnets subnet-a,subnet-b` | Aurora inside your VPC + endpoints |
+| a VPC and a database | `--vpc vpc-x --subnets a,b --db-sg sg-y` | only the security-group rule and the outputs |
+
+Half-supplied arguments are a **hard error naming the missing value**, never a
+defaulted guess: the difference between "create a database" and "use the one you
+already have" is not something to be wrong about.
+
+Two things this step decides that are hard to change later:
+
+- **No NAT Gateway.** Interface VPC endpoints exist for every AWS API this system
+  calls — `bedrock-runtime`, `bedrock-mantle`, `bedrock-agentcore`,
+  `bedrock-agentcore-control`, `bedrock-agentcore.gateway`, `rds-data`,
+  `secretsmanager`, `logs`, `sts`, `ecr.api`, `ecr.dkr`, plus a free S3 gateway
+  endpoint. So nothing in the data path has a route to the internet. Add
+  `--with-nat` only if an agent must reach a third-party API.
+- **The Aurora engine version is a context value, not a constant.** Available
+  versions differ by region and are withdrawn over time. The default is verified for
+  `us-west-2`; elsewhere, check first and pass it:
+  ```bash
+  aws rds describe-db-engine-versions --engine aurora-postgresql --region <r> \
+    --query 'DBEngineVersions[].EngineVersion'
+  ./deploy/one-shot.sh --aurora-version 16.13
+  ```
+  Getting this wrong costs an eleven-minute round trip: CloudFormation builds the
+  whole VPC, then fails on the cluster with `Cannot find version X for
+  aurora-postgresql`, then rolls all of it back.
+
+The script then writes `agentcore/agentcore.json` with `networkMode: VPC`,
+`networkConfig` and the `AURORA_*` variables, and runs `agentcore validate`.
+
+### Step 2 — the reference-data Gateway target, before the agents
+
+```bash
+./deploy/reference-tools.sh
+```
+
+**This must precede step 3.** `agentcore.json` has to contain the Lambda's ARN, and
+the CLI reads that file *before* it synthesises the agent stack — so a function
+created by the agent stack cannot be referenced from the config that creates it.
+
+### Step 3 — the ten runtimes, in the VPC from birth
+
+```bash
+./deploy/vendor.sh                     # REQUIRED. Not optional. See below.
+agentcore validate --json              # must print {"success":true}
 agentcore deploy --dry-run
+agentcore deploy --target default --yes
+agentcore status                       # all ten READY
 ```
 
-Two CloudFront endpoints — the docs site and the live demo — are a second, separate
-stack, deployed with one command:
+Deployed **already in the VPC**, not deployed public and switched afterwards.
+`agentcore deploy` maps resources by CloudFormation logical id, so reconfiguring ten
+live runtimes is a second full deploy plus a class of risk that does not exist if the
+first deploy is correct. Renaming a resource changes its logical id and **destroys and
+recreates** it.
+
+**Why `vendor.sh` is mandatory.** `agentcore package` roots the archive at
+`codeLocation`, so `prompts/`, `signal_layer/`, `agents/` and `fixtures/` are absent
+from the zip and the container dies at import. It surfaces as
+*"Runtime initialization time exceeded... 30s"* — a timeout message for a missing
+module. Read CloudWatch, not the CLI error. `vendor.sh` also resolves every dotted
+import of a shared package anywhere in the vendored tree, because
+`signal_layer.sources.aurora` is imported lazily inside a `SIGNAL_MODE` branch: a
+missing submodule otherwise passes CI, passes `validate`, deploys clean, and raises
+only on the first aurora-mode invocation.
+
+**Two IAM grants that fail at the last step.** The CLI-generated execution role covers
+`bedrock:InvokeModel` on foundation models and inference profiles — the eight Claude
+specialists — and nothing else. The GPT-5.6 synthesizer is a separate IAM namespace
+needing **two** actions with **different** resources:
+`bedrock-mantle:CreateInference` on `arn:aws:bedrock-mantle:*:<account>:project/*`
+and `bedrock-mantle:CallWithBearerToken` on `*`. Granting one only reveals the other,
+so the first fix looks complete and is not. Both are in
+`agentcore/cdk/lib/cdk-stack.ts`; run `npm run build` in `agentcore/cdk` after editing,
+because `agentcore deploy` compiles from `dist/`.
+
+### Step 4 — confirm it is really running, not mocking
 
 ```bash
-PYTHON=$(which python3) ./deploy/deploy-sites.sh
+./deploy/verify.py                     # 17 checks
+./deploy/verify-tracing.py             # reads the agents' `spans` log streams
 ```
 
-`agentcore configure` and `agentcore launch` do **not** exist in the current CLI.
-The npm CLI rejects them and exits 1, but the deprecated pip
-`bedrock-agentcore-starter-toolkit` installs a *different* binary of the same name
-on which they parse and then no-op — so a script calling them can deploy nothing
-and still report success, depending on which binary is first on `PATH`.
-`deploy/ci.sh` greps for both strings and fails if the pip toolkit is installed. Full details, including the
-one-time CloudWatch Transaction Search setup for GenAI observability, are in
-`deploy/deploy.md`.
+`MOCK_MODE` defaults to `"1"`. A runtime with no env block returns HTTP 200 and a
+complete, plausible SSE stream having called Bedrock **zero times**. The tell is in
+the data, not the status: the `start` frame carries `"mock_mode": true` and the fan-out
+finishes in about a tenth of a second. `agentcore.json` sets `MOCK_MODE=0`; verify it
+survived.
+
+`agentcore invoke --prompt '{"application_id":"APP-1004"}'` reports
+`"success": true, "response": ""` **while the runtime is streaming correctly** — the
+CLI renders text deltas and these frames are JSON objects. Do not debug the runtime
+off that empty string; call `bedrock-agentcore.invoke_agent_runtime` with boto3 and
+read the bytes.
+
+### Step 5 — connect the real database
+
+```bash
+./deploy/connect-rds.sh --probe        # test, change nothing
+./deploy/connect-rds.sh --enable       # only if the probe was clean
+./deploy/vendor.sh && agentcore deploy --target default --yes
+```
+
+`--probe` reports four separate stages — config, connect, signal table, write — so a
+cluster without the Data API, a wrong database name, a missing table and a role
+without `CREATE` are four different messages rather than one failure. If the Data API
+is unavailable, use the VPC-attached Gateway Lambda instead:
+
+```bash
+./deploy/connect-rds.sh --vpc subnet-a,subnet-b sg-xxxx
+```
+
+`SIGNAL_MODE=aurora` with a broken connection **raises**. It does not fall back to
+fixtures — an adjudication computed from 14 demo applications while everyone believed
+it came from the staging cluster is the one failure this port must never produce.
+
+### Step 6 — the two websites
+
+```bash
+PYTHON=$(which python3) ./deploy/deploy-sites.sh \
+  -c vpcId=<VpcId> -c subnetIds=<SubnetIds> -c securityGroupIds=<ClientSecurityGroupId>
+```
+
+Take those three values from the step 1 stack outputs. They attach the stream proxy —
+the calling layer behind CloudFront — to the same subnets, which is what lets it reach
+the private database. Its *ingress* is unchanged: a Lambda function URL fronted by
+CloudFront OAC, unaffected by VPC attachment.
+
+**The trap:** attaching a Lambda to a VPC **removes its default internet access**.
+Without the `bedrock-agentcore` interface endpoint in those subnets, every invocation
+hangs to the timeout and reads as a broken runtime. Step 1 creates that endpoint;
+that is why these values come from its outputs rather than being typed in.
+
+### Confidential material the deploy needs
+
+`prompts/verbatim/` holds the customer's nine agent prompts and their semantic model,
+is **gitignored**, and ships as a zip. Restore it before deploying:
+
+```bash
+unzip prompts/verbatim.zip -d prompts/          # or copy the files in
+shasum -a 256 prompts/verbatim/FRAUDBOT_SEMANTIC_VIEW.yaml
+MOCK_MODE=1 python3 -m pytest tests/test_semantic_model.py -q   # 19 tests
+```
+
+Without it the loaders raise `SemanticModelUnavailable`, `tools/usecases` is empty and
+says why, and the affected tests **skip** rather than fail. Nothing crashes — but the
+use-case tools will not exist, so this is not optional for a real demo.
+
+### Order summary
+
+```
+0  prerequisites          agentcore --version, pip toolkit absent, account matches
+1  ./deploy/one-shot.sh   VPC + endpoints + Aurora; writes networkMode VPC
+2  ./deploy/reference-tools.sh   Gateway Lambda ARN into agentcore.json
+3  ./deploy/vendor.sh && agentcore deploy --target default --yes
+4  ./deploy/verify.py     confirm live, not mock
+5  ./deploy/connect-rds.sh --probe, then --enable
+6  ./deploy/deploy-sites.sh with the step-1 VPC outputs
+```
+
+Deeper detail, including the one-time CloudWatch Transaction Search setup for GenAI
+observability, is in [`deploy/README.md`](deploy/README.md) and
+[`deploy/deploy.md`](deploy/deploy.md). The RDS transports and what is *not* verified
+are in [`docs/rds-connection.md`](docs/rds-connection.md).
 
 ## Status and open questions
 
@@ -272,6 +453,17 @@ Current landed state, remaining work, and the questions we owe the customer
 (including a real enum conflict between their prompt file and their process guide)
 are tracked in **[CLAUDE.md](CLAUDE.md)**. Read it before changing anything — it
 documents several measured traps that look like obvious improvements.
+
+## Documents
+
+| | |
+|---|---|
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | every box, what is deployed vs designed, and the network decision |
+| [`CLAUDE.md`](CLAUDE.md) | the engineering contract; measured traps that look like improvements |
+| [`docs/kiro-brief.md`](docs/kiro-brief.md) | paste-ready instructions for a coding agent doing the deploy |
+| [`docs/rds-connection.md`](docs/rds-connection.md) | the two database transports, and what is not verified |
+| [`docs/semantic-model-reconciliation.md`](docs/semantic-model-reconciliation.md) | the customer's 25 authoritative rules vs. our implementation |
+| [`deploy/README.md`](deploy/README.md) | the deploy detail behind the runbook above |
 
 ## Reference
 

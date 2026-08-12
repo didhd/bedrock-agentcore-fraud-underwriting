@@ -40,6 +40,17 @@ function builtDir(relative: string, howToBuild: string): string {
   return dir;
 }
 
+/** A context list that may arrive comma-joined from a shell, or as a real JSON array. */
+function listContext(key: string): string[] | undefined {
+  const raw = app.node.tryGetContext(key);
+  if (!raw) return undefined;
+  if (Array.isArray(raw)) return raw.map(String).filter(Boolean);
+  return String(raw)
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 const runtimeArn = required('runtimeArn');
 
 /**
@@ -86,6 +97,11 @@ new SitesStack(app, app.node.tryGetContext('stackName') ?? 'PpFraudSites', {
   ),
   bootstrapFile: path.join(REPO_ROOT, 'deploy/cdk/.build/bootstrap.json'),
   chatRuntimeArns,
+  // Supplied by deploy/one-shot.sh from the PpFraudData stack outputs. Absent means the proxy
+  // stays outside the VPC, which is correct while the database is still public or unused.
+  vpcId: app.node.tryGetContext('vpcId'),
+  subnetIds: listContext('subnetIds'),
+  securityGroupIds: listContext('securityGroupIds'),
   description:
     'Two CloudFront endpoints for the Point Predictive engagement: the docs site ' +
     'and the live fraud-underwriting demo. The AgentCore runtimes are NOT owned ' +
