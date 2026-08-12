@@ -70,6 +70,9 @@ export interface ApplicationSummary {
   scenario: string
   anti_false_positive: boolean
   loan_amount: number | null
+  /** Loan-to-value percentage. Read from the record's `application` block. */
+  ltv_pct: number | null
+  credit_score: number | null
   vehicle: string | null
   fraud_score: number | null
   fraud_score_band: string | null

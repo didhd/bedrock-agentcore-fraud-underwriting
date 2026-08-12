@@ -147,6 +147,10 @@ function translate(frame) {
           analysis: frame.analysis,
           analysis_title: nullable(frame.analysis_title),
           risk_band: nullable(frame.risk_band),
+          // "contract" | "labelled" | null -- whether the specialist stated its band
+          // in the customer's own phrase or in the labelled form the parser also
+          // accepts. Forwarded so a fidelity deviation is not lost at the edge.
+          risk_band_form: nullable(frame.risk_band_form),
           char_count: nullable(frame.char_count),
           sentence_count: sentenceCount(frame.analysis),
           model: nullable(frame.model),

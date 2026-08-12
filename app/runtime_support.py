@@ -106,17 +106,69 @@ RECOMMENDATION_VALUES: tuple[str, ...] = (
 
 _BAND_RE = re.compile("|".join(re.escape(band) for band in RISK_BANDS))
 
+#: The band stated with a LABEL and the words in the other order --
+#: ``**Risk Level: HIGH**``, ``Risk: POSSIBLE``, ``Classification: LOW``.
+#:
+#: Measured on live runs: one specialist in three consecutive runs wrote its verdict
+#: this way instead of as the contract phrase, and the band came back None for a fully
+#: correct 2,579-character analysis whose second line was ``**Risk Level: HIGH**``.
+#:
+#: Anchored on the label deliberately. A bare adjective is NOT enough, and loosening
+#: this to match ``HIGH-RISK`` anywhere would have "fixed" the other observed None by
+#: luck while creating a worse bug: the same run's identity analysis contains
+#: "a combination explicitly flagged as HIGH-RISK regardless of score quality", which
+#: describes a signal, not the verdict. A specialist that argues a high-risk signal
+#: away and concludes LOW would then be reported HIGH. The label is what distinguishes
+#: a classification from prose about one.
+_LABELLED_BAND_RE = re.compile(
+    r"(?:OVERALL\s+)?RISK\s*(?:LEVEL|RATING|CLASSIFICATION|ASSESSMENT|BAND)?\s*[:\-–]\s*"
+    r"\**\s*(LOW|POSSIBLE|HIGH)\b"
+)
+
 
 def parse_risk_band(text: str | None) -> str | None:
     """First calibration band named in a specialist's prose, or None.
 
-    Returns None rather than guessing a band: an unparseable analysis is a
-    fidelity signal the UI should surface, not a value to default.
+    Two accepted forms, tried in order of confidence:
+
+    1. the contract phrase itself -- ``LOW RISK`` / ``POSSIBLE RISK`` / ``HIGH RISK``;
+    2. the same verdict stated with a label and the words reversed, e.g.
+       ``**Risk Level: HIGH**``, which live specialists demonstrably produce.
+
+    Returns None when neither appears, and that is not a fallback failing quietly:
+    an analysis that never states a classification is a fidelity signal the UI should
+    surface as an empty band rather than a guess. Verified against a real run whose
+    identity analysis mentions "HIGH" twice -- once about a credit score, once about a
+    signal category -- and never classifies itself. None is the correct answer there.
     """
     if not text:
         return None
-    match = _BAND_RE.search(text.upper())
-    return match.group(0) if match else None
+    upper = text.upper()
+    match = _BAND_RE.search(upper)
+    if match:
+        return match.group(0)
+    labelled = _LABELLED_BAND_RE.search(upper)
+    if labelled:
+        return f"{labelled.group(1)} RISK"
+    return None
+
+
+def risk_band_form(text: str | None) -> str | None:
+    """Which form the band was stated in: ``contract``, ``labelled``, or None.
+
+    Emitted alongside the band so a deviation from the customer's own output contract
+    is visible rather than smoothed over by the parser. ``labelled`` means the
+    specialist produced a correct verdict in the wrong shape -- worth knowing, and not
+    worth discarding the analysis over.
+    """
+    if not text:
+        return None
+    upper = text.upper()
+    if _BAND_RE.search(upper):
+        return "contract"
+    if _LABELLED_BAND_RE.search(upper):
+        return "labelled"
+    return None
 
 
 def validate_adjudication(adjudication: dict[str, Any]) -> dict[str, Any]:
