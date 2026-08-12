@@ -262,6 +262,12 @@ function translate(frame) {
 // Handler
 // ---------------------------------------------------------------------------
 
+//: Application ids this proxy will forward. Declared ABOVE its first use rather than
+//: relying on the fact that a `const` in the module body is initialised before any
+//: handler runs -- correct today, but not something the next reader should have to
+//: reason about.
+const APP_ID = /^APP-\d{3,6}$/i;
+
 // ---------------------------------------------------------------------------
 // Chat: one turn against one seat
 // ---------------------------------------------------------------------------
@@ -297,8 +303,17 @@ async function handleChat(event, responseStream, write) {
 
   const params = new URLSearchParams(event.rawQueryString || '');
   const message = (params.get('message') || '').slice(0, 4000);
-  if (!message.trim()) {
-    write({ event: 'error', error: 'empty message' });
+  const applicationId = (params.get('application_id') || '').toUpperCase();
+
+  // The two seat kinds send different things, because they TAKE different things: Francis
+  // needs a question, a specialist needs an application and accepts no question at all.
+  // Requiring a message here rejected the specialist seats outright.
+  if (!message.trim() && !applicationId) {
+    write({ event: 'error', error: 'send a message (Francis) or an application_id (specialist)' });
+    return;
+  }
+  if (applicationId && !APP_ID.test(applicationId)) {
+    write({ event: 'error', error: `not a valid application id: ${applicationId}` });
     return;
   }
 
@@ -335,7 +350,13 @@ async function handleChat(event, responseStream, write) {
         runtimeSessionId: sessionId,
         contentType: 'application/json',
         accept: conversational ? 'text/event-stream' : 'application/json',
-        payload: new TextEncoder().encode(JSON.stringify({ prompt: message })),
+        // The id goes at the payload ROOT, where extract_application_id looks first,
+        // rather than being buried in prose for a regex to find.
+        payload: new TextEncoder().encode(
+          JSON.stringify(
+            applicationId ? { application_id: applicationId, ...(message ? { prompt: message } : {}) } : { prompt: message }
+          )
+        ),
       })
     );
   } catch (error) {
@@ -425,7 +446,6 @@ async function handleChat(event, responseStream, write) {
   });
 }
 
-const APP_ID = /^APP-\d{3,6}$/i;
 
 export const handler = awslambda.streamifyResponse(async (event, responseStream) => {
   const rawPath = event.rawPath ?? '';

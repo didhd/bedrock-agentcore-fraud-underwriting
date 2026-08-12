@@ -1408,18 +1408,25 @@ def datasource_probe(mode: str = Query("fixtures")) -> JSONResponse:
 @app.get("/api/chat/{agent_id}")
 async def chat(
     agent_id: str,
-    message: str = Query(..., min_length=1, max_length=4000),
+    message: str = Query("", max_length=4000),
     session_id: str | None = Query(None),
+    application_id: str | None = Query(None, max_length=32),
 ) -> StreamingResponse:
     """SSE for one chat turn against a DEPLOYED runtime.
 
     GET rather than POST so the browser can use the same streaming reader the batch tab
     uses. A frame carrying `error` is terminal.
+
+    `message` is optional and `application_id` exists because the two seat kinds need
+    different inputs: Francis needs a question, a specialist needs an application and
+    ignores any question (its own code path accepts no question at all). Requiring a
+    non-empty message made a specialist seat reject "analyse APP-1004" style requests that
+    carried the id in a dropdown instead of in prose.
     """
     from ui.chat import chat_stream
 
     return StreamingResponse(
-        chat_stream(agent_id, message, session_id),
+        chat_stream(agent_id, message, session_id, application_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"},
     )

@@ -32,7 +32,12 @@ import { LatencyChart } from "@/components/LatencyChart";
 import { SignalLayerPanel } from "@/components/SignalLayerPanel";
 import { useRun, useWallClock } from "@/hooks/useRun";
 import type { BackendConfig } from "@/lib/sse";
-import type { ApplicationSummary, Health, PayloadResponse, AgentsResponse } from "@/lib/types";
+import type {
+  ApplicationSummary,
+  Health,
+  PayloadResponse,
+  AgentsResponse,
+} from "@/lib/types";
 
 async function getJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
@@ -119,7 +124,7 @@ function Errors({ errors }: { errors: string[] }) {
 }
 
 function Demo() {
-  const { agents, agentsError } = useAgents()
+  const { agents, agentsError } = useAgents();
   const [health, setHealth] = React.useState<Health | null>(null);
   const [applications, setApplications] = React.useState<ApplicationSummary[]>(
     [],
@@ -233,7 +238,12 @@ function Demo() {
               errors={[`Could not load the agent roster: ${agentsError}`]}
             />
           ) : null}
-          <ChatPanel seats={seats} />
+          <ChatPanel
+            seats={seats}
+            applications={applications.map(
+              (application) => application.application_id,
+            )}
+          />
         </TabsContent>
 
         <TabsContent value="agents" className="flex flex-col gap-5">
@@ -356,7 +366,7 @@ function useAgents() {
   return { agents: data, agentsError: error };
 }
 
-export default function App() {;
+export default function App() {
   return (
     <ThemeProvider>
       <TooltipProvider>

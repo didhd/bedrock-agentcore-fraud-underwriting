@@ -23,14 +23,18 @@ Mocked: the RDS connection panel only. `signal_mode()` describes the seam and
 It is labelled `mocked: true` in the response and the UI says so, because a fake green
 "connected" light on a migration question is worse than no light at all.
 
-WHY THE SPECIALISTS ARE CHAT-LIKE WITHOUT BEING CHATBOTS
+A SPECIALIST SEAT IS NOT A CHAT, AND THE UI MUST NOT IMPLY IT IS
 
-A specialist's prompt makes it analyse one domain of one application. It is not a
-conversational agent, and pretending otherwise would misrepresent the customer's own
-design. So a specialist seat accepts free text, extracts the application id from it
-(`extract_application_id` already scans prose for `APP-NNNN`), and returns that domain's
-analysis. Francis is the one true conversation: she routes, she remembers within a
-session, and she answers in her own required format.
+`agents.fanout.fan_out_streaming` accepts NO question. A specialist's entire input is its
+projected domain view, so a user's text is discarded -- it was only ever scanned for an
+`APP-NNNN` to analyse. A free-text box over that is a lie: it invites a question, throws
+it away, and then errors on anything that happens not to contain an id
+("no application id in this request" for a perfectly reasonable message).
+
+So a specialist seat asks for an APPLICATION, not a question, and the id travels at the
+payload root where `extract_application_id` looks first rather than buried in prose for a
+regex to find. Francis is the one true conversation: she takes a question, routes it to at
+most two specialists, remembers within a session, and answers in her own required format.
 """
 
 from __future__ import annotations
@@ -129,8 +133,9 @@ def agent_roster() -> list[dict[str, Any]]:
                 "agent_name": AGENT_NAMES[domain],
                 "label": f"{AGENT_NAMES[domain]} — {domain}",
                 "description": (
-                    f"Analyses the {domain} dimension of one application. Mention an "
-                    "application id (APP-1004) and it returns that domain's analysis."
+                    f"Analyses the {domain} dimension of one application. Pick an "
+                    "application; this agent takes no question -- its input is its own "
+                    "projected signals."
                 ),
                 "runtime": arns.get(domain),
                 # Not a chatbot, and saying so is more honest than implying it is.
@@ -249,6 +254,7 @@ async def chat_stream(
     agent_id: str,
     message: str,
     session_id: str | None = None,
+    application_id: str | None = None,
 ) -> AsyncIterator[str]:
     """SSE for one chat turn against a deployed runtime.
 
@@ -291,9 +297,20 @@ async def chat_stream(
         session_id=session,
     )
 
-    # Francis takes a prompt; a specialist takes an application id, which it will also
-    # extract from prose. Sending `prompt` to both keeps one payload shape.
-    payload = json.dumps({"prompt": message}).encode()
+    # Francis takes a prompt. A specialist takes an APPLICATION ID -- and only that.
+    #
+    # This is not a shortcut, it is the shape of the thing: `fan_out_streaming` accepts no
+    # question, so a specialist's entire input is its projected domain view. The user's
+    # text is discarded. The UI therefore asks a specialist seat for an application rather
+    # than for a question, and the id is sent at the payload ROOT where
+    # `extract_application_id` looks first -- not buried in prose for a regex to find.
+    body: dict[str, Any] = {"prompt": message} if message else {}
+    if application_id:
+        body["application_id"] = application_id
+    if not body:
+        yield _frame("error", error="nothing to send: no message and no application id")
+        return
+    payload = json.dumps(body).encode()
 
     def invoke() -> tuple[str, bytes]:
         response = _client().invoke_agent_runtime(
