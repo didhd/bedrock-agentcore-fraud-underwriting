@@ -101,3 +101,6 @@ deploy/cdk/dist/
 deploy/cdk/node_modules/
 deploy/cdk/lambda/bootstrap.json
 site/out/
+
+# The CloudFront variant of the demo UI (ui/src/lib/deployment.ts).
+ui/dist-edge/
