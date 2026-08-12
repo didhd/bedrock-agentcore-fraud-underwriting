@@ -136,6 +136,126 @@ streams, and displays nothing.
 
 ---
 
+## Two fan-out topologies
+
+The eight specialists can run in one container or in eight. Both are deployed; one
+environment variable on the `underwriter` runtime chooses which executes.
+
+| | `FANOUT_MODE=inprocess` | `FANOUT_MODE=distributed` |
+|---|---|---|
+| AgentCore invocations per application | 1 | 9 |
+| Bedrock model calls | 9 | 9 |
+| Concurrency primitive | `asyncio.gather` in one container | `asyncio.gather` over 9 `InvokeAgentRuntime` calls |
+| Deploy / scale / IAM granularity | all eight together | each specialist on its own |
+| Log groups and span trees | 1 | 9 |
+
+**Parallelism is identical.** It comes from `asyncio`, not from process separation, so
+splitting the specialists adds nine AgentCore invocations and nine cold-start surfaces
+without adding concurrency. What it buys is operational: a specialist can be redeployed,
+rate-limited, IAM-scoped, or rolled back without touching the other seven, and each gets
+its own metrics and log group.
+
+**The cost is measurable, not theoretical.** Every `agent_done` frame in distributed mode
+carries `remote_elapsed_ms` (wall clock inside the specialist runtime) alongside
+`latency_ms` (the orchestrator's view), and their difference is reported as
+`invocation_overhead_ms`. `deploy/verify-tracing.py` prints the min/median/max across the
+eight. Compare against the in-process baseline recorded in
+`evals/results/deployed_runtime_e2e.json` before choosing.
+
+`inprocess` is the code default, so a project whose specialist runtimes are not deployed
+still works. `agentcore.json` sets `distributed` on the deployed orchestrator.
+
+### One source tree, eight runtimes
+
+The eight specialist runtimes all declare `codeLocation: app/specialist/` and differ only
+in their name and `SPECIALIST_DOMAIN`. The schema permits a shared `codeLocation`
+(verified with `agentcore validate`), so there is one file to maintain rather than eight
+copies that drift. The CLI packages the directory once per runtime, so a deploy uploads
+ten zips of about 42 MB each — expect roughly ten minutes.
+
+The orchestrator finds its specialists through `SPECIALIST_ARN_<DOMAIN>` environment
+variables that **CDK** writes from the sibling runtimes' own ARNs
+(`agentcore/cdk/lib/cdk-stack.ts`). Those ARNs do not exist until deploy time and are
+created by the same stack, so there is no point at which anyone could put them in a
+config file by hand — and a renamed runtime updates the orchestrator automatically
+instead of leaving a stale ARN that fails at request time.
+
+A specialist that cannot be reached is reported as a **failed specialist**, not as a
+crashed run: seven of eight still produces an adjudication, with the missing domain named
+in `degraded_domains`.
+
+---
+
+## Observability
+
+Native AgentCore Observability, no third-party collector. Three things make it work, and
+two of them are easy to miss.
+
+**1. CloudWatch Transaction Search must be on.** It is account-and-region wide, one time.
+`agentcore deploy` enables it for you; verify with:
+
+```bash
+aws xray get-trace-segment-destination --region us-west-2
+# {"Destination": "CloudWatchLogs", "Status": "ACTIVE"}
+```
+
+Without it, spans are not indexed and AgentCore cannot deliver them to an agent's own log
+group.
+
+**2. ADOT must be in the dependency closure.** Every runtime here sets
+`instrumentation.enableOtel: true`, which makes AgentCore wrap the entrypoint with
+`opentelemetry-instrument`. That wrapper cannot start without
+`aws-opentelemetry-distro>=0.18.0`, which is why it is pinned in every
+`app/*/pyproject.toml` and not only in the root `requirements.txt`. The `>=0.18.0` floor
+is also what lets spans go to the agent's own log group instead of the shared
+`aws/spans`.
+
+**3. Trace context must be passed explicitly across runtimes.** This is the one that
+does not happen by itself. Eight independent runtimes produce eight unrelated traces
+unless the parent context travels with each request. `InvokeAgentRuntime` carries it as
+request parameters:
+
+| Parameter | Header | Purpose |
+|---|---|---|
+| `traceParent` | `traceparent` | W3C trace context — what joins the traces |
+| `traceState` | `tracestate` | vendor state |
+| `baggage` | `baggage` | user-defined context propagation |
+| `traceId` | `X-Amzn-Trace-Id` | X-Ray format, `Root=1-...;Parent=...;Sampled=1` |
+| `runtimeSessionId` | `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` | groups all nine into one session |
+
+`app/distributed_fanout.py` injects the active span with the configured OTel propagator
+rather than formatting a `traceparent` by hand, and reuses the orchestrator's own session
+id for all eight children. A fresh session id per child would scatter one application
+across nine sessions.
+
+### Where the data lands
+
+| | Location |
+|---|---|
+| Logs | `/aws/bedrock-agentcore/runtimes/<agent-id>-DEFAULT`, stream `runtime-logs` |
+| Spans | the same log group, stream `spans` |
+| Metrics | namespace `bedrock-agentcore` |
+| Dashboard | CloudWatch → **GenAI Observability** |
+
+Spans go to each agent's own log group, not the shared `aws/spans`, because us-west-2
+defaults new agents to the unified destination. Flip it per agent with
+`UNIFIED_TRACES_DESTINATION_ENABLED=false` if you would rather query one place; the
+trade-off is per-agent access control and encryption scope against a single query target.
+
+### Prove it
+
+```bash
+python3 deploy/verify-tracing.py
+```
+
+It starts its own trace, invokes the orchestrator as that trace's child, then asks X-Ray
+whether the specialists reported under the **same trace id**. It also prints the
+per-specialist AgentCore invocation overhead. A pass means one span tree rooted at the
+orchestrator; a fail means nine disconnected traces, which looks like working tracing
+until someone tries to follow a request.
+
+---
+
 ## Manual path (no CDK)
 
 If you would rather not run the website stack, everything works without it.

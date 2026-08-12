@@ -22,7 +22,10 @@ cd "$(dirname "$0")/.."
 REPO_ROOT="$(pwd)"
 
 SHARED=(prompts signal_layer agents fixtures)
-RUNTIMES=(app/underwriter app/francis)
+# app/specialist is ONE directory shared by all eight specialist runtimes -- they
+# declare the same codeLocation and differ only by SPECIALIST_DOMAIN -- so it is
+# vendored once, not eight times.
+RUNTIMES=(app/underwriter app/specialist app/francis)
 
 for rt in "${RUNTIMES[@]}"; do
   if [ ! -f "$rt/main.py" ]; then
@@ -36,12 +39,38 @@ for rt in "${RUNTIMES[@]}"; do
   if [ -d data ]; then
     rm -rf "$rt/data"; cp -R data "$rt/data"
   fi
-  # app/ is copied selectively (only the shared module) to avoid recursively
-  # vendoring app/underwriter and app/francis into themselves.
+  # Every MODULE in app/, and none of its per-runtime DIRECTORIES. The glob is the
+  # point: this used to name two files explicitly, and adding
+  # app/distributed_fanout.py without adding it here deployed an orchestrator that
+  # raised `ModuleNotFoundError: No module named 'app.distributed_fanout'` on EVERY
+  # invocation -- including the ones that would never have used it. A glob grows on
+  # its own; a list has to be remembered.
+  #
+  # Directories are excluded, not incidentally but necessarily: app/ also holds
+  # underwriter/, specialist/ and francis/, and copying those into each other is how
+  # you get app/underwriter/app/underwriter/app/...
   mkdir -p "$rt/app"
-  cp app/__init__.py app/runtime_support.py "$rt/app/"
+  for f in app/*.py; do
+    cp "$f" "$rt/app/"
+  done
   # strip caches so they never land in the zip
   find "$rt" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+
+  # VERIFY, do not trust. Every `app.<module>` this runtime imports must now exist
+  # next to it. Vendoring is the step whose failure looks like a 30-second
+  # initialisation timeout or a ModuleNotFoundError at request time, both of which
+  # point somewhere other than here -- so it is checked at the moment it is cheap.
+  missing=""
+  while read -r mod; do
+    [ -z "$mod" ] && continue
+    [ -f "$rt/app/$mod.py" ] || missing="$missing app.$mod"
+  done < <(grep -ho 'from app\.[a-z_]*' "$rt/main.py" 2>/dev/null | sed 's/from app\.//' | sort -u)
+  if [ -n "$missing" ]; then
+    echo "ERROR: $rt/main.py imports modules that were not vendored:$missing" >&2
+    echo "       They are probably not in app/*.py, or app/ has grown a package." >&2
+    exit 1
+  fi
+
   echo "vendored [${SHARED[*]} data app] into $rt"
 done
 

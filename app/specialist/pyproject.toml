@@ -1,0 +1,83 @@
+# Dependency closure for the EIGHT specialist AgentCore runtimes.
+#
+# All eight -- identity, dealer, straw, employment, income, synthetic, bustout, rings --
+# declare this same directory as their `codeLocation` and differ only in their name and
+# their SPECIALIST_DOMAIN environment variable. The schema allows a shared codeLocation
+# (verified with `agentcore validate`), so this one file is the closure for all of them.
+# The CLI packages the directory once per runtime, so eight zips are uploaded from one
+# source tree.
+#
+# The closure is IDENTICAL to app/underwriter/pyproject.toml and must stay that way: a
+# specialist runs the same agents/fanout.py code path the in-process fan-out did, just
+# for a single domain. Read that file for the full account of how the CLI uses this one.
+#
+# HOW THE CLI USES THIS FILE (verified by reading @aws/agentcore 1.0.0-preview.22):
+#   * `agentcore dev` -> ensures a `.venv` in THIS directory, then spawns
+#     `.venv/bin/uvicorn main:app --reload` with cwd set here. So `main` must be a
+#     top-level module in this directory, which is why main.py inserts the repo
+#     root on sys.path rather than relying on a package-relative import.
+#   * `agentcore package`/`deploy` -> resolves the nearest pyproject.toml walking
+#     UP from cwd, runs
+#         uv pip install -r <that pyproject> --target <staging>
+#            --python-version 3.12 --python-platform manylinux_2_28_aarch64
+#            --only-binary :all:
+#     copies that same directory's tree into the staging dir, and zips the
+#     staging dir with its contents at the ARCHIVE ROOT (createZipFromDir).
+#     Excluded from the copy: .git, .venv, __pycache__, .pytest_cache, .DS_Store,
+#     node_modules. Hard 250 MB limit on the resulting zip.
+#
+# THE PACKAGING CONSEQUENCE, stated plainly because it is easy to get wrong:
+# the zip root is THIS directory. The shared repo-root packages this runtime
+# imports -- prompts/ (with its verbatim/ prompt files and manifest.json),
+# signal_layer/, agents/, fixtures/, app/runtime_support.py -- are ABOVE it and
+# are therefore NOT included by a plain `agentcore package`. Before deploying,
+# those packages must be present next to main.py. main.py's `_find_shared_root()`
+# anchors on `prompts/loader.py` and searches this directory first, then its
+# ancestors, so both layouts work with no code change:
+#     app/underwriter/{main.py, prompts/, signal_layer/, agents/, app/}   (packaged)
+#     <repo>/app/underwriter/main.py + <repo>/prompts/ ...                (dev)
+# See deploy/deploy.md for the vendoring step. `--only-binary :all:` also means
+# every dependency must publish a manylinux wheel; none of the pins below are
+# sdist-only.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "specialist"
+version = "0.1.0"
+description = "One Point Predictive fraud specialist as its own AgentCore runtime; the domain comes from SPECIALIST_DOMAIN"
+readme = "README.md"
+# 3.12 matches runtimeVersion PYTHON_3_12 in agentcore/agentcore.json. The CLI's
+# own scaffold default is PYTHON_3_14; keep the two in sync deliberately.
+requires-python = ">=3.12"
+dependencies = [
+    # Required by the `opentelemetry-instrument` wrapper AgentCore puts in front
+    # of the entrypoint because this runtime sets instrumentation.enableOtel.
+    # Without it the wrapper cannot start and the runtime emits ZERO spans.
+    "aws-opentelemetry-distro>=0.18.0",
+    # Pinned, not floored: main.py depends on _takes_context() matching the
+    # second parameter literally by the name `context`, and on an async-generator
+    # entrypoint being auto-converted to text/event-stream.
+    "bedrock-agentcore==1.19.0",
+    # [crt] for faster checksums on the Bedrock request path.
+    "botocore[crt]>=1.43.54",
+    "boto3>=1.43.54",
+    # Pinned in lockstep with the repo requirements.txt, and the `[openai]` extra
+    # is load-bearing rather than optional. The synthesizer defaults to
+    # `openai.gpt-5.6-luna` (agents.models.DEFAULT_SYNTHESIZER_MODEL), which
+    # agents/mantle.py reaches through
+    # `strands.models.openai_responses.OpenAIResponsesModel(bedrock_mantle_config=...)`.
+    # That module is ABSENT from strands 1.26.x, and the extra is what pulls the
+    # two distributions it imports: `openai>=1.68` for the Responses client and
+    # `aws-bedrock-token-generator>=1.1` to mint the per-request bearer token
+    # mantle authenticates with. Without the extra the deployed runtime imports
+    # fine and then fails at synthesis -- the one call it cannot degrade around.
+    "strands-agents[openai]==1.50.2",
+    # agents/contracts.py validates the 21-key adjudication with pydantic v2.
+    "pydantic>=2.13",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]

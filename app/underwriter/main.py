@@ -255,7 +255,26 @@ def _normalize_agent_event(event: dict[str, Any], started: float) -> tuple[str, 
     }
 
 
-async def _fan_out(signal_payload: Any, record: dict[str, Any] | None, started: float):
+def _fanout_mode_env() -> str:
+    """``distributed`` or ``inprocess``, read WITHOUT importing the distributed module.
+
+    Duplicating this one-line read is deliberate. The decision of which topology to use
+    must not itself depend on the module that only one topology needs -- otherwise a
+    packaging mistake in the distributed path takes the in-process path down with it,
+    which is exactly what happened once.
+    """
+    mode = (os.environ.get("FANOUT_MODE") or "inprocess").strip().lower()
+    return mode if mode in ("distributed", "inprocess") else "inprocess"
+
+
+async def _fan_out(
+    signal_payload: Any,
+    record: dict[str, Any] | None,
+    started: float,
+    *,
+    application_id: str,
+    session_id: str,
+):
     """Yield each specialist's outcome as it completes.
 
     Delegates to ``agents.fanout.fan_out_streaming``, which owns the concurrency
@@ -277,6 +296,42 @@ async def _fan_out(signal_payload: Any, record: dict[str, Any] | None, started: 
 
     domains = [d for d in DOMAINS if d not in failing]
     if not domains:
+        return
+
+    # ---------------------------------------------------------------------
+    # Two topologies, one switch. FANOUT_MODE=distributed invokes eight
+    # INDEPENDENT specialist runtimes over InvokeAgentRuntime instead of running
+    # eight Agents in this container.
+    #
+    # Both are kept because they are not equivalent and the difference is
+    # measurable. Concurrency here comes from asyncio, not from process
+    # separation, so the split adds eight AgentCore invocations and eight
+    # cold-start surfaces without adding parallelism -- what it buys is
+    # per-specialist deployment, scaling, IAM scope, log group and span tree.
+    # Deciding between them needs a number, and with both present that number is
+    # one environment variable away.
+    #
+    # The distributed generator yields the SAME ("done"|"failed"|
+    # "fanout_completed", frame) tuples, already normalised, so nothing below
+    # this branch changes: not the SSE contract, not the UI, not the synthesis
+    # input, not the CloudWatch emitter.
+    # ---------------------------------------------------------------------
+    # Imported INSIDE the branch, and the mode is read first. The obvious ordering --
+    # import, then branch -- made a module the in-process path never calls a hard
+    # dependency of it: `app/distributed_fanout.py` was not in deploy/vendor.sh's copy
+    # list, so the deployed orchestrator raised
+    # `ModuleNotFoundError: No module named 'app.distributed_fanout'` on EVERY
+    # invocation, including the ones that would never have used it.
+    if _fanout_mode_env() == "distributed":
+        from app.distributed_fanout import fan_out_runtimes  # noqa: PLC0415
+
+        async for kind_frame in fan_out_runtimes(
+            application_id=application_id,
+            session_id=session_id,
+            domains=domains,
+            started=started,
+        ):
+            yield kind_frame
         return
 
     async for event in fan_out_streaming(
@@ -425,7 +480,13 @@ async def invoke(payload, context):
         # deliberate guard and deserves its own reported reason rather than a
         # stack-trace string.
         try:
-            async for kind, event in _fan_out(signal_payload, record, run_started):
+            async for kind, event in _fan_out(
+                signal_payload,
+                record,
+                run_started,
+                application_id=application_id,
+                session_id=session_id,
+            ):
                 if kind == "fanout_completed":
                     # fan_out_streaming's own measured wall clock for the whole
                     # fan-out. Preferred over ours because it excludes the time this

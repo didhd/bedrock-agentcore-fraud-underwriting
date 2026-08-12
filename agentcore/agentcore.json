@@ -21,6 +21,194 @@
         {
           "name": "MOCK_MODE",
           "value": "0"
+        },
+        {
+          "name": "FANOUT_MODE",
+          "value": "distributed"
+        }
+      ],
+      "instrumentation": {
+        "enableOtel": true
+      }
+    },
+    {
+      "name": "identity",
+      "description": "ISAAC_IDENTITY: the identity fraud specialist, independently deployable. Shares app/specialist/ with the other seven; SPECIALIST_DOMAIN is what makes this one identity.",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": "app/specialist/",
+      "runtimeVersion": "PYTHON_3_12",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP",
+      "envVars": [
+        {
+          "name": "MOCK_MODE",
+          "value": "0"
+        },
+        {
+          "name": "SPECIALIST_DOMAIN",
+          "value": "identity"
+        }
+      ],
+      "instrumentation": {
+        "enableOtel": true
+      }
+    },
+    {
+      "name": "dealer",
+      "description": "DIANA_DEALER: the dealer fraud specialist, independently deployable. Shares app/specialist/ with the other seven; SPECIALIST_DOMAIN is what makes this one dealer.",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": "app/specialist/",
+      "runtimeVersion": "PYTHON_3_12",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP",
+      "envVars": [
+        {
+          "name": "MOCK_MODE",
+          "value": "0"
+        },
+        {
+          "name": "SPECIALIST_DOMAIN",
+          "value": "dealer"
+        }
+      ],
+      "instrumentation": {
+        "enableOtel": true
+      }
+    },
+    {
+      "name": "straw",
+      "description": "SAMMY_STRAW: the straw fraud specialist, independently deployable. Shares app/specialist/ with the other seven; SPECIALIST_DOMAIN is what makes this one straw.",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": "app/specialist/",
+      "runtimeVersion": "PYTHON_3_12",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP",
+      "envVars": [
+        {
+          "name": "MOCK_MODE",
+          "value": "0"
+        },
+        {
+          "name": "SPECIALIST_DOMAIN",
+          "value": "straw"
+        }
+      ],
+      "instrumentation": {
+        "enableOtel": true
+      }
+    },
+    {
+      "name": "employment",
+      "description": "EMILY_EMPLOYMENT: the employment fraud specialist, independently deployable. Shares app/specialist/ with the other seven; SPECIALIST_DOMAIN is what makes this one employment.",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": "app/specialist/",
+      "runtimeVersion": "PYTHON_3_12",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP",
+      "envVars": [
+        {
+          "name": "MOCK_MODE",
+          "value": "0"
+        },
+        {
+          "name": "SPECIALIST_DOMAIN",
+          "value": "employment"
+        }
+      ],
+      "instrumentation": {
+        "enableOtel": true
+      }
+    },
+    {
+      "name": "income",
+      "description": "IRIS_INCOME: the income fraud specialist, independently deployable. Shares app/specialist/ with the other seven; SPECIALIST_DOMAIN is what makes this one income.",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": "app/specialist/",
+      "runtimeVersion": "PYTHON_3_12",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP",
+      "envVars": [
+        {
+          "name": "MOCK_MODE",
+          "value": "0"
+        },
+        {
+          "name": "SPECIALIST_DOMAIN",
+          "value": "income"
+        }
+      ],
+      "instrumentation": {
+        "enableOtel": true
+      }
+    },
+    {
+      "name": "synthetic",
+      "description": "SYLVIA_SYNTHETIC: the synthetic fraud specialist, independently deployable. Shares app/specialist/ with the other seven; SPECIALIST_DOMAIN is what makes this one synthetic.",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": "app/specialist/",
+      "runtimeVersion": "PYTHON_3_12",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP",
+      "envVars": [
+        {
+          "name": "MOCK_MODE",
+          "value": "0"
+        },
+        {
+          "name": "SPECIALIST_DOMAIN",
+          "value": "synthetic"
+        }
+      ],
+      "instrumentation": {
+        "enableOtel": true
+      }
+    },
+    {
+      "name": "bustout",
+      "description": "BRUCE_BUSTOUT: the bustout fraud specialist, independently deployable. Shares app/specialist/ with the other seven; SPECIALIST_DOMAIN is what makes this one bustout.",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": "app/specialist/",
+      "runtimeVersion": "PYTHON_3_12",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP",
+      "envVars": [
+        {
+          "name": "MOCK_MODE",
+          "value": "0"
+        },
+        {
+          "name": "SPECIALIST_DOMAIN",
+          "value": "bustout"
+        }
+      ],
+      "instrumentation": {
+        "enableOtel": true
+      }
+    },
+    {
+      "name": "rings",
+      "description": "RENEE_RINGS: the rings fraud specialist, independently deployable. Shares app/specialist/ with the other seven; SPECIALIST_DOMAIN is what makes this one rings.",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": "app/specialist/",
+      "runtimeVersion": "PYTHON_3_12",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP",
+      "envVars": [
+        {
+          "name": "MOCK_MODE",
+          "value": "0"
+        },
+        {
+          "name": "SPECIALIST_DOMAIN",
+          "value": "rings"
         }
       ],
       "instrumentation": {
