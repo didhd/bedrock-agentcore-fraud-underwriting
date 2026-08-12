@@ -245,18 +245,16 @@ echo "==> stored in $STATE"
 # ---------------------------------------------------------------------------
 # Package. pg8000 only for the socket path -- pure Python, so no manylinux cross-compile.
 # ---------------------------------------------------------------------------
+# Delegated to bundle.sh, not duplicated here. This script used to package inline and that
+# packaging omitted the generated use-case payload, so the Lambda deployed with main.py alone:
+# `list_use_cases` then answered "no verified queries are available" from a tool that was
+# otherwise wired correctly end to end. One packaging path means one place to forget something.
 echo "==> packaging the analyst tool"
-rm -rf "$BUILD" /tmp/pp-rds.zip
-mkdir -p "$BUILD"
-cp "$SRC/main.py" "$BUILD/"
 if [[ -n "$VPC_SUBNETS" ]]; then
-  "$PY" -m pip install --quiet --target "$BUILD" 'pg8000>=1.31,<2' >/dev/null
-  echo "    pg8000 bundled (socket transport)"
+  PYTHON="$PY" ./deploy/cdk/lambda-rds/bundle.sh --socket
 else
-  echo "    no dependencies (Data API transport, boto3 is in the runtime)"
+  PYTHON="$PY" ./deploy/cdk/lambda-rds/bundle.sh
 fi
-(cd "$BUILD" && zip -q -r /tmp/pp-rds.zip .)
-echo "    $(du -h /tmp/pp-rds.zip | cut -f1)"
 
 # ---------------------------------------------------------------------------
 # The stack. Hand-written for the same reason reference-tools.sh is: one function and one
