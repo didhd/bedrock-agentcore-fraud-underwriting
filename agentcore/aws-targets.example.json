@@ -1,0 +1,8 @@
+[
+  {
+    "name": "default",
+    "description": "The name MUST be 'default': `agentcore deploy` with no --target looks for exactly that name, and any other name fails with 'Target \"default\" not found'. Keep this description under 256 characters -- the schema rejects longer.",
+    "account": "111122223333",
+    "region": "us-west-2"
+  }
+]
