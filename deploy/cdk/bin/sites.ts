@@ -1,0 +1,70 @@
+#!/usr/bin/env node
+/**
+ * CDK entry point for the two CloudFront sites.
+ *
+ * Everything variable is a CDK context value, not a hard-coded constant, so the
+ * customer deploys into their own account by editing `cdk.json` (or passing `-c`)
+ * and never by editing TypeScript. `deploy/deploy-sites.sh` fills the two values
+ * that cannot be known ahead of time -- the account and the runtime ARN -- by
+ * reading them back from the AgentCore deployment rather than asking anyone to
+ * copy an ARN by hand.
+ */
+
+import { App } from 'aws-cdk-lib';
+import { SitesStack } from '../lib/sites-stack';
+import * as path from 'node:path';
+import { existsSync } from 'node:fs';
+
+const app = new App();
+
+const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
+
+/** A required context value, with an error that says how to supply it. */
+function required(key: string): string {
+  const value = app.node.tryGetContext(key);
+  if (!value) {
+    throw new Error(
+      `missing CDK context '${key}'. Pass -c ${key}=... or set it in ` +
+        `deploy/cdk/cdk.json. deploy/deploy-sites.sh sets it for you.`
+    );
+  }
+  return String(value);
+}
+
+/** A build directory that must exist, with the command that produces it. */
+function builtDir(relative: string, howToBuild: string): string {
+  const dir = path.join(REPO_ROOT, relative);
+  if (!existsSync(dir)) {
+    throw new Error(`${relative} does not exist. Build it first:\n  ${howToBuild}`);
+  }
+  return dir;
+}
+
+const runtimeArn = required('runtimeArn');
+const runtimeRegion = app.node.tryGetContext('runtimeRegion') ?? runtimeArn.split(':')[3];
+
+new SitesStack(app, app.node.tryGetContext('stackName') ?? 'PpFraudSites', {
+  env: {
+    account: required('account'),
+    // The sites can live anywhere; they are fronted by CloudFront either way. This
+    // defaults to the runtime's region only so a customer who sets nothing gets one
+    // region for everything.
+    region: app.node.tryGetContext('sitesRegion') ?? runtimeRegion,
+  },
+  runtimeArn,
+  runtimeRegion,
+  runtimeQualifier: app.node.tryGetContext('runtimeQualifier') ?? 'DEFAULT',
+  docsDir: builtDir('site/out', 'cd site && npm install && npm run build'),
+  demoDir: builtDir('ui/dist', 'cd ui && npm install && npm run build'),
+  apiDir: builtDir(
+    'deploy/cdk/.build/api',
+    'python3 deploy/cdk/scripts/build-static-api.py --out deploy/cdk/.build'
+  ),
+  bootstrapFile: path.join(REPO_ROOT, 'deploy/cdk/.build/bootstrap.json'),
+  description:
+    'Two CloudFront endpoints for the Point Predictive engagement: the docs site ' +
+    'and the live fraud-underwriting demo. The AgentCore runtimes are NOT owned ' +
+    'here; they belong to `agentcore deploy`.',
+});
+
+app.synth();

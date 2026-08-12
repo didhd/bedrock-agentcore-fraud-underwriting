@@ -235,11 +235,26 @@ a `caveats` array stating what was not measured.
 
 ## Deploy to AgentCore Runtime
 
+**Deploying into your own account: read [`deploy/DEPLOY.md`](deploy/DEPLOY.md).** It
+is the end-to-end path, verified by execution, and it covers the two failure modes
+that cost the most time here: `./deploy/vendor.sh` is mandatory before every deploy
+(skip it and a missing module is reported as a 30-second init timeout), and
+`MOCK_MODE` defaults to mock (so a runtime with no env block returns a complete,
+plausible stream having called Bedrock zero times).
+
 ```bash
 npm install -g @aws/agentcore          # 1.0.0-preview.22, node >= 20
 (cd agentcore/cdk && npm install)      # required: the vended CDK pins its own tsc
+./deploy/vendor.sh                     # REQUIRED — vendors the shared packages
 agentcore validate --json
 agentcore deploy --dry-run
+```
+
+Two CloudFront endpoints — the docs site and the live demo — are a second, separate
+stack, deployed with one command:
+
+```bash
+PYTHON=$(which python3) ./deploy/deploy-sites.sh
 ```
 
 `agentcore configure` and `agentcore launch` do **not** exist in the current CLI.
