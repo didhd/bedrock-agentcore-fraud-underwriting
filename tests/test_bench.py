@@ -960,9 +960,12 @@ def test_readme_states_the_measurement_status_honestly():
     ):
         assert command in text, f"README is missing the {command!r} command"
 
-    # `agentcore configure` and `agentcore launch` do not exist in this CLI (they
-    # print help and exit 0). The README is allowed to SAY they do not exist --
-    # and does -- but must never present one inside a runnable command block.
+    # `agentcore configure` and `agentcore launch` do not exist in this CLI: it prints
+    # `error: unknown command` and exits 1. (The exit-0 no-op belongs to the DEPRECATED pip
+    # starter toolkit, whose console script is also named `agentcore` -- attributing that
+    # behaviour to the npm CLI is a mistake this repo has made twice.) The README is allowed
+    # to SAY they do not exist -- and does -- but must never present one inside a runnable
+    # command block.
     for phantom in ("agentcore configure", "agentcore launch"):
         assert phantom in text, (
             f"README should warn that {phantom!r} does not exist in this CLI"
