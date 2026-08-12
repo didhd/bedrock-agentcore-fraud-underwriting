@@ -123,3 +123,12 @@ deploy/cdk/cdk.context.json
 # verified SQL; never commit it. deploy/cdk/lambda-rds/bundle.sh refuses to build if this
 # is not ignored.
 deploy/cdk/lambda-rds/use_cases.json
+
+# `agentcore deploy` stages a COPY of each runtime's vendored tree under
+# agentcore/<agent>/staging/. Those copies include prompts/verbatim/ -- the customer's nine
+# agent prompts, their semantic model and their confidential analyst queries -- so the
+# top-level `prompts/verbatim/` rule does not reach them. A `git add -A` after a deploy
+# staged 180 of those files into a commit; caught before any push, and this is the rule that
+# stops it happening again.
+agentcore/*/staging/
+agentcore/*/.staging/
