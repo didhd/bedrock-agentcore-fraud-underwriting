@@ -9,6 +9,37 @@
  * is unavoidable, and this is it, kept as small as the job allows: the two static
  * sites are pure S3, and only `/api/stream/*` reaches Lambda.
  *
+ * AUTH: THE SDK AND THE EXECUTION ROLE, NOT HAND-ROLLED SIGV4
+ *
+ * The first version of this file signed the request itself with node:crypto to
+ * avoid a bundler. It returned HTTP 403 from the service:
+ *
+ *   The request signature we calculated does not match the signature you provided.
+ *
+ * The reason is a rule that is easy to read past: in a SigV4 canonical request,
+ * every path segment must be URI-encoded **twice** for every service except S3.
+ * The runtime ARN sits in the path as a segment, so it is already
+ * `arn%3Aaws%3Abedrock-agentcore%3A...` in the URL and has to appear as
+ * `arn%253Aaws%253A...` in the string that gets signed. Encoding it once produces a
+ * signature that is wrong in a way nothing local can detect -- it fails only
+ * against the real service, and the message points at your secret key rather than
+ * at your canonicalisation.
+ *
+ * So this uses `@aws-sdk/client-bedrock-agentcore`, which canonicalises correctly
+ * and picks credentials up from the execution role through the default provider
+ * chain. No keys, no tokens, nothing to rotate, and the whole class of signing bug
+ * is gone rather than fixed. The cost is a bundler, which `NodejsFunction` in the
+ * CDK stack runs with esbuild -- emitting **CommonJS**, not ESM. Bundling this file
+ * to ESM produced a runtime failure on the very first import:
+ *
+ *   Dynamic require of "node:https" is not supported
+ *     at node_modules/@smithy/node-http-handler/...
+ *
+ * The SDK ships CJS, its HTTP handler requires node:https lazily, and esbuild's ESM
+ * output replaces `require` with a shim that throws on anything it could not resolve
+ * statically. Emitting CJS keeps `require` real. This file stays written in ESM
+ * syntax; only the output format changes.
+ *
  * WHY IT IS NOT A PASSTHROUGH
  *
  * The repo has two SSE frame vocabularies and they are not the same:
@@ -31,109 +62,27 @@
  * defaulted to 0 -- a false `cost_usd: 0` would read as "this call was free"
  * instead of "this call's usage was unavailable". The three static-shaped fields
  * the UI needs and the runtime does not send (`rate`, `analysis_title`, and the
- * synthesizer's tier) come from bootstrap.json, generated at build time by
+ * synthesizer's rate) come from bootstrap.json, generated at build time by
  * deploy/cdk/scripts/build-static-api.py from agents/pricing.py and
  * agents/models.py, so no rate card is retyped in JavaScript.
- *
- * NO SDK, NO DEPENDENCIES
- *
- * SigV4 is ~40 lines of node:crypto. The alternative is bundling
- * @aws-sdk/client-bedrock-agentcore, which is not in the Node 22 runtime's
- * built-in SDK set, so it would mean a build step and a version to keep current
- * for one signed POST.
  */
 
 import crypto from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import {
+  BedrockAgentCoreClient,
+  InvokeAgentRuntimeCommand,
+} from '@aws-sdk/client-bedrock-agentcore';
 
-const REGION = process.env.RUNTIME_REGION;
+import BOOTSTRAP from './bootstrap.json';
+
 const RUNTIME_ARN = process.env.RUNTIME_ARN;
+const RUNTIME_REGION = process.env.RUNTIME_REGION;
 const QUALIFIER = process.env.RUNTIME_QUALIFIER ?? 'DEFAULT';
-const SERVICE = 'bedrock-agentcore';
 
-/** Static per-model facts (rates, tiers, analysis titles) generated from Python. */
-let BOOTSTRAP;
-async function bootstrap() {
-  BOOTSTRAP ??= JSON.parse(await readFile(new URL('./bootstrap.json', import.meta.url), 'utf8'));
-  return BOOTSTRAP;
-}
-
-// ---------------------------------------------------------------------------
-// SigV4
-// ---------------------------------------------------------------------------
-
-const sha256hex = (value) => crypto.createHash('sha256').update(value, 'utf8').digest('hex');
-const hmac = (key, value) => crypto.createHmac('sha256', key).update(value, 'utf8').digest();
-
-/**
- * Sign one POST to the AgentCore data plane.
- *
- * The URI path is `/runtimes/{agentRuntimeArn}/invocations` (botocore's
- * bedrock-agentcore/2024-02-28 model). The ARN is a path SEGMENT, so its colons and
- * slashes must be percent-encoded, and SigV4 requires the canonical request to use
- * that same already-encoded form -- encode once, then sign and fetch the identical
- * string, or the signature will not match what the service canonicalises.
- */
-function signedRequest(payload, sessionId) {
-  const encodedArn = encodeURIComponent(RUNTIME_ARN);
-  const path = `/runtimes/${encodedArn}/invocations`;
-  const query = `qualifier=${encodeURIComponent(QUALIFIER)}`;
-  const host = `${SERVICE}.${REGION}.amazonaws.com`;
-
-  const now = new Date();
-  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
-  const dateStamp = amzDate.slice(0, 8);
-  const payloadHash = sha256hex(payload);
-
-  // Signed headers must be lowercase and sorted. Content-Type is included because
-  // the service reads it, and an unsigned header the service uses is a mismatch
-  // waiting to happen.
-  const headers = {
-    'content-type': 'application/json',
-    host,
-    'x-amz-content-sha256': payloadHash,
-    'x-amz-date': amzDate,
-    'x-amzn-bedrock-agentcore-runtime-session-id': sessionId,
-  };
-  if (process.env.AWS_SESSION_TOKEN) {
-    headers['x-amz-security-token'] = process.env.AWS_SESSION_TOKEN;
-  }
-
-  const signedHeaders = Object.keys(headers).sort().join(';');
-  const canonicalHeaders = Object.keys(headers)
-    .sort()
-    .map((k) => `${k}:${headers[k].toString().trim()}\n`)
-    .join('');
-
-  const canonicalRequest = [
-    'POST',
-    path,
-    query,
-    canonicalHeaders,
-    signedHeaders,
-    payloadHash,
-  ].join('\n');
-
-  const scope = `${dateStamp}/${REGION}/${SERVICE}/aws4_request`;
-  const stringToSign = [
-    'AWS4-HMAC-SHA256',
-    amzDate,
-    scope,
-    sha256hex(canonicalRequest),
-  ].join('\n');
-
-  const kDate = hmac(`AWS4${process.env.AWS_SECRET_ACCESS_KEY}`, dateStamp);
-  const kRegion = hmac(kDate, REGION);
-  const kService = hmac(kRegion, SERVICE);
-  const kSigning = hmac(kService, 'aws4_request');
-  const signature = crypto.createHmac('sha256', kSigning).update(stringToSign, 'utf8').digest('hex');
-
-  headers.authorization =
-    `AWS4-HMAC-SHA256 Credential=${process.env.AWS_ACCESS_KEY_ID}/${scope}, ` +
-    `SignedHeaders=${signedHeaders}, Signature=${signature}`;
-
-  return { url: `https://${host}${path}?${query}`, headers };
-}
+// One client for the container's lifetime. Credentials come from the execution
+// role and the provider chain refreshes them, so there is nothing to rebuild
+// per invocation.
+const client = new BedrockAgentCoreClient({ region: RUNTIME_REGION });
 
 // ---------------------------------------------------------------------------
 // Vocabulary translation
@@ -148,6 +97,8 @@ function sentenceCount(text) {
 
 const nullable = (value) => (value === undefined ? null : value);
 
+const specOf = (domain) => BOOTSTRAP.agents.find((a) => a.domain === domain) ?? {};
+
 /**
  * Translate one runtime frame into zero or more UI frames.
  *
@@ -155,7 +106,7 @@ const nullable = (value) => (value === undefined ? null : value);
  * apart: it carries the adjudication (the UI's `synthesis_completed`) and the run's
  * timing and cost roll-up (the UI's `run_completed`) in a single terminal object.
  */
-function translate(frame, boot, state) {
+function translate(frame) {
   switch (frame.event) {
     case 'start':
       return [
@@ -167,11 +118,11 @@ function translate(frame, boot, state) {
           mock_mode: frame.mock_mode,
           measured_tokens: frame.measures_tokens,
           execution_path:
-            'AgentCore Runtime (bedrock-agentcore.invoke_agent_runtime) -> ' +
+            'AgentCore Runtime (bedrock-agentcore:InvokeAgentRuntime) -> ' +
             'agents.fanout.fan_out_streaming + agents.synthesize.synthesize',
-          synthesizer_model: boot.synthesizer_model,
+          synthesizer_model: BOOTSTRAP.synthesizer_model,
           agents: (frame.domains ?? []).map((domain) => {
-            const spec = boot.agents.find((a) => a.domain === domain) ?? {};
+            const spec = specOf(domain);
             return {
               domain,
               agent_name: spec.agent_name ?? null,
@@ -187,8 +138,7 @@ function translate(frame, boot, state) {
     case 'agent_start':
       return [{ event: 'agent_started', domain: frame.domain, at_ms: frame.at_ms }];
 
-    case 'agent_done': {
-      const spec = boot.agents.find((a) => a.domain === frame.domain) ?? {};
+    case 'agent_done':
       return [
         {
           event: 'agent_completed',
@@ -201,7 +151,7 @@ function translate(frame, boot, state) {
           sentence_count: sentenceCount(frame.analysis),
           model: nullable(frame.model),
           tier: nullable(frame.tier),
-          rate: spec.rate ?? null,
+          rate: specOf(frame.domain).rate ?? null,
           latency_ms: nullable(frame.latency_ms),
           model_latency_ms: nullable(frame.model_latency_ms),
           finished_at_ms: nullable(frame.finished_at_ms),
@@ -216,7 +166,6 @@ function translate(frame, boot, state) {
           prompt_cache: nullable(frame.prompt_cache),
         },
       ];
-    }
 
     case 'agent_failed':
       return [
@@ -251,7 +200,7 @@ function translate(frame, boot, state) {
           key_check: frame.key_check,
           model: nullable(synthesis.model),
           tier: nullable(synthesis.tier),
-          rate: boot.synthesizer_rate ?? null,
+          rate: BOOTSTRAP.synthesizer_rate ?? null,
           latency_ms: nullable(synthesis.latency_ms),
           model_latency_ms: nullable(synthesis.model_latency_ms),
           measured: nullable(synthesis.measured),
@@ -284,15 +233,14 @@ function translate(frame, boot, state) {
 
     case 'error':
       // The runtime turns a mid-stream exception into a terminal `error` frame
-      // AFTER HTTP 200. Pass it through under the name the UI's reducer checks
-      // first, so a failed run shows as failed rather than as a run that stopped.
-      state.sawError = true;
+      // AFTER HTTP 200, so a 200 is not evidence of a healthy run. Passed through
+      // under the name the UI's reducer checks first.
       return [{ event: 'error', error: frame.error, error_type: nullable(frame.error_type) }];
 
     default:
-      // Francis's token deltas and anything added later. Forwarded verbatim rather
-      // than dropped: the UI reducer ignores what it does not know, and silently
-      // swallowing frames here would hide a future contract change.
+      // Anything added later. Forwarded verbatim rather than dropped: the UI
+      // reducer ignores what it does not recognise, and silently swallowing frames
+      // here would hide a future contract change.
       return [frame];
   }
 }
@@ -304,60 +252,56 @@ function translate(frame, boot, state) {
 const APP_ID = /^APP-\d{3,6}$/i;
 
 export const handler = awslambda.streamifyResponse(async (event, responseStream) => {
-  const path = event.rawPath ?? '';
-  const match = path.match(/\/api\/stream\/([^/?]+)/);
+  const rawPath = event.rawPath ?? '';
 
-  const write = (obj) => responseStream.write(`data: ${JSON.stringify(obj)}\n\n`);
-
-  const meta = {
+  responseStream = awslambda.HttpResponseStream.from(responseStream, {
     statusCode: 200,
     headers: {
       'content-type': 'text/event-stream; charset=utf-8',
       'cache-control': 'no-cache, no-store',
+      // Belongs on the response, not on a CloudFront ResponseHeadersPolicy, which
+      // rejects this header by name.
       'x-accel-buffering': 'no',
     },
-  };
-  responseStream = awslambda.HttpResponseStream.from(responseStream, meta);
+  });
+
+  const write = (obj) => responseStream.write(`data: ${JSON.stringify(obj)}\n\n`);
 
   try {
+    const match = rawPath.match(/\/api\/stream\/([^/?]+)/);
     if (!match) {
-      write({ event: 'error', error: `no application id in path ${JSON.stringify(path)}` });
+      write({ event: 'error', error: `no application id in path ${JSON.stringify(rawPath)}` });
       return;
     }
     const appId = decodeURIComponent(match[1]).toUpperCase();
     if (!APP_ID.test(appId)) {
-      // Validated before signing anything: the id goes into a request body, and an
-      // id-shaped allowlist is cheaper than reasoning about what the runtime does
-      // with an arbitrary string.
+      // Validated before anything is invoked: the id goes into a request body, and
+      // an id-shaped allowlist is cheaper than reasoning about what the runtime
+      // does with an arbitrary string.
       write({ event: 'error', error: `not a valid application id: ${appId}` });
       return;
     }
 
-    const boot = await bootstrap();
-    // AgentCore enforces a 33-character minimum on runtimeSessionId; randomUUID is
-    // 36 with its hyphens, uuid4().hex would be 32 and rejected.
-    const sessionId = crypto.randomUUID();
-    const payload = JSON.stringify({ application_id: appId });
-    const { url, headers } = signedRequest(payload, sessionId);
+    const response = await client.send(
+      new InvokeAgentRuntimeCommand({
+        agentRuntimeArn: RUNTIME_ARN,
+        qualifier: QUALIFIER,
+        // AgentCore enforces a 33-character minimum on runtimeSessionId.
+        // randomUUID() is 36 with its hyphens; a hex uuid4 would be 32 and rejected.
+        runtimeSessionId: crypto.randomUUID(),
+        contentType: 'application/json',
+        accept: 'text/event-stream',
+        payload: new TextEncoder().encode(JSON.stringify({ application_id: appId })),
+      })
+    );
 
-    const upstream = await fetch(url, { method: 'POST', headers, body: payload });
-    if (!upstream.ok) {
-      const detail = await upstream.text();
-      write({
-        event: 'error',
-        error: `AgentCore returned HTTP ${upstream.status}: ${detail.slice(0, 600)}`,
-      });
-      return;
-    }
-
-    const state = { sawError: false };
     const decoder = new TextDecoder();
     let buffer = '';
 
-    for await (const chunk of upstream.body) {
+    for await (const chunk of response.response) {
       buffer += decoder.decode(chunk, { stream: true });
-      // SSE frames are separated by a blank line. Hold the tail: a frame split
-      // across two TCP chunks must not be parsed as two broken frames.
+      // SSE frames are separated by a blank line. The tail is held back: a frame
+      // split across two chunks must not be parsed as two broken frames.
       let split;
       while ((split = buffer.indexOf('\n\n')) !== -1) {
         const raw = buffer.slice(0, split);
@@ -370,11 +314,15 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream)
         } catch {
           continue;
         }
-        for (const out of translate(frame, boot, state)) write(out);
+        for (const out of translate(frame)) write(out);
       }
     }
   } catch (error) {
-    write({ event: 'error', error: `${error.name}: ${error.message}` });
+    write({
+      event: 'error',
+      error: `${error.name}: ${error.message}`,
+      error_type: error.name,
+    });
   } finally {
     responseStream.end();
   }
