@@ -1,5 +1,28 @@
 # Preserving the Snowflake semantic-layer guardrails via MCP
 
+> **CORRECTED 2026-08-12.** Three claims below were wrong and are fixed in place; the
+> migration posture they argue for is unchanged and still right. What was wrong:
+>
+> 1. **`cortex_analyst_query(semantic_view=..., question=...)` does not exist.** Snowflake's
+>    managed MCP server has user-defined tool names (the fixed part is
+>    `type: "CORTEX_ANALYST_MESSAGE"`), takes a single `message` argument, and binds the
+>    semantic view server-side.
+> 2. **SigV4 cannot authenticate to Snowflake.** SigV4 is verified by AWS services --
+>    AgentCore Gateway and Runtime, API Gateway, Lambda function URLs -- and Snowflake is
+>    not one of them. Snowflake's own AgentCore guide uses a **programmatic access token
+>    (PAT)** as a bearer header. That is what `signal_layer/sources/snowflake.py` sends.
+> 3. **Cortex Analyst returns generated SQL, not rows.** `/api/v2/cortex/analyst/message`
+>    answers with a SQL statement; a second call to `/api/v2/statements` executes it. A
+>    one-call design is the specific error that made the previous integration fictional.
+>
+> Implemented instead: `SIGNAL_MODE` (`fixtures` | `cortex` | `aurora`) on
+> `app.runtime_support.build_signal_payload`, with the PAT in one Secrets Manager secret.
+> `./deploy/connect-snowflake.sh` writes it, grants the runtimes read access, and PROBES it
+> before offering to switch modes -- so the customer supplies a key and finds out in seconds
+> whether it works. `cortex` mode RAISES rather than falling back to fixtures: an
+> adjudication computed from demo data while everyone believed it came from the consortium
+> is the one failure this port must not be able to produce.
+
 ## The challenge
 
 The biggest risk in moving this fraud system off Snowflake is not porting the
@@ -32,25 +55,37 @@ guardrails stay in Snowflake; the agents on AgentCore call it as a tool.
 
 ```
 Agents (Bedrock AgentCore Runtime, Strands)
-      |  MCP: tools/list, tools/call
+      |  SIGNAL_MODE=cortex, through build_signal_payload
       v
-Amazon Bedrock AgentCore Gateway
-      |  target: Cortex Analyst MCP server  (auth: SigV4 / OAuth)
+signal_layer/sources/snowflake.py   (PAT from Secrets Manager)
+      |  1. POST /api/v2/cortex/analyst/message   -> GENERATED SQL
+      |  2. POST /api/v2/statements               -> rows
       v
 Snowflake Cortex Analyst  ->  FRAUD_CONSORTIUM_SEMANTIC_VIEW
       (natural language -> governed SQL -> guardrails -> rows)
+
+A Gateway target is the right shape when the tool is called BY a model. This is called by
+the pipeline before any agent runs, so it is a direct read rather than a tool -- which also
+keeps "agents interpret; they never query" intact. The Gateway is already deployed and
+serves reference data (the alert dictionary); a Cortex tool for ad-hoc analyst questions
+would be added there, not here.
 ```
 
-AgentCore Gateway turns an existing API or MCP server into a managed set of MCP
-tools with auth, so the agents get a governed `cortex_analyst_query` tool
-without any credentials on the client and without re-implementing SQL logic.
+AgentCore Gateway turns an existing API or MCP server into a managed set of MCP tools with
+auth. It is the right shape for a tool a MODEL calls, and the deployed gateway
+(`ppfraud-reference`) does exactly that for reference data. It is the wrong shape for the
+per-application signal read, which happens BEFORE any agent runs -- routing it through a
+model-facing tool would put a tool call in the hot path and hand an agent the ability to
+query, which the signal/analysis split exists to prevent.
 
-`tools/cortex_analyst_mcp.py` implements this boundary. In `MOCK_MODE` it
-returns a signal envelope built from the synthetic dataset (framed exactly like
-a Cortex Analyst MCP response: semantic view, question, generated SQL,
-guardrails applied, and the returned signal rows). Set `CORTEX_ANALYST_MCP_URL`
-to a Gateway endpoint to switch to the live path; the analysis layer does not
-change.
+`signal_layer/sources/snowflake.py` implements the boundary instead, selected by
+`SIGNAL_MODE`. The PAT lives in one Secrets Manager secret; no credential reaches the agent
+side, and no SQL logic is re-implemented. The analysis layer does not change -- the
+specialists receive the same `SignalPayload` either way, which is the property that makes
+this a config change rather than a migration.
+
+(`tools/cortex_analyst_mcp.py` is the previous, fictional attempt at this boundary and is
+superseded. It still calls a tool signature that does not exist; see CLAUDE.md's TODO.)
 
 ## Separate the signal layer from the analysis layer
 
@@ -64,7 +99,7 @@ This demo enforces that split:
 
 | Phase | Layer    | Responsibility                                             | Writes SQL? |
 |-------|----------|------------------------------------------------------------|-------------|
-| 1     | Signal   | Cortex Analyst semantic view via MCP retrieves governed signals | Yes (in Snowflake) |
+| 1     | Signal   | Cortex Analyst semantic view retrieves governed signals (2 calls) | Yes (in Snowflake) |
 | 2     | Analysis | Specialists + the orchestrator interpret signals + application data | No |
 
 See it end to end:
@@ -92,23 +127,38 @@ and returns the adjudication.
   source and later move individual signal queries to AWS-native stores if they
   choose, without touching the analysis layer.
 
-## Live wiring sketch (Strands MCP client)
+## Live wiring: what actually runs
+
+```bash
+# One command. Prompts for four values, one of them the PAT.
+./deploy/connect-snowflake.sh
+
+#   1. writes {account_url, pat, semantic_view, warehouse} to one Secrets Manager secret
+#   2. grants every agent runtime secretsmanager:GetSecretValue on it
+#   3. PROBES: authenticates, runs `select current_account()`, and asks Cortex Analyst
+#      about the semantic view -- so a wrong warehouse or an expired PAT is one clear
+#      error, seconds after the key is pasted
+#   4. only then offers to switch modes
+
+./deploy/connect-snowflake.sh --enable      # SIGNAL_MODE=cortex on every runtime
+./deploy/vendor.sh && agentcore deploy --target default --yes
+./deploy/connect-snowflake.sh --probe       # re-test the stored key any time
+./deploy/connect-snowflake.sh --disable     # back to the committed fixtures
+```
 
 ```python
-from mcp.client.streamable_http import streamablehttp_client
-from strands.tools.mcp import MCPClient
-
-cortex = MCPClient(lambda: streamablehttp_client(CORTEX_ANALYST_MCP_URL))
-with cortex:
-    tools = cortex.list_tools_sync()          # includes cortex_analyst_query
-    signals = cortex.call_tool_sync(
-        tool_use_id="signal-APP-1004",
-        name="cortex_analyst_query",
-        arguments={"semantic_view": "FRAUD_CONSORTIUM_SEMANTIC_VIEW",
-                   "question": "signals + _context for application APP-1004"},
-    )
-# hand `signals` to the specialists; they interpret, they do not query
+# signal_layer/sources/snowflake.py, the two calls that matter
+analyst = ask_analyst(f"Return every fraud signal and its paired _context field for {app_id}")
+rows = run_sql(analyst["sql"])        # a SECOND call; call one returned SQL, not rows
+# `rows` carries the guardrails the semantic view applied. The specialists interpret them
+# and never query.
 ```
+
+**Untested against a live account.** There is no Snowflake on the AWS side of this, so the
+first real round trip happens on the customer's key. That is precisely what `--probe` is
+for, and why the projection in `build_cortex_payload` tolerates several plausible column
+names rather than assuming one: the semantic view decides its own, and being wrong there
+should surface as a shape mismatch on the first probe rather than as a wrong adjudication.
 
 ## Reference resources
 

@@ -49,7 +49,7 @@ fans out to five specialists turns a ~3s answer into a ~15s one. The hook logs a
 warning when it fires, so a prompt-following regression is visible in CloudWatch
 rather than silent.
 
-MEMORY IS OPTIONAL AND ENV-GATED
+MEMORY IS OPTIONAL, ENV-GATED, AND SCOPED PER ANALYST
 
 ``AgentCoreMemorySessionManager`` is attached ONLY when ``FRANCIS_MEMORY_ID`` (or
 ``MEMORY_FRANCISMEMORY_ID``, the env var name the CLI generates from the
@@ -58,6 +58,20 @@ MEMORY IS OPTIONAL AND ENV-GATED
 variables from deployed state, which is empty locally. Attaching it
 unconditionally would make every local run fail on a boto call to a store that
 does not exist.
+
+The store now carries LONG-TERM strategies -- SEMANTIC into
+``/analysts/{actorId}/facts`` and SUMMARIZATION into
+``/summaries/{actorId}/{sessionId}`` -- so a returning analyst is recognised instead of
+restating themselves. Two things are load-bearing and both fail silently if missed:
+
+  * ``retrieval_config`` must name the SAME namespace templates the strategies write to.
+    Extraction succeeding while retrieval reads a different path looks exactly like
+    memory not working, because the write side reports success.
+  * the actor is the ANALYST, from the allowlisted
+    ``X-Amzn-Bedrock-AgentCore-Runtime-Custom-User-Id`` header -- not the persona. It used
+    to be the constant ``FRANCIS_NAME``, which made every analyst share one memory: facts
+    one person stated came back to everyone. The header must be in the runtime's
+    ``requestHeaderAllowlist`` or AgentCore strips it before the entrypoint sees it.
 """
 
 from __future__ import annotations
@@ -66,7 +80,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 # See app/underwriter/main.py for why this bootstrap exists: the AgentCore CLI
 # treats this directory as the import root (uvicorn main:app with cwd here; a zip
@@ -119,6 +133,7 @@ from prompts.loader import (  # noqa: E402
     FRANCIS_ORCHESTRATION_PROMPT,
     FRANCIS_RESPONSE_FORMAT,
 )
+from tools.gateway import build_gateway_client  # noqa: E402
 from tools.specialists import (  # noqa: E402
     MAX_TOOLS_PER_QUERY,
     SPECIALIST_TOOL_NAMES,
@@ -250,7 +265,74 @@ def _memory_id() -> str | None:
 MEMORY_BATCH_SIZE = int(os.environ.get("FRANCIS_MEMORY_BATCH_SIZE", "5"))
 
 
-def _session_manager(session_id: str) -> Any | None:
+#: The headers an analyst's identity can arrive on, in order of preference. There are TWO
+#: because the two ways of calling a runtime send different headers, and picking one means
+#: the other silently shares memory:
+#:
+#:   X-Amzn-Bedrock-AgentCore-Runtime-User-Id
+#:       InvokeAgentRuntime's own `runtimeUserId` parameter (botocore's
+#:       bedrock-agentcore/2024-02-28 model). This is what boto3 sends -- so it is what
+#:       ui/chat.py and the edge Lambda send -- and being a first-class AgentCore header it
+#:       needs no allowlist.
+#:
+#:   X-Amzn-Bedrock-AgentCore-Runtime-Custom-User-Id
+#:       an arbitrary header, which is what `agentcore invoke -H ...` and the AgentCore
+#:       workshop use. It MUST be in the runtime's `requestHeaderAllowlist` in
+#:       agentcore.json or AgentCore strips it before the entrypoint sees it.
+#:
+#: Measured: calling with `runtimeUserId="rebecca"` logged "no
+#: x-amzn-...-custom-user-id header on this request" and fell back to the shared actor,
+#: because only the custom name was checked. Both are read now.
+ACTOR_HEADERS: Final[tuple[str, ...]] = (
+    "x-amzn-bedrock-agentcore-runtime-user-id",
+    "x-amzn-bedrock-agentcore-runtime-custom-user-id",
+)
+
+
+def actor_id_of(context: Any) -> str:
+    """Whose memory this turn reads and writes.
+
+    Per ANALYST, not per persona. The previous value was the constant FRANCIS_NAME, which
+    made every analyst in the company share one memory: facts one person stated came back
+    to everyone, and a summary of one case leaked into the next. That is wrong on privacy
+    and wrong on usefulness.
+
+    Read from the allowlisted custom header, exactly as the AgentCore workshop's Lab 2
+    does. `FRANCIS_ACTOR_ID` still overrides for a single-tenant deployment, and the
+    persona name remains the last resort so an un-headered call degrades to shared memory
+    rather than failing -- but it is logged, because silently sharing memory is the failure
+    mode worth seeing.
+    """
+    override = os.environ.get("FRANCIS_ACTOR_ID")
+    if override:
+        return override
+
+    headers = getattr(context, "request_headers", None) or {}
+    if isinstance(headers, dict):
+        # Header names are case-insensitive on the wire and the SDK does not normalise
+        # them, so match lower-cased rather than by exact key.
+        lowered = {str(k).lower(): v for k, v in headers.items()}
+        for name in ACTOR_HEADERS:
+            value = lowered.get(name)
+            if value:
+                return str(value)[:120]
+
+    # Log what DID arrive. "the header is missing" and "the header arrived under a name I
+    # do not check" are indistinguishable without this, and the difference decides whether
+    # the fix is in the caller or here.
+    log.warning(
+        "none of %s on this request (headers present: %s), so memory falls back to the "
+        "shared actor %r. Pass runtimeUserId (boto3) or -H %s (CLI) to scope memory per "
+        "analyst.",
+        ", ".join(ACTOR_HEADERS),
+        sorted(str(k).lower() for k in headers) if isinstance(headers, dict) else type(headers).__name__,
+        FRANCIS_NAME,
+        ACTOR_HEADERS[1],
+    )
+    return FRANCIS_NAME
+
+
+def _session_manager(session_id: str, actor_id: str) -> Any | None:
     """An AgentCoreMemorySessionManager when memory is configured, else None.
 
     Strictly optional and env-gated. Failure to construct it is logged and
@@ -276,13 +358,25 @@ def _session_manager(session_id: str) -> Any | None:
             AgentCoreMemorySessionManager,
         )
 
+        from bedrock_agentcore.memory.integrations.strands.config import RetrievalConfig
+
+        # Long-term recall needs BOTH halves. The memory declares SEMANTIC and
+        # SUMMARIZATION strategies with these namespace templates, and retrieval has to
+        # name the same paths or the strategies extract records nobody ever reads -- which
+        # looks identical to memory not working, because the write side succeeds silently.
+        retrieval_config = {
+            f"/analysts/{actor_id}/facts": RetrievalConfig(top_k=3, relevance_score=0.3),
+            f"/summaries/{actor_id}/{session_id}": RetrievalConfig(
+                top_k=3, relevance_score=0.3
+            ),
+        }
+
         config = AgentCoreMemoryConfig(
             memory_id=memory_id,
             session_id=session_id,
-            # One actor per deployed persona. Overridable so a real deployment can
-            # scope memory per underwriter instead.
-            actor_id=os.environ.get("FRANCIS_ACTOR_ID", FRANCIS_NAME),
+            actor_id=actor_id,
             batch_size=MEMORY_BATCH_SIZE,
+            retrieval_config=retrieval_config,
         )
         return AgentCoreMemorySessionManager(config)
     except Exception as exc:
@@ -296,7 +390,7 @@ def _session_manager(session_id: str) -> Any | None:
         return None
 
 
-def build_francis(session_id: str) -> tuple[Any, ToolCapHook]:
+def build_francis(session_id: str, actor_id: str) -> tuple[Any, ToolCapHook]:
     """A fresh Francis Agent for one invocation, plus its tool-cap hook.
 
     Fresh per invocation, never cached: ``Agent.stream_async`` raises
@@ -348,11 +442,15 @@ def build_francis(session_id: str) -> tuple[Any, ToolCapHook]:
     agent = Agent(
         model=model,
         system_prompt=SYSTEM_PROMPT,
-        tools=list(SPECIALIST_TOOLS),
+        # The eight specialists plus whatever the reference gateway offers. The gateway
+        # client is appended, not merged: it is an MCP client object, and Strands discovers
+        # its tools at runtime rather than at construction, so the tool list here stays a
+        # faithful record of what THIS code owns.
+        tools=[*SPECIALIST_TOOLS, *([gateway] if (gateway := build_gateway_client()) else [])],
         hooks=[cap_hook],
         callback_handler=None,  # we stream events ourselves; no stdout printing
         retry_strategy=build_retry_strategy(),
-        session_manager=_session_manager(session_id),
+        session_manager=_session_manager(session_id, actor_id),
         name=FRANCIS_NAME,
     )
     return agent, cap_hook
@@ -400,6 +498,7 @@ async def invoke(payload, context):
     """
     run_started = time.perf_counter()
     session_id = session_id_of(context)
+    actor_id = actor_id_of(context)
     question = extract_prompt(payload)
     reset_call_log()
 
@@ -449,7 +548,7 @@ async def invoke(payload, context):
             }
             return
 
-        agent, cap_hook = build_francis(session_id)
+        agent, cap_hook = build_francis(session_id, actor_id)
         seen_tools: set[str] = set()
         chunks: list[str] = []
         result: Any = None

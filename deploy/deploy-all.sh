@@ -31,7 +31,19 @@ PY="${PYTHON:-python3}"
 TARGET="${TARGET:-default}"
 
 echo "=============================================================="
-echo " 1/2  agents  ->  stack AgentCore-ppFraud-default"
+echo " 1/3  reference tools  ->  stack PpFraudReferenceTools"
+echo "=============================================================="
+
+# FIRST, and the ordering is forced by the CLI rather than chosen. The Gateway target in
+# agentcore.json must contain its Lambda's ARN, and the CLI reads that file BEFORE it
+# synthesises -- so a function created by the agent stack could never be referenced from
+# the config that creates the agent stack. Same ordering the AgentCore workshop uses, where
+# the Lambda is a prerequisite whose ARN is retrieved before the agent is deployed.
+PYTHON="$PY" ./deploy/reference-tools.sh
+
+echo
+echo "=============================================================="
+echo " 2/3  agents  ->  stack AgentCore-ppFraud-default"
 echo "=============================================================="
 
 # Not optional, and skipping it fails misleadingly: `agentcore package` roots each
@@ -50,7 +62,7 @@ agentcore deploy --target "$TARGET" --yes
 
 echo
 echo "=============================================================="
-echo " 2/2  websites  ->  stack PpFraudSites"
+echo " 3/3  websites  ->  stack PpFraudSites"
 echo "=============================================================="
 PYTHON="$PY" ./deploy/deploy-sites.sh
 
