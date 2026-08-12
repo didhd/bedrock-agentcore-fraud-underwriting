@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { Separator } from "@/components/ui/separator"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { AgentConfigTooltip } from "@/components/AgentConfigTooltip"
 import { Metric, RiskBadge, StateChip, StatTile } from "@/components/atoms"
 import { cn } from "@/lib/utils"
 import { EM_DASH, integer, ms, rateLabel, seconds, shortModel, usd } from "@/lib/format"
@@ -84,16 +85,18 @@ function AgentTile({
           <TooltipTrigger asChild>
             <button
               type="button"
-              className="cursor-help truncate text-left font-mono text-[0.6875rem] text-muted-foreground"
+              className="cursor-help truncate text-left font-mono text-[0.6875rem] text-muted-foreground underline decoration-dotted decoration-from-font underline-offset-2"
+              aria-label={`${card.agent_name} model and configuration`}
             >
               {shortModel(card.model)}
             </button>
           </TooltipTrigger>
-          <TooltipContent>
-            <span className="flex flex-col gap-1">
-              <span className="font-mono">{card.model ?? EM_DASH}</span>
-              <span>Rate: {rateLabel(card.rate)}</span>
-            </span>
+          <TooltipContent className="max-w-none">
+            <AgentConfigTooltip
+              config={card.config}
+              model={card.model}
+              rateLabel={rateLabel(card.rate)}
+            />
           </TooltipContent>
         </Tooltip>
         <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">

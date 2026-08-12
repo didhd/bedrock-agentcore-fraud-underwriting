@@ -67,12 +67,21 @@ def main() -> int:
     # here is how that returns.
     from ui.server import _rate_for as rate_of  # noqa: PLC2701
 
+    def _config_of(role: str):
+        try:
+            from agents.agent_config import agent_config  # noqa: PLC0415
+
+            return agent_config(role)
+        except Exception:
+            return None
+
     bootstrap = {
         "generated_from": "agents.models + agents.pricing + prompts.loader "
         "(never hand-written; see this script's docstring)",
         "synthesizer_model": SYNTHESIZER_MODEL,
         "synthesizer_tier": tier_label(SYNTHESIZER_MODEL),
         "synthesizer_rate": rate_of(SYNTHESIZER_MODEL),
+        "synthesizer_config": _config_of("synthesizer"),
         "agents": [
             {
                 "domain": domain,
@@ -84,6 +93,12 @@ def main() -> int:
                 # ("Return only the final analysis"), so this is null for them and
                 # nothing here may invent one.
                 "analysis_title": ANALYSIS_TITLES.get(domain),
+                # The exact request-time config -- reasoning on/off and its effort,
+                # max output tokens, prompt provenance and size, prompt-cache verdict.
+                # Baked so the CloudFront tooltip shows the same facts localhost does.
+                # NOTE: prompt TEXT is deliberately absent; it is customer-confidential
+                # and this JSON is served from a public URL.
+                "config": _config_of(domain),
             }
             for domain in DOMAINS
         ],

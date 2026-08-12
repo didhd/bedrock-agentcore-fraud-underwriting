@@ -86,6 +86,7 @@ from app.runtime_support import (  # noqa: E402
     parse_risk_band,
     risk_band_form,
     session_id_of,
+    usage_frame_fields,
 )
 from prompts.loader import DOMAINS  # noqa: E402
 
@@ -251,13 +252,18 @@ async def invoke(payload: Any, context: Any) -> dict[str, Any]:
             "char_count": len(analysis),
             "model": frame.get("model"),
             "tier": frame.get("tier"),
-            "measured": frame.get("measured"),
+            # `usage` is a NESTED dict with camelCase keys (inputTokens,
+            # cacheReadInputTokens, ...), not four flat snake_case fields. Reading
+            # `frame["input_tokens"]` returned None for all four on every specialist, so
+            # the cost column populated -- cost_usd IS top level -- while In / Out /
+            # Cache read / Cache write were em dashes for all eight. That reads as
+            # "unmeasured", which is this UI's honest marker, so it looked deliberate.
+            # `usage_frame_fields` is the same flattener the in-process path uses, which
+            # is why the in-process topology never showed this.
+            "measured": frame.get("usage") is not None,
             "source": frame.get("source"),
-            "model_latency_ms": frame.get("model_latency_ms"),
-            "input_tokens": frame.get("input_tokens"),
-            "output_tokens": frame.get("output_tokens"),
-            "cache_read_tokens": frame.get("cache_read_tokens"),
-            "cache_write_tokens": frame.get("cache_write_tokens"),
+            "model_latency_ms": frame.get("latency_ms"),
+            **usage_frame_fields(frame.get("usage")),
             "cost_usd": frame.get("cost_usd"),
             "stop_reason": frame.get("stop_reason"),
             "prompt_cache": frame.get("prompt_cache"),

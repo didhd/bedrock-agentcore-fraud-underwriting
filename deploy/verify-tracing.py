@@ -11,11 +11,17 @@ travels with each request, so "tracing works" is not something to assume from a 
 deploy -- the failure looks identical to success in every place except the trace view.
 
 So this script does the one thing that settles it: it starts a trace of its own, invokes
-the orchestrator with that trace as the parent, and then asks X-Ray whether the
-specialists' spans came back under the SAME trace id. A pass means the span tree in the
-CloudWatch GenAI Observability console is one tree rooted at the orchestrator. A fail
-means nine disconnected traces, which is worse than no tracing because it looks like
-tracing.
+the orchestrator with that trace as the parent, and then reads every runtime's `spans` log
+stream to see whether the specialists reported under the SAME trace id. A pass means the
+span tree in the CloudWatch GenAI Observability console is one tree rooted at the
+orchestrator. A fail means nine disconnected traces, which is worse than no tracing
+because it looks like tracing.
+
+READ THE LOG GROUPS, NOT X-RAY. This script asked `xray:BatchGetTraces` first and got
+"no spans on trace ..." for a trace that had ten of them. With the unified span
+destination -- the default for new agents in this region -- AgentCore delivers spans to
+each agent's own log group rather than to X-Ray's trace store, so BatchGetTraces returns
+an empty result that is indistinguishable from propagation being broken.
 
 HOW THE CONTEXT TRAVELS
 
@@ -23,10 +29,15 @@ HOW THE CONTEXT TRAVELS
 
 `InvokeAgentRuntime` carries W3C trace context as request parameters (botocore's
 bedrock-agentcore/2024-02-28 model): `traceParent` -> header `traceparent`, plus
-`traceState`, `baggage`, and the X-Ray-format `traceId` -> `X-Amzn-Trace-Id`. The
-orchestrator re-injects its active span into each child call in
-app/distributed_fanout.py. `runtimeSessionId` is reused unchanged so all nine runtimes
-also land in one session.
+`traceState`, `baggage`, and the X-Ray-format `traceId` -> `X-Amzn-Trace-Id`.
+
+This script passes them explicitly because it runs on a laptop with no ADOT to do it.
+The orchestrator does NOT: inside an instrumented runtime, ADOT's botocore patch already
+propagates, and supplying the parameters as well changes a request botocore has signed,
+which fails with "The request signature we calculated does not match". See
+`app/distributed_fanout._trace_headers`. `runtimeSessionId` IS passed on every hop -- it
+is an ordinary API parameter -- and reusing the orchestrator's value is what puts all
+nine runtimes in one session.
 
 WHY THE TRACE ID IS BUILT FROM AN X-RAY ID AND NOT AT RANDOM
 
@@ -36,8 +47,10 @@ generated 32-hex W3C id would be accepted on the wire and then be unqueryable. T
 builds the 32-hex W3C id from a valid X-Ray id so the same trace is addressable in both
 formats.
 
-Requires CloudWatch Transaction Search (already ACTIVE in this account) and a short
-wait: spans are ingested asynchronously, so the script polls.
+Requires CloudWatch Transaction Search, without which AgentCore cannot deliver spans to
+an agent's log group at all. Ingestion is asynchronous, so the script polls -- and it
+polls for a SECOND service to appear, because the orchestrator's own spans arriving prove
+nothing about propagation.
 """
 
 from __future__ import annotations
@@ -107,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         "--wait",
         type=int,
         default=150,
-        help="seconds to poll X-Ray for spans (default: 150; ingestion is async)",
+        help="seconds to poll for spans (default: 150; ingestion is async)",
     )
     parser.add_argument(
         "--timeout", type=int, default=420, help="invoke read timeout in seconds"
@@ -207,53 +220,94 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     # ---- the actual question -------------------------------------------------
-    xray = boto3.client("xray", region_name=region)
-    print(f"\n{DIM}polling X-Ray for spans on this trace (ingestion is async)...{RESET}")
+    #
+    # CloudWatch Logs, NOT X-Ray BatchGetTraces. This script asked X-Ray first and got
+    # "no spans on trace ..." for a trace that had ten of them: with the unified span
+    # destination (the default for new agents in this region) AgentCore delivers spans to
+    # each agent's OWN log group, not to X-Ray's trace store, so BatchGetTraces returns
+    # nothing and the failure is indistinguishable from broken propagation. The spans are
+    # in `/aws/bedrock-agentcore/runtimes/<id>-DEFAULT`, stream `spans`.
+    logs = boto3.client("logs", region_name=region)
+    groups = [
+        f"/aws/bedrock-agentcore/runtimes/{a.rsplit('/', 1)[-1]}-DEFAULT"
+        for a in [orchestrator, *[arns[d] for d in deployed_specialists]]
+    ]
+    print(f"\n{DIM}reading spans from {len(groups)} runtime log groups "
+          f"(ingestion is async)...{RESET}")
 
-    segments: list[dict] = []
+    by_service: Counter = Counter()
+    span_names: Counter = Counter()
+    other_traces: Counter = Counter()
+    sessions: set[str] = set()
     deadline = time.monotonic() + args.wait
     while time.monotonic() < deadline:
-        try:
-            result = xray.batch_get_traces(TraceIds=[xray_id])
-        except Exception as exc:  # noqa: BLE001
-            print(f"{RED}BatchGetTraces failed: {type(exc).__name__}: {exc}{RESET}")
-            return 1
-        traces = result.get("Traces") or []
-        if traces:
-            segments = traces[0].get("Segments") or []
-            if len(segments) > 1:
-                break
+        by_service.clear(); span_names.clear(); other_traces.clear(); sessions.clear()
+        for group in groups:
+            try:
+                events = logs.filter_log_events(
+                    logGroupName=group,
+                    logStreamNames=["spans"],
+                    startTime=int((time.time() - 1800) * 1000),
+                )["events"]
+            except Exception:
+                continue  # a specialist that has never run has no `spans` stream yet
+            for event in events:
+                message = event.get("message", "").strip()
+                if not message.startswith("{"):
+                    continue
+                try:
+                    doc = json.loads(message)
+                except json.JSONDecodeError:
+                    continue
+                trace = doc.get("traceId")
+                service = (
+                    ((doc.get("resource") or {}).get("attributes") or {}).get("service.name")
+                    or group.rsplit("/", 1)[-1]
+                )
+                if trace == w3c_id:
+                    by_service[service] += 1
+                    if doc.get("name"):
+                        span_names[doc["name"]] += 1
+                    session = (doc.get("attributes") or {}).get("session.id")
+                    if session:
+                        sessions.add(session)
+                elif trace:
+                    other_traces[trace] += 1
+        # Wait for the CHILDREN, not just the parent: the orchestrator's own spans
+        # appearing proves nothing about propagation.
+        if len(by_service) >= 2:
+            break
         time.sleep(10)
 
-    if not segments:
+    total = sum(by_service.values())
+    if not total:
         print(
-            f"{RED}FAIL{RESET}  no spans on trace {xray_id} after {args.wait}s.\n"
-            f"      Either the context did not propagate, or ingestion is slower than "
-            f"the wait. Re-run with --wait 300 before concluding it is broken."
+            f"{RED}FAIL{RESET}  no spans carrying trace {w3c_id} after {args.wait}s.\n"
+            f"      {len(other_traces)} other trace ids were present, so spans ARE being "
+            f"delivered -- the parent context did not propagate."
         )
         return 1
 
-    services: Counter = Counter()
-    for segment in segments:
-        try:
-            doc = json.loads(segment.get("Document") or "{}")
-        except json.JSONDecodeError:
-            continue
-        services[doc.get("name") or "<unnamed>"] += 1
-
-    print(f"\n  {len(segments)} spans on ONE trace, by service:")
-    for name, count in services.most_common():
+    print(f"\n  {total} spans on ONE trace ({w3c_id}), by service:")
+    for name, count in by_service.most_common():
         print(f"    {count:>3}  {name}")
+    print(f"\n  span names: {dict(span_names.most_common(6))}")
+    print(f"  session ids on this trace: {len(sessions)}"
+          + (f"  {DIM}{list(sessions)[0]}{RESET}" if len(sessions) == 1 else ""))
 
-    # A joined trace means the orchestrator AND at least one specialist reported under
-    # the same id. One service only means the children started their own traces.
-    distinct = len(services)
-    joined = distinct >= 2
+    joined = len(by_service) >= 2
+    one_session = len(sessions) <= 1
     mark = f"{GREEN}PASS{RESET}" if joined else f"{RED}FAIL{RESET}"
     print(
-        f"\n  {mark}  {distinct} distinct services on this trace"
-        + ("" if joined else "  -- the specialists did not inherit the parent context")
+        f"\n  {mark}  {len(by_service)} distinct runtimes reported under one trace"
+        + ("" if joined else "  -- only the orchestrator did, so the children started "
+                            "their own traces")
     )
+    if not one_session:
+        print(
+            f"  {YELLOW}WARN{RESET}  {len(sessions)} session ids on one trace; the "
+            f"orchestrator's runtimeSessionId is not reaching every child"
+        )
     print(
         f"\n{DIM}View it: "
         f"https://{region}.console.aws.amazon.com/cloudwatch/home?region={region}"

@@ -17,7 +17,7 @@ Which one is right depends on a number, not an opinion, and with both paths pres
 that number is one environment variable away. `evals/bench.py` can measure the same
 application through each.
 
-TRACE PROPAGATION IS THE WHOLE POINT OF THE HEADER PLUMBING
+TRACE PROPAGATION: ADOT DOES IT, AND DOING IT TWICE BREAKS SIGV4
 
 Eight independent runtimes produce eight unrelated traces unless the parent context
 travels with the request. ``InvokeAgentRuntime`` accepts it (botocore's
@@ -29,12 +29,18 @@ bedrock-agentcore/2024-02-28 model):
     traceId      -> header `X-Amzn-Trace-Id`                   X-Ray format
     runtimeSessionId -> `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id`
 
-This module injects the ACTIVE span's context with the configured OTel propagator
-rather than formatting a traceparent by hand, so whatever the ADOT distro is set up to
-emit is what goes on the wire. Reusing the orchestrator's own ``runtimeSessionId`` for
-all eight children is what groups them into one session in the CloudWatch GenAI
-Observability view; a fresh session id per child would scatter one application's work
-across nine sessions.
+ADOT does the trace propagation, and this module deliberately does NOT also do it.
+Passing ``traceParent`` as a request parameter from inside an instrumented runtime makes
+the call fail with "The request signature we calculated does not match" -- ADOT's
+botocore patch is already adding context to a request botocore has signed. Measured both
+ways; see :func:`_trace_headers`. The instrumentation emits a
+``Bedrock AgentCore.InvokeAgentRuntime`` CLIENT span with a ``parentSpanId``, so each
+child call is already a child span.
+
+``runtimeSessionId`` IS passed explicitly, because it is an ordinary API parameter rather
+than a header added after signing, and reusing the orchestrator's own value is what
+groups all nine runtimes into one session in the CloudWatch GenAI Observability view. A
+fresh session id per child would scatter one application's work across nine sessions.
 
 Result: one trace, one session, nine runtime spans, rooted at the orchestrator.
 
@@ -82,14 +88,37 @@ def specialist_arn(domain: str) -> str | None:
 
 
 def _trace_headers() -> dict[str, str]:
-    """W3C trace context for the ACTIVE span, as InvokeAgentRuntime parameter names.
+    """Explicit W3C trace parameters -- OFF by default, and that is a measured decision.
 
-    Uses the configured propagator via ``inject`` rather than formatting a traceparent
-    string, so this follows whatever ADOT is set up to emit instead of hard-coding a
-    format that could drift from it. Returns an empty dict when there is no active span
-    or no OTel at all -- the invocation still works, it just starts a new trace, which
-    is the correct degradation for a missing tracer.
+    DO NOT TURN THIS ON INSIDE AN AGENTCORE RUNTIME. Passing `traceParent` /
+    `traceState` / `baggage` to `InvokeAgentRuntime` from a runtime whose entrypoint is
+    wrapped by `opentelemetry-instrument` produces:
+
+        AccessDeniedException: The request signature we calculated does not match the
+        signature you provided.
+
+    Measured both sides on 2026-08-12. From a laptop with no ADOT, all four variants --
+    plain, traceParent, traceParent+traceState, baggage -- succeed and the specialist
+    returns a valid analysis. From inside the orchestrator, the same call 403s, and the
+    span records the failure under
+    `amazon/opentelemetry/distro/patches/_botocore_patches.py:patched_api_call`. ADOT's
+    botocore patch is already propagating context on this call; supplying it as a
+    request parameter as well changes the request after botocore signed it.
+
+    So propagation is ADOT's job here, not ours, and it does it: the emitted CLIENT span
+    is `Bedrock AgentCore.InvokeAgentRuntime` from scope
+    `opentelemetry.instrumentation.botocore.bedrock-agentcore`, carrying `parentSpanId`
+    and `aws.bedrock.agentcore.runtime.arn` -- i.e. the child call is already a child
+    span. `runtimeSessionId` is a normal API parameter, not a header we add, so it is
+    still passed explicitly and is what groups all nine runtimes into one session.
+
+    The escape hatch stays for a caller OUTSIDE a runtime -- deploy/verify-tracing.py
+    starts a trace from a laptop and must state the parent explicitly, because there is
+    no ADOT there to do it.
     """
+    if os.environ.get("PROPAGATE_TRACE_EXPLICITLY") != "1":
+        return {}
+
     try:
         from opentelemetry.propagate import inject  # noqa: PLC0415
     except Exception:
@@ -102,12 +131,13 @@ def _trace_headers() -> dict[str, str]:
         return {}
 
     out: dict[str, str] = {}
-    if carrier.get("traceparent"):
-        out["traceParent"] = carrier["traceparent"]
-    if carrier.get("tracestate"):
-        out["traceState"] = carrier["tracestate"]
-    if carrier.get("baggage"):
-        out["baggage"] = carrier["baggage"]
+    for param, header in (
+        ("traceParent", "traceparent"),
+        ("traceState", "tracestate"),
+        ("baggage", "baggage"),
+    ):
+        if carrier.get(header):
+            out[param] = carrier[header]
     return out
 
 
