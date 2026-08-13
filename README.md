@@ -398,6 +398,43 @@ is unavailable, use the VPC-attached Gateway Lambda instead:
 fixtures — an adjudication computed from 14 demo applications while everyone believed
 it came from the staging cluster is the one failure this port must never produce.
 
+### Step 5b — point the analyst tool at your real tables
+
+`DEFAULT_ALLOWLIST` in `deploy/cdk/lambda-rds/main.py` is a **placeholder guess**. Your table
+names are yours, so they are supplied at deploy time and never committed:
+
+```bash
+./deploy/connect-rds.sh --allow-tables <your_main_table>,<another>
+```
+
+It merges rather than replaces, so adding a table later does not revoke the earlier ones. Then
+ask the interactive agent for `get_schema` — it reads `information_schema` live and reports which
+allowlisted tables actually exist, so a name typo shows up as "not present in this database"
+rather than as an empty result.
+
+A read-only console over the same validated path is available on the **local** UI
+(`http://127.0.0.1:8080`, chat tab). It is deliberately not on the CloudFront build: that
+distribution is anonymously reachable and its Gateway authorizer is `NONE`, so a SQL surface
+there would let anyone on the internet query your database. Run the demo locally when you want to
+explore, and use the deployed agent for the analyst questions it was built for.
+
+**A note on what the signals need.** If your table is the raw application history rather than
+precomputed signals, `SIGNAL_MODE=aurora` has nothing to read — it expects the ~60 registry
+signals to already exist. `signal_layer/derive/contract.py` reports exactly what is computable
+from a raw application table and what is not:
+
+```
+53 of 60 registry signals derivable by SQL aggregation over an application history
+ 7 must be supplied  (2 dealer model scores, 2 reference-file lookups,
+                      credit-bureau inquiries, 2 performance-dependent dealer rates)
+14 columns required, 3 optional  -- see COLUMN_CONTRACT for the list and what each unblocks
+```
+
+The required columns are described by ROLE, not by name, so answering is a short list rather
+than a schema dump. Six of the 60 have more than one defensible window definition and are named
+in `NEEDS_CONFIRMATION` — a wrong window produces a plausible number and moves a fraud band
+silently, so those are asked rather than assumed.
+
 ### Step 6 — the two websites
 
 ```bash

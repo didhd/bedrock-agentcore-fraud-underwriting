@@ -172,6 +172,65 @@ says `MEDIUM RISK`/3 values and the PDF says `POSSIBLE RISK`/4; the eight `*_fla
 are `integer` because the contract says `Literal[0, 1]` (a substring test on the annotation
 repr got this wrong and produced `text` for all eight).
 
+### A stored function is the better shape for the derivation, and for the dialect gap
+PROPOSED, not built. Recorded because it is a better answer than the three options in
+`docs/rds-connection.md` and the reasoning should not have to be re-derived.
+
+The argument is **authorship, not round trips.** If we build the derivation we decide the window
+semantics, and six signals have more than one defensible reading — `ssn_apps_last_7d` has an EMPTY
+`interpretation` in the registry, so there is no customer sentence to read the answer off. A wrong
+window produces a plausible number and moves a fraud band silently. A function they own moves that
+decision to the people who already made it in Snowflake.
+
+  create function get_application_signals(p_application_id text) returns jsonb
+
+One call per application; our side reads a result instead of a table, which is a query change in
+`build_aurora_payload` rather than an architecture change. `payload_from_record` already rejects a
+payload missing any registry signal, so the contract is enforced without reimplementing anything.
+Row-level lender scoping can live inside it, which is the one thing the front-end team asked for
+that does not exist upstream today.
+
+It also fixes the 7-of-10 dialect failures, and it is the better FORM of option 2: views for the
+three parameterless use cases, functions for the seven parameterised ones. The 3-part-name problem
+and the dialect problem both disappear because the body runs in the target database, written by
+whoever owns it. And it restores the meaning of "verified" — today `run_use_case` runs SQL verified
+on SNOWFLAKE against PostgreSQL.
+
+Two honest costs: it is a schema write needing their DBA, and the performance question moves rather
+than disappears (28 aggregations per call over a table taking 3.4M reads/day needs the grouping keys
+indexed). It does NOT solve the 7 must-be-supplied signals, the disabled Data API, or table
+discovery.
+
+### Their staging RDS holds RAW APPLICATIONS, not precomputed signals
+Said plainly by their engineer on the 2026-08-13 call: *"these values don't exist anywhere and
+needs to be calculated using data scoring."* One main application table, queried like
+`select * from <schema>.<table> where <submitted_at> > '<date>' limit 10`. So `SIGNAL_MODE=aurora`
+against that database has **nothing to read** — it expects the ~60 registry signals to exist.
+
+`signal_layer/derive/contract.py` classifies what a derivation layer could produce, and the
+numbers are asserted by `tests/test_derive_contract.py`:
+
+- **53 of 60 derivable** — 28 aggregations over an application history, 6 row arithmetic, 19
+  threshold flags whose thresholds come from `SIGNAL_SPEC[name].interpretation` (the customer's
+  own sentence), so the flags are not our numbers.
+- **7 must be supplied** — 2 dealer model scores (their rule 21 keys them on different ids),
+  2 reference-file lookups, credit-bureau inquiries, 2 dealer rates that need loan PERFORMANCE
+  rather than applications. Named individually with reasons, because "cannot compute" must be a
+  statement about a signal, not a guess from its spelling.
+- **14 required columns, 3 optional**, described by ROLE. That turns "send us your schema" into a
+  list someone answers in one message.
+
+**The context problem does not exist, and that is what makes this safe.** The `_context` the
+anti-false-positive rules read is GENERATED — `fixtures/_build.py:context_row` emits
+`{signal, value, customer_interpretation}` with the interpretation read from `prompts/verbatim/`.
+So context costs nothing once a value exists, and still quotes the customer's own threshold.
+
+**The window semantics are the real risk.** `ssn_apps_last_7d` has an EMPTY interpretation in the
+registry, so there is no customer sentence to read a window off: seven days from this
+application's date or from today, inclusive or not? Six such signals are in `NEEDS_CONFIRMATION`.
+A wrong window produces a plausible number and moves a fraud band silently, which is worse than
+an error — so they are asked, never assumed.
+
 ### Five defects a customer's own deploy agent found, in one pass
 Deployed into a different account (2026-08-13). All five were ours, and four failed in a way
 that looked like something else:

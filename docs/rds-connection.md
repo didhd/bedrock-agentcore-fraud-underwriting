@@ -171,6 +171,100 @@ We are not choosing. Rewriting SQL their engineer verified would silently change
 question to put in front of them, and it is a better question than the one we were going to
 ask, because it comes with the measurement.
 
+## A stored function is a better shape than either, and it is not our idea
+
+**Status: PROPOSED, not built.** Nothing below is deployed or measured. It is recorded because it
+is a better answer than the three options above, and because the reasoning belongs somewhere
+before the next customer conversation.
+
+### The problem it solves is not performance
+
+Their engineer said it plainly on the 2026-08-13 call: *"these values don't exist anywhere and
+needs to be calculated using data scoring."* So a derivation layer is required either way, and
+`signal_layer/derive/contract.py` measures what it could produce: **53 of 60 signals derivable**
+from an application history, 7 that must be supplied, 14 required columns.
+
+If **we** build that layer, we issue roughly 28 aggregations per application and — more
+importantly — **we decide the window semantics.** Six of them have more than one defensible
+reading, and `ssn_apps_last_7d` is the clean example: seven days back from this application's date
+or from today, counting this application or not? Its `interpretation` field in the registry is
+**empty**, so there is no customer sentence to read the answer off. We would be guessing, and a
+wrong window produces a plausible number that moves a fraud band silently.
+
+That is the argument. Not round trips — *authorship*.
+
+### The interface
+
+```sql
+-- Owned by the customer, in the customer's database.
+create or replace function get_application_signals(p_application_id text)
+returns jsonb                 -- {"<signal_name>": <value>, ...}
+language sql stable;          -- or plpgsql; read-only either way
+```
+
+One call per application. Our side reads the result instead of a table — a query change in
+`build_aurora_payload`, not an architecture change. The `SIGNAL_MODE=aurora` seam is unchanged, and
+`payload_from_record` already rejects a payload missing any registry signal, so the contract is
+enforced without us reimplementing anything.
+
+| | We build the derivation | They expose a function |
+|---|---|---|
+| Round trips per application | ~28 aggregations | 1 |
+| Who defines the 7-day window | us, by guessing | them, once, visibly |
+| Who is wrong if a band moves | us | the definition's owner |
+| Row-level lender scoping | absent; 100% our post-processing | can live inside the function or an RLS view |
+| Their Snowflake logic | reinterpreted | ported by the people who wrote it |
+| Schema write to their database | none | yes — needs their DBA |
+
+### The two honest costs
+
+**It is a schema write.** Creating a function needs their DBA and their change process. That is the
+real friction and it is not ours to wave away.
+
+**Performance is a real question and it moves rather than disappears.** Twenty-eight aggregations
+over an application history, per call, on a table taking 3.4M reads/day. If the grouping keys — the
+hashed borrower identifier, phone, email, address + zip, employer, dealer — are not indexed, every
+call is several scans. Putting it in a function makes that *their* optimisation problem, which is
+the correct place for it, but the work still exists.
+
+### It also fixes the dialect gap, and it is the better form of option 2
+
+The seven use cases that do not run on PostgreSQL fail on Snowflake-only syntax, and the 3-part
+`db.schema.table` names cannot be fixed on our side at all. Exposing each verified query as a
+**view** (for the three that take no parameters) or a **function** (for the seven that do) removes
+both problems at once: the body runs in the target database where names resolve, and whoever writes
+it writes it in the target dialect.
+
+```sql
+create or replace view      uc_lender_directory                    as ...;
+create or replace function  uc_missed_fraud_patterns(p_year int)    returns setof record ...;
+```
+
+`run_use_case` then calls a stable name instead of executing dialect-specific SQL. We still do not
+rewrite their SQL — they do, and it stays theirs.
+
+And it restores the meaning of the word. Today `run_use_case` runs SQL they verified **on
+Snowflake** against PostgreSQL, where seven of ten do not parse. A function they wrote and tested
+on PostgreSQL is verified **for the target**, which is a stronger claim than anything currently
+true.
+
+### What it does not solve
+
+- **The 7 must-be-supplied signals.** A function cannot invent a dealer model score, a negative-file
+  hit, or a credit-bureau inquiry count.
+- **The Data API being disabled.** Transport is a separate question from computation.
+- **Which table to point at.** Still needs an answer.
+
+### The ask this replaces
+
+Instead of "send us the `information_schema` dump for the main table so we can write 28
+aggregations", the request becomes smaller and its answer is more certain:
+
+> Can you expose one read-only function that computes the signals from the application history —
+> `get_application_signals(application_id)` returning JSON? You own the definitions, particularly
+> the 7-day and 30-day windows. We validate the returned shape against the registry contract and
+> supply the list of signals that cannot be computed from applications at all.
+
 ## Failing loud
 
 `SIGNAL_MODE=aurora` with a missing or unusable connection **raises**. It does not fall back
