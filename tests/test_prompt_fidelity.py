@@ -148,6 +148,22 @@ def test_all_eighteen_customer_documents_are_packaged():
 @pytest.mark.parametrize("name", _verbatim_files())
 def test_verbatim_copy_is_byte_identical_to_docs_source(name):
     source = os.path.join(REPO_ROOT, SOURCES[name])
+    if not os.path.isfile(source):
+        # SKIP, not fail. `docs/` holds the customer's ORIGINALS and is gitignored, so it is
+        # absent from every clone and from the delivered material -- which made this test fail
+        # 18 times on a customer's first deploy and read as "prompt fidelity is broken".
+        #
+        # Fidelity is still enforced there: `test_manifest_hash_matches` checks all 18 sha256
+        # digests and does not depend on the originals. THIS test is the second source -- it
+        # catches a manifest regenerated to cover a drifted file, which a hash alone cannot.
+        # So it must run wherever the originals exist and stay quiet where they do not.
+        #
+        # Deliberately NOT fixed by copying verbatim/ -> docs/. That would make the diff
+        # tautological and delete the only check that regenerating the manifest cannot defeat.
+        pytest.skip(
+            f"{SOURCES[name]} is absent. It is the customer's original, gitignored and not "
+            "shipped; the sha256 gate in test_manifest_hash_matches still applies."
+        )
     with open(source, "rb") as handle:
         expected = handle.read()
     with open(VERBATIM_DIR / name, "rb") as handle:

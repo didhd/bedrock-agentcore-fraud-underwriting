@@ -176,6 +176,18 @@ print(f"    SIGNAL_MODE={mode} on {len(config['runtimes'])} runtimes")
 PYEOF
   agentcore validate --json --directory . >/dev/null
   echo "    run ./deploy/vendor.sh && agentcore deploy --target default --yes to apply"
+
+  # agentcore.json is COMMITTED in this repo by design -- the CLI reads it and the customer's
+  # own deploy has to reproduce ours. It now contains the cluster ARN, the secret ARN and the
+  # database name, which are not credentials but do identify your infrastructure. Said out loud
+  # here rather than left for someone to notice in a diff, because the decision is the
+  # operator's and the alternative (injecting them at deploy time from the gitignored state
+  # file) is a change to how every runtime gets its environment.
+  echo
+  echo "    NOTE: agentcore/agentcore.json now carries YOUR infrastructure identifiers"
+  echo "          (cluster ARN, secret ARN, database). That file is committed in this repo."
+  echo "          Decide whether that is acceptable before you commit it. No credential is"
+  echo "          in it -- the Data API fetches those from Secrets Manager itself."
 }
 
 VPC_SUBNETS=""

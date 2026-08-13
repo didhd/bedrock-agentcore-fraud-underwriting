@@ -7,6 +7,7 @@
 #   ./deploy/one-shot.sh --vpc vpc-x --subnets a,b --db-sg sg-y
 #                                                          # your VPC and your database
 #   ./deploy/one-shot.sh --plan                            # print what would happen, change nothing
+#   ./deploy/one-shot.sh --vpc-runtimes                    # runtimes in the VPC (measured to break; read the note)
 #   ./deploy/one-shot.sh --aurora-version 16.13            # regions differ; check before deploying
 #
 # WHY THE ORDER IS WHAT IT IS
@@ -20,8 +21,8 @@
 # first deploy is the only one that has to happen.
 #
 #   1. cdk deploy PpFraudData   VPC, interface endpoints, Aurora
-#   2. this script writes agentcore/agentcore.json  networkMode VPC + networkConfig + AURORA_*
-#   3. agentcore deploy         ten runtimes, in-VPC from birth
+#   2. this script writes agentcore/agentcore.json  networkMode PUBLIC + AURORA_*
+#   3. agentcore deploy         ten runtimes
 #   4. reference-tools + connect-rds   the Gateway targets, VPC-attached
 #   5. cdk deploy PpFraudSites  CloudFront, with the stream proxy attached to the same subnets
 #
@@ -49,6 +50,7 @@ WITH_NAT="false"
 PLAN_ONLY="false"
 AURORA_VERSION=""
 APPROVAL="any-change"
+VPC_RUNTIMES="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -69,6 +71,9 @@ while [[ $# -gt 0 ]]; do
     # Non-interactive. Kept OFF by default: the stack creates security-group rules, and a
     # customer running this in their own account should see them before they exist.
     --yes|-y)     APPROVAL="never"; shift ;;
+    # Put the RUNTIMES in the VPC. Off by default, and that default is measured rather than
+    # chosen -- see the block below where the config is written.
+    --vpc-runtimes) VPC_RUNTIMES="true"; shift ;;
     -h|--help)    sed -n '2,32p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1 (try --help)" >&2; exit 1 ;;
   esac
@@ -190,11 +195,36 @@ echo "==> wrote deploy/.vpc-config.json"
 # ---------------------------------------------------------------------------
 # The point of the whole script: agentcore.json carries VPC mode BEFORE the first deploy.
 # ---------------------------------------------------------------------------
-echo "==> setting networkMode=VPC on every runtime in agentcore/agentcore.json"
-"$PY" - "$OUT_SUBNETS" "$OUT_SG" "$OUT_VPC" "$OUT_CLUSTER" "$OUT_SECRET" "$OUT_DB" <<'PYEOF'
+# ---------------------------------------------------------------------------
+# THE RUNTIMES STAY PUBLIC BY DEFAULT, AND THAT IS A MEASUREMENT.
+#
+# All ten were deployed with networkMode: VPC and came up READY. They then failed at request
+# time with `APITimeoutError`: a private-isolated subnet cannot reach the GPT-5.6 synthesizer,
+# because the bedrock-mantle interface endpoint does not cover the bearer-token path that
+# OpenAIResponsesModel uses. Attaching compute to a VPC removes its default internet access and
+# the failure surfaces as a runtime timeout, not as a missing route.
+#
+# This script used to write VPC unconditionally, which made a customer's deploy agent revert it
+# on all ten runtimes by hand before it could deploy. Nothing needs it: invoking a runtime is a
+# public SigV4 call, the Data API is a public endpoint, and the Lambda -- which is what actually
+# has to reach a private database -- is VPC-attached either way.
+#
+# `--vpc-runtimes` still exists, because a customer whose policy forbids public-subnet-free
+# egress may need it. If you use it, you own proving that EVERY model the agents call is
+# reachable, by invoking them, not by listing endpoints.
+# ---------------------------------------------------------------------------
+if [[ "$VPC_RUNTIMES" == true ]]; then
+  echo "==> setting networkMode=VPC on every runtime in agentcore/agentcore.json"
+  echo "    WARNING: measured to fail on the GPT-5.6 synthesizer without NAT. Verify by"
+  echo "             invoking a runtime, not by listing endpoints."
+else
+  echo "==> leaving the runtimes networkMode=PUBLIC (measured default; --vpc-runtimes to change)"
+fi
+"$PY" - "$OUT_SUBNETS" "$OUT_SG" "$OUT_VPC" "$OUT_CLUSTER" "$OUT_SECRET" "$OUT_DB" "$VPC_RUNTIMES" <<'PYEOF'
 import json, sys
 
-subnets, sg, vpc, cluster, secret, database = sys.argv[1:7]
+subnets, sg, vpc, cluster, secret, database, vpc_runtimes_arg = sys.argv[1:8]
+vpc_runtimes = vpc_runtimes_arg == "true"
 path = "agentcore/agentcore.json"
 config = json.load(open(path))
 
@@ -217,8 +247,14 @@ if database and database != "None":
     env_wanted["AURORA_DATABASE"] = database
 
 for runtime in config.get("runtimes", []):
-    runtime["networkMode"] = "VPC"
-    runtime["networkConfig"] = network
+    if vpc_runtimes:
+        runtime["networkMode"] = "VPC"
+        runtime["networkConfig"] = network
+    else:
+        # PUBLIC, and networkConfig REMOVED rather than left behind: `agentcore validate`
+        # rejects networkConfig on a PUBLIC runtime, so a leftover block fails the deploy.
+        runtime["networkMode"] = "PUBLIC"
+        runtime.pop("networkConfig", None)
     if env_wanted:
         env = runtime.setdefault("envVars", [])
         by_name = {e["name"]: e for e in env}
@@ -229,7 +265,9 @@ for runtime in config.get("runtimes", []):
                 env.append({"name": name, "value": value})
 
 json.dump(config, open(path, "w"), indent=2)
-print(f"    {len(config.get('runtimes', []))} runtimes -> networkMode VPC, {len(network['subnets'])} subnets")
+mode = "VPC" if vpc_runtimes else "PUBLIC"
+extra = f", {len(network['subnets'])} subnets" if vpc_runtimes else ""
+print(f"    {len(config.get('runtimes', []))} runtimes -> networkMode {mode}{extra}")
 if env_wanted:
     print(f"    plus {', '.join(sorted(env_wanted))}")
 PYEOF
@@ -237,6 +275,18 @@ PYEOF
 echo "==> validating"
 agentcore validate --json --directory . >/dev/null
 echo "    agentcore validate passes"
+
+  # agentcore.json is COMMITTED in this repo by design -- the CLI reads it and the customer's
+  # own deploy has to reproduce ours. It now contains the cluster ARN, the secret ARN and the
+  # database name, which are not credentials but do identify your infrastructure. Said out loud
+  # here rather than left for someone to notice in a diff, because the decision is the
+  # operator's and the alternative (injecting them at deploy time from the gitignored state
+  # file) is a change to how every runtime gets its environment.
+  echo
+  echo "    NOTE: agentcore/agentcore.json now carries YOUR infrastructure identifiers"
+  echo "          (cluster ARN, secret ARN, database). That file is committed in this repo."
+  echo "          Decide whether that is acceptable before you commit it. No credential is"
+  echo "          in it -- the Data API fetches those from Secrets Manager itself."
 
 cat <<TEXT
 

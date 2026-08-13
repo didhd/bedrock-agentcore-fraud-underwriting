@@ -172,6 +172,34 @@ says `MEDIUM RISK`/3 values and the PDF says `POSSIBLE RISK`/4; the eight `*_fla
 are `integer` because the contract says `Literal[0, 1]` (a substring test on the annotation
 repr got this wrong and produced `text` for all eight).
 
+### Five defects a customer's own deploy agent found, in one pass
+Deployed into a different account (2026-08-13). All five were ours, and four failed in a way
+that looked like something else:
+
+1. **18 tests failed on their first run.** `test_verbatim_copy_is_byte_identical_to_docs_source`
+   opened `docs/<prompt>.txt` unconditionally. `docs/` holds the customer's ORIGINALS, is
+   gitignored, and is absent from every clone and from the delivered material — so it read as
+   "prompt fidelity is broken" when the sha256 gate was passing on all 18. It **skips** now, and
+   says why. Do NOT fix it by copying `verbatim/` → `docs/`: that makes the diff tautological and
+   deletes the only check a regenerated manifest cannot defeat.
+2. **`deploy/reference-tools.sh` clobbered a sibling Gateway target.** It patched EVERY
+   `lambdaFunctionArn` target, so on a gateway carrying two it pointed `UnderwritingSql` at the
+   alert-dictionary Lambda — the SQL tool answering alert lookups until `connect-rds.sh` happened
+   to repair it later. Keyed on target name now, as `connect-rds.sh` already was.
+3. **`deploy/one-shot.sh` unconditionally wrote `networkMode: VPC`**, which we had already
+   measured to break, so their agent reverted it on all ten runtimes by hand. PUBLIC is the
+   default now; `--vpc-runtimes` opts in and warns.
+4. **The chat UI counted Gateway tools against the two-specialist cap**, rendering
+   "3 of max 2 specialists" for a turn that violated nothing. `ToolCapHook` never counted them.
+5. `agentcore.json` is committed and `connect-rds.sh` writes the customer's cluster and secret
+   ARNs into it. Not credentials, but their infrastructure; both scripts now say so at the point
+   of writing so the operator decides.
+
+Their environment also settled two things: their staging cluster has `HttpEndpointEnabled:
+false`, so `SIGNAL_MODE=aurora` is unavailable there and `--enable` correctly refused; and the
+delivered examples file was `Verified_Query_Examples.rtf`, not the `.sql` name the brief assumed
+— nothing keys on it, because `tools/usecases` binds to the queries inside the semantic model.
+
 ### The customer's verified queries are Snowflake dialect: 7 of 10 do not run on PostgreSQL
 Measured, not predicted. `deploy/provision-semantic-schema.py` created all 24 of their tables in
 our Aurora cluster from the semantic model (2409 columns, 0 unmapped types, empty) and all ten

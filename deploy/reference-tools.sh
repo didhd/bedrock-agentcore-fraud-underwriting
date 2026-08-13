@@ -167,10 +167,21 @@ echo "==> writing the ARN into $CONFIG"
 import json, sys
 
 path, arn = sys.argv[1], sys.argv[2]
+#: This script owns exactly one target. Naming it here rather than patching whatever it finds
+#: is what stops it clobbering a sibling target's ARN.
+TARGET_NAME = "AlertDictionary"
 config = json.load(open(path))
 patched = 0
 for gateway in config.get("agentCoreGateways", []):
     for target in gateway.get("targets", []):
+        # KEYED ON THE TARGET NAME. Without this it patched EVERY lambdaFunctionArn target,
+        # so on a gateway carrying both targets it printed "2 target(s) updated" and pointed
+        # UnderwritingSql at the alert-dictionary Lambda. The read-only SQL tool then answered
+        # alert lookups until connect-rds.sh happened to repair it later in the sequence --
+        # a wrong answer from a working-looking tool, which is the worst shape of failure.
+        # Found by the customer's own deploy agent. connect-rds.sh already keyed on name.
+        if target.get("name") != TARGET_NAME:
+            continue
         block = target.get("lambdaFunctionArn")
         if block and block.get("lambdaArn") != arn:
             block["lambdaArn"] = arn
