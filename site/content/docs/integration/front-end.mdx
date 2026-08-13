@@ -1,0 +1,390 @@
+---
+title: Front-end integration
+description: Everything a staging UI needs to call these agents — which API, the exact SSE frame vocabularies, session and memory handling, which tool events to suppress, models, limits, and error shapes. Answers a front-end team's integration questionnaire from verified behaviour.
+---
+
+*Written against a front-end team's integration questionnaire. Every answer here is behaviour
+observed against the deployed runtimes, not a reading of the API reference. Account ids, cluster
+identifiers and role ARNs are deliberately absent — those are per-deployment and are handed over
+out of band.*
+
+The single most important line on this page: **a failed run still returns HTTP 200.** An exception
+raised mid-stream arrives as a terminal `data: {"error": …}` frame *after* the status line, so a
+client that checks only `response.ok` will render a successful-looking empty run. Inspect every
+frame.
+
+## 1. Identity and addressing
+
+**One AgentCore Runtime per UI agent. Not one agent with routing.** Ten runtimes are deployed:
+the eight fraud specialists, the batch orchestrator, and the interactive router.
+
+| UI agent | Runtime name | Independently invocable |
+|---|---|---|
+| Francis (orchestrator) | `<prefix>_francis` | yes |
+| Isaac (identity) | `<prefix>_identity` | yes |
+| Diana (dealer) | `<prefix>_dealer` | yes |
+| Sammy (straw) | `<prefix>_straw` | yes |
+| Emily (employment) | `<prefix>_employment` | yes |
+| Iris (income) | `<prefix>_income` | yes |
+| Sylvia (synthetic) | `<prefix>_synthetic` | yes |
+| Bruce (bust-out) | `<prefix>_bustout` | yes |
+| Renée (rings) | `<prefix>_rings` | yes |
+| batch adjudication | `<prefix>_underwriter` | yes |
+
+Each is addressed by its **runtime ARN**, which the deploy emits. The deployed name carries a
+service-generated suffix (`<prefix>_francis-XXXXXXXXXX`), so **never construct an ARN by
+string-building** — read it from the deployment output or `agentcore status`.
+
+**There is no "agent alias".** That is a classic Bedrock Agents concept. AgentCore Runtime uses a
+**`qualifier`**, which is an endpoint name; this deployment uses `DEFAULT` throughout and adds no
+named endpoints.
+
+**Staging and prod are separate accounts, therefore separate runtimes.** The deploy is driven by
+`agentcore/aws-targets.json`, one entry per environment; each produces its own stack and its own
+ten ARNs. There is no environment tag on a shared agent — a redeploy into a second account gives a
+second, unrelated set of ARNs. Keep them in your own config per environment.
+
+Renaming a runtime in `agentcore.json` changes its CloudFormation logical id, which **destroys and
+recreates** the runtime and therefore changes its ARN. Treat the names as fixed once a front end
+points at them.
+
+## 2. Auth
+
+**SigV4, IAM, no API keys.** There is no bearer-token or key-based mode on the runtime as
+deployed; the authorizer is IAM.
+
+From an EC2 staging host: **an instance role**. Do not issue access keys. The role needs one
+action:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "bedrock-agentcore:InvokeAgentRuntime",
+  "Resource": "arn:aws:bedrock-agentcore:<region>:<account>:runtime/<name>-*"
+}
+```
+
+Scope `Resource` to the runtimes the front end may call. The orchestrator alone is enough for a
+batch UI; a chat UI that offers per-specialist seats needs all ten.
+
+**Cross-account** is a role assumption, not a resource policy: AgentCore Runtime has no
+invoke-side resource policy to attach. So the account that owns the runtimes creates a role that
+trusts the front-end account, and the front-end host assumes it:
+
+```json
+{
+  "Effect": "Allow",
+  "Principal": { "AWS": "arn:aws:iam::<front-end-account>:role/<their-host-role>" },
+  "Action": "sts:AssumeRole",
+  "Condition": { "StringEquals": { "sts:ExternalId": "<agreed value>" } }
+}
+```
+
+Set an `ExternalId`. The assumed role carries the `InvokeAgentRuntime` grant above.
+
+If the front end needs per-analyst memory (§5), the runtime must also allowlist the custom user-id
+header. That is a runtime config change on our side, not an IAM change on yours.
+
+## 3. Networking
+
+**The public AWS API endpoint works, and that is what this deployment uses.** `bedrock-agentcore`
+is a normal SigV4 AWS API; no PrivateLink is required to invoke a runtime, and no IP allow-listing
+is needed on our side. Nothing here resembles the Snowflake network-policy problem.
+
+**PrivateLink is available if your policy requires it.** Interface VPC endpoints exist for every
+service in this path — verified with `aws ec2 describe-vpc-endpoint-services`:
+
+```
+com.amazonaws.<region>.bedrock-agentcore            InvokeAgentRuntime
+com.amazonaws.<region>.bedrock-agentcore-control    status / list
+com.amazonaws.<region>.bedrock-agentcore.gateway    the MCP tool endpoint
+```
+
+If your staging VPC has no egress, add the first one. It needs **private DNS enabled** — without
+it the SDK resolves the public hostname and the request leaves through a route that does not
+exist, which presents as a hang rather than an error.
+
+One trap worth stating: **attaching your own compute to a VPC removes its default internet
+access.** If the staging host moves into a private subnet, `bedrock-agentcore` becomes unreachable
+unless you add either NAT or that interface endpoint. Measured here, the failure surfaces as a
+request timeout rather than a routing error, so it reads as a broken agent.
+
+## 4. Invocation API and streaming shape
+
+**AgentCore Runtime `InvokeAgentRuntime`. Not classic Bedrock Agents `InvokeAgent`.** Different
+client, different response shape.
+
+```python
+client = boto3.client("bedrock-agentcore", region_name=REGION)   # not "bedrock-agent-runtime"
+response = client.invoke_agent_runtime(
+    agentRuntimeArn=ARN,
+    qualifier="DEFAULT",
+    runtimeSessionId=str(uuid.uuid4()),        # see §5 for the 33-char minimum
+    contentType="application/json",
+    accept="text/event-stream",                # omit for a single JSON response
+    payload=json.dumps({"application_id": "APP-1004"}).encode(),
+)
+body = response["response"]                    # a stream; read() or iterate
+```
+
+The stream is plain SSE: `data: <json>\n\n` per frame, one JSON object each. There are no
+`chunk`/`bytes` envelopes and no `trace` or `returnControl` events — those are classic Bedrock
+Agents concepts and do not appear.
+
+A debugging note before you start: `agentcore invoke --prompt '…'` prints
+`"success": true, "response": ""` for these runtimes **while they are streaming correctly**. The CLI
+renders text deltas and these frames are JSON objects. Do not debug a client against that empty
+string; call the API and read the bytes.
+
+### There are two frame vocabularies. Know which endpoint you are on.
+
+This is the thing most likely to cost a front-end team a day.
+
+**A. The runtime, called directly** (batch adjudication):
+
+```
+start            {"event":"start","session_id":"…","mock_mode":false,
+                  "signal_source":"aurora.rds_data_api","application_id":"APP-1004"}
+agent_start      {"event":"agent_start","domain":"identity","agent_name":"ISAAC_IDENTITY"}
+agent_done       {"event":"agent_done","domain":"identity","risk_band":"HIGH RISK",
+                  "latency_ms":17269.9,"input_tokens":2347,"output_tokens":296,
+                  "cost_usd":0.015808,"measured":true}
+agent_failed     {"event":"agent_failed","domain":"straw","failure":"…","at_ms":5375.7}
+synthesis_start  {"event":"synthesis_start"}
+done             {"event":"done","adjudication":{…21 keys…},"key_check":{…},
+                  "specialists":"8/8","timing":{…},"cost":{…}}
+```
+
+**B. The web edge** (`/api/stream/*`, what the browser sees through CloudFront) uses a *different*
+set of names for the same lifecycle:
+
+```
+run_started · agent_started · agent_completed · agent_failed
+synthesis_started · synthesis_completed · run_completed
+```
+
+The edge translates A into B. If you call the runtime directly you get A; if you go through the
+web layer you get B. Neither is wrong — but a client written against one and pointed at the other
+sees a stream of events it does not recognise and renders nothing.
+
+**C. Chat** (`/api/chat/{agent}`), for the interactive router:
+
+```
+chat_started    {"event":"chat_started","agent":"francis","agent_name":"MASTER_FRAUD_AGENT",
+                 "runtime":"…","session_id":"…","analyst_id":"…"}
+delta           {"event":"delta","text":"…"}                     ← token stream
+tool            {"event":"tool","phase":"tool_start","tool":"call_income_agent"}
+chat_completed  {"event":"chat_completed","answer":"## EXECUTIVE SUMMARY…","tools":[…],
+                 "latency_ms":26751,"model":"openai.gpt-5.6-luna",
+                 "input_tokens":5172,"output_tokens":215,"cost_usd":0.001471074}
+error           {"event":"error","error":"APITimeoutError: Request timed out."}
+```
+
+Map `delta` onto your existing delta event, `tool` onto your step/status event, and
+`chat_completed` onto your terminal event.
+
+### Structured output
+
+**The batch adjudication is structured, natively.** The `done` frame's `adjudication` is an object
+with **exactly 21 keys in a fixed order**, produced through Strands' `structured_output_model` —
+not parsed out of prose. It also carries a `key_check` block reporting `expected`, `actual`,
+`order_matches`, `missing`, `unexpected`, `valid`, so a client can assert the contract rather than
+trust it. Note there is **no `application_id` key inside** the object; it travels in the envelope.
+
+**Specialist output is titled prose, deliberately.** Each specialist returns a narrative with an
+exact title string, and two of them (bust-out and rings) return **no title at all** because their
+source prompts omit it. Render it as markdown; do not parse it into fields.
+
+**No native charts or tables.** Nothing emits a chart or table block. Francis's answers are
+markdown and follow a required shape — `## EXECUTIVE SUMMARY`, `## ANALYSIS`, and a conditional
+`###RECOMMENDATIONS` — so a markdown renderer covers it. Any richer visual is yours to build from
+the structured `adjudication` object, which is the reliable source.
+
+## 5. Session and conversation state
+
+**AgentCore manages it. Do not resend history.** Pass a `runtimeSessionId` and the runtime keeps
+conversation state within that session; each session is isolated in its own microVM. This is
+materially different from the Cortex approach of resending the full message list.
+
+Two constraints that bite:
+
+- **`runtimeSessionId` has a 33-character client-side minimum.** `uuid4().hex` is 32 and is
+  rejected. Use `str(uuid.uuid4())` — 36 with dashes.
+- **One session per conversation, and per seat.** Switching to a different specialist seat should
+  start a new session id, or the two conversations blend.
+
+**Long-term memory is scoped by ACTOR, not by session**, and the actor does not travel in the
+payload. It arrives as a signed header:
+
+```
+X-Amzn-Bedrock-AgentCore-Runtime-Custom-User-Id: <analyst id>
+```
+
+<Callout type="warn">
+`runtimeUserId` looks like the right parameter and is not: the service consumes it before the
+entrypoint sees it. Measured — memory falls back to a shared actor. The custom header above is the
+one that works, and it must be added **before** SigV4 signs the request. Added after, the signed
+value differs from the sent value and the call returns 403.
+</Callout>
+
+Without that header everything lands on one shared actor, and facts one analyst stated come back
+to the next one. The symptom is the agent greeting the wrong person by name.
+
+## 6. Tools, and which events to suppress
+
+Francis's tool surface as deployed:
+
+| Tool | Kind | Counts toward the 2-tool cap |
+|---|---|---|
+| `call_<domain>_agent` × 8 | specialist fan-out | **yes** |
+| `AlertDictionary___describe_alert` | Gateway reference lookup | no |
+| `AlertDictionary___list_alert_categories` | Gateway reference lookup | no |
+| `UnderwritingSql___get_schema` | Gateway, read-only SQL | no |
+| `UnderwritingSql___query_underwriting_data` | Gateway, read-only SQL | no |
+| `UnderwritingSql___list_use_cases` | Gateway, verified queries | no |
+| `UnderwritingSql___run_use_case` | Gateway, verified queries | no |
+
+**The eight specialists have no tools at all.** Zero. They receive only their own domain's
+projected signals and cannot query anything — a property asserted in two directions by
+`tests/test_rds_connection.py`.
+
+Her own prompt caps a turn at **two specialists**. Gateway lookups are not capped, because that
+rule is about fan-out latency and a dictionary lookup is not fan-out. A UI that counts every tool
+against the cap will render "3 of max 2" for a turn that violated nothing.
+
+### What to suppress
+
+You said you never render raw tool output because it can leak the lender-hash mapping. The
+equivalent here:
+
+- **Suppress the frame `{"event":"tool", …}` payload beyond `tool` and `phase`.** As emitted it
+  carries only the tool name and a phase, not the result — but treat the event type as the one to
+  filter on, and never surface a tool *result* if you add one.
+- **`UnderwritingSql___*` results are row data** from the underwriting database. Those go into the
+  model's context and could reach a client if a future frame carried them. Suppress by tool-name
+  prefix, not by inspecting content.
+- The Gateway tool name always has the shape `<TargetName>___<tool>`. A specialist call always has
+  the shape `call_<domain>_agent`. Filtering on those two patterns is stable.
+
+Row-level lender filtering **does not exist upstream today** — see §7. Assume 100% of it is your
+post-processing until that changes.
+
+## 7. What the agent queries for data
+
+Two paths, and only one of them involves a model writing SQL.
+
+**The signal path — no SQL is generated.** The eight specialists never query. The pipeline reads
+precomputed per-domain signals *before* any model runs, through one function, and projects each
+specialist's own view. The source is selected by a single environment variable: committed fixtures,
+Aurora PostgreSQL via the RDS Data API, or Snowflake Cortex Analyst. The `start` frame reports
+which one answered as `signal_source`, so a client can display provenance rather than assume it.
+
+**The analyst tool — the model does write SQL,** and only for the interactive router. It goes
+through a Lambda behind an AgentCore Gateway: `SELECT`/`WITH` only, one statement per call, a table
+allowlist, `%s` placeholders with values bound separately, and a 200-row cap applied twice. There
+is no Bedrock Knowledge Base and no vector store anywhere in this system.
+
+**No write tool is reachable by a model.** Adjudications are written back by the pipeline, with
+columns taken from the 21-key contract.
+
+<Callout type="warn">
+**On lender filtering.** The read-only SQL tool enforces *table* scope, not row or column scope.
+The real boundary is intended to be a `SELECT`-only database role with row-level policy on the
+database side; until that exists, nothing upstream restricts a row by lender. Every check in the
+Lambda is defence in depth on top of a grant that is the customer's to make.
+
+There is a proposed change that would move this upstream: exposing the signal computation and the
+verified queries as **stored functions or RLS views** in the source database, so the lender scope
+lives inside the definition rather than in your post-processing. It is a proposal, not deployed —
+plan for 100% client-side filtering today and treat any upstream scoping as a future reduction in
+what you must suppress.
+</Callout>
+
+## 8. Models and limits
+
+| Agent | Model | Max output tokens |
+|---|---|---|
+| identity, employment, income, synthetic, bust-out, rings | Claude Sonnet 5 | 4,096 |
+| dealer, straw | Claude Haiku 4.5 | 3,072 |
+| master synthesis | GPT-5.6 Luna (`bedrock-mantle`) | 4,096 |
+
+Models are per-agent and env-overridable; read them from `/api/agents` rather than hardcoding, so
+a model change does not require a front-end deploy.
+
+**Latency, measured on one real run** (one application, eight specialists, one synthesis):
+
+| | Measured |
+|---|---|
+| End to end | 55.7 s |
+| Slowest single specialist | 48.9 s |
+| Master synthesis | 6.7 s |
+| Fastest specialist | 16.5 s |
+
+That is **n=1**. Enough to size a timeout, not enough to quote a percentile — no p50 or p95 exists
+yet for this pipeline.
+
+**Timeouts to set on your side.** The synchronous request timeout is **15 minutes and is not
+adjustable**; a streaming response gets **60 seconds** of idle tolerance. Given a slowest observed
+specialist near 49 s, set a client read timeout of **at least 180 s** for a batch run and send a
+keepalive if your proxy idles connections sooner. A chat turn is far shorter — the observed range
+is roughly 5–27 s — but it is bounded by the same limits.
+
+**Throttling and retries.** Bedrock returns `ThrottlingException`. The SDK default backoff here is
+aggressive for an interactive UI, so the runtimes use `[1, 2, 4, 8]` seconds over four attempts;
+one throttle then costs about a second rather than four. Mirror that on the client: **four
+attempts, exponential from 1 s, jittered**, and only for throttling and 5xx — never for a
+validation error.
+
+Account-level model quotas are the real ceiling at production volume, and the daily token ceiling
+on the mid-tier model is **not self-serve adjustable** — raise it with the account team before a
+load test rather than discovering it under one.
+
+## 9. Error handling
+
+**The shape that matters most:** a run that fails mid-stream returns **HTTP 200** and a terminal
+frame. Every frame must be inspected for an `error` key.
+
+```json
+{"event":"error","error":"APITimeoutError: Request timed out.",
+ "error_type":"APITimeoutError","session_id":"…"}
+```
+
+Batch runs additionally emit a structured failure when the fan-out cannot proceed, carrying
+per-specialist detail:
+
+```json
+{"event":"error","error":"All 8 specialists failed; there is nothing to synthesize.",
+ "error_type":"FanOutFailed","application_id":"APP-1004",
+ "failures":[{"domain":"synthetic","agent_name":"SYLVIA_SYNTHETIC","error":"…"}]}
+```
+
+<Callout type="info">
+**A partial failure is not an error.** The design degrades: 7 of 8 specialists still produces an
+adjudication. Treat `agent_failed` as a per-agent status, **never** as terminal — an early version
+of this UI aborted the whole run on any frame carrying an `error` key, so one slow specialist
+killed a valid adjudication.
+</Callout>
+
+Pre-stream failures are ordinary AWS SDK errors, before any frame arrives:
+
+| Condition | What you get |
+|---|---|
+| Auth / no permission | `AccessDeniedException`, HTTP 403 — names the principal and the action |
+| Runtime ARN wrong or not deployed | `ResourceNotFoundException`, HTTP 404 |
+| Throttled | `ThrottlingException`, HTTP 429 — retry with backoff |
+| `runtimeSessionId` under 33 chars | `ValidationException`, HTTP 400 — do not retry |
+| Malformed payload | `ValidationException`, HTTP 400 — do not retry |
+
+Map 403/404/400 to a terminal error in your SSE contract without retrying; map 429 and 5xx to the
+retry policy in §8; map a mid-stream `error` frame to the same terminal event as 4xx, and surface
+`error_type` — it is the difference between "the model timed out" and "the database refused".
+
+## What to ask us for, out of band
+
+Per environment, and not on this page:
+
+1. Account id and region
+2. The ten runtime ARNs (from `agentcore status`, not constructed)
+3. The role ARN to assume, and the `ExternalId`
+4. Whether the runtimes' `requestHeaderAllowlist` includes the custom user-id header, if you want
+   per-analyst memory

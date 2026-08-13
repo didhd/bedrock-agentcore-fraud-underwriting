@@ -7,6 +7,7 @@
 #   ./deploy/connect-rds.sh --probe             # test what is stored, change nothing
 #   ./deploy/connect-rds.sh --enable            # signals come from RDS instead of fixtures
 #   ./deploy/connect-rds.sh --disable           # back to the committed fixtures
+#   ./deploy/connect-rds.sh --allow-tables a,b  # let the SQL tool query the real tables
 #
 # WHAT GETS CONNECTED, AND THEY ARE TWO DIFFERENT THINGS
 #
@@ -203,6 +204,27 @@ case "${1:-}" in
     fi
     probe; set_mode aurora; exit 0 ;;
   --disable) set_mode fixtures; exit 0 ;;
+  # Let the read-only SQL tool query the customer's REAL table names. Supplied by the operator
+  # rather than committed: a table name is customer data, and DEFAULT_ALLOWLIST in
+  # deploy/cdk/lambda-rds/main.py is a placeholder guess which this EXTENDS, never replaces.
+  #   ./deploy/connect-rds.sh --allow-tables their_main_table,another
+  --allow-tables)
+    EXTRA_TABLES="${2:?--allow-tables needs a comma-separated list of table names}"
+    FN="$(aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
+      --query "Stacks[0].Outputs[?OutputKey=='UnderwritingSqlArn'].OutputValue" \
+      --output text 2>/dev/null || true)"
+    if [[ -z "$FN" || "$FN" == "None" ]]; then
+      echo "error: $STACK is not deployed. Run ./deploy/connect-rds.sh first." >&2
+      exit 1
+    fi
+    CURRENT="$(aws lambda get-function-configuration --region "$REGION" \
+      --function-name "$FN" --query 'Environment.Variables' --output json)"
+    "$PY" deploy/cdk/lambda-rds/merge_allowlist.py "$CURRENT" "$EXTRA_TABLES" /tmp/pp-rds-env.json
+    aws lambda update-function-configuration --region "$REGION" --function-name "$FN" \
+      --environment "file:///tmp/pp-rds-env.json" --query 'LastModified' --output text
+    aws lambda wait function-updated --region "$REGION" --function-name "$FN"
+    echo "    updated. get_schema will report these tables if they exist in the database."
+    exit 0 ;;
   --vpc)
     VPC_SUBNETS="${2:?--vpc needs subnet ids: --vpc subnet-a,subnet-b sg-x}"
     VPC_SGS="${3:?--vpc needs a security group id: --vpc subnet-a,subnet-b sg-x}"

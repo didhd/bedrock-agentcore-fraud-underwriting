@@ -43,6 +43,8 @@
     "platform/sdk-upgrade",
     "platform/deployment",
     "platform/semantic-layer",
+    "---Integration---",
+    "integration/front-end",
     "---Reference---",
     "reference/signal-layer",
     "reference/fixtures",
