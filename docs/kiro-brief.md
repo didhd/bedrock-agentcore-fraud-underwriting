@@ -51,7 +51,7 @@ report what you verified rather than what you ran.
 8. **Run what you write.** `MOCK_MODE=1 python3 -m pytest tests/ -q` — baseline is
    **1473 passed, 1 skipped**. A drop in the passed count is a regression, not a detail.
 
-## The eight traps, all of which fail silently
+## The nine traps, all of which fail silently
 
 Each of these has actually happened here. Three of them return HTTP 200.
 
@@ -65,6 +65,7 @@ Each of these has actually happened here. Three of them return HTTP 200.
 | 6 | `agentcore invoke` on a JSON SSE stream | `"success": true, "response": ""` | the runtime is streaming correctly. The CLI renders text deltas. Use boto3 `invoke_agent_runtime` and read the bytes |
 | 7 | Editing a shell script while it runs | syntax error after the work succeeded | bash reads scripts incrementally. Finish, then edit |
 | 8 | A green `connect-rds.sh --probe` | four stages `ok: true` | it ran on YOUR credentials. The runtime's execution role is a different principal and needs `rds-data:ExecuteStatement` + `secretsmanager:GetSecretValue`. Prove it by invoking the runtime, not by probing |
+| 9 | `SIGNAL_MODE=aurora` on a cluster with the Data API off | `HttpEndpointNotEnabledException` at stage `connect` | check first: `aws rds describe-db-clusters --query 'DBClusters[].{id:DBClusterIdentifier,http:HttpEndpointEnabled}'`. Enabling it MODIFIES a live cluster, so it is the customer's call — `--enable` refuses and leaves `fixtures`, which is correct |
 
 ## Deploy
 
@@ -121,8 +122,20 @@ Two of them, both required for the use-case tools and both gitignored:
 
 ```
 prompts/verbatim/FRAUDBOT_SEMANTIC_VIEW.yaml            947 KB, sha256 8839d5e2…
-prompts/verbatim/confidential_analyst_queries_082026.sql
+prompts/verbatim/<the verified-query examples file>     name varies by delivery
 ```
+
+The second file's name depends on what was sent — one delivery contained
+`Verified_Query_Examples.rtf`, another `confidential_analyst_queries_082026.sql`. Nothing keys
+on the name: `tools/usecases` binds to the queries **inside the semantic model**, so the
+examples file is corroboration rather than a dependency. Only the YAML is required.
+
+`docs/` is a separate matter. It holds the customer's ORIGINAL prompt files, is gitignored, and
+is normally absent — including from the delivered material. That is expected: 18 tests in
+`tests/test_prompt_fidelity.py` **skip** when it is missing, and say so. Prompt fidelity is
+still enforced, by the sha256 gate in `test_manifest_hash_matches`, which does not need the
+originals. Do NOT copy `prompts/verbatim/` into `docs/` to make those tests run — that makes the
+diff tautological and deletes the only check a regenerated manifest cannot defeat.
 
 Restore them from the delivered zip into `prompts/verbatim/` before deploying, then:
 

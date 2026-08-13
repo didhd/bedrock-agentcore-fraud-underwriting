@@ -54,6 +54,16 @@ import { EM_DASH, integer, ms, usd } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { AgentSeat } from "@/lib/types";
 
+/**
+ * How many of a turn's tool calls count against the two-specialist cap.
+ *
+ * A specialist call is `call_<domain>_agent`; a Gateway tool is `<Target>___<tool>`. The two
+ * are counted differently on purpose -- see the comment at the render site.
+ */
+function specialistToolCount(tools: string[]): number {
+  return tools.filter((tool) => /^call_[a-z]+_agent$/.test(tool)).length;
+}
+
 interface Turn {
   role: "user" | "agent";
   text: string;
@@ -382,8 +392,21 @@ export function ChatPanel({
                           {tool}
                         </Badge>
                       ))}
+                      {/* ONLY the specialist calls count. `ToolCapHook` counts only the eight
+                          `call_<domain>_agent` tools, deliberately: the customer's "MAXIMUM 2
+                          tools per query" is a rule about specialist FAN-OUT, written for
+                          latency. A Gateway lookup is not fan-out, and capping it would make
+                          Francis choose between answering "what is alert 164" and consulting a
+                          specialist.
+
+                          This counted every tool, so a legitimate turn using one specialist plus
+                          two Gateway tools rendered "3 of max 2 specialists" -- a contract
+                          violation on screen, from a turn that violated nothing. */}
                       <span className="text-[0.6875rem] text-muted-foreground">
-                        {turn.tools.length} of max 2 specialists
+                        {specialistToolCount(turn.tools)} of max 2 specialists
+                        {turn.tools.length > specialistToolCount(turn.tools)
+                          ? ` · ${turn.tools.length - specialistToolCount(turn.tools)} gateway (uncapped)`
+                          : ""}
                       </span>
                     </div>
                   ) : null}
