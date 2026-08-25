@@ -1661,6 +1661,16 @@ def test_report_selection_skips_only_recognised_non_bench_schemas():
         # invocation would mean inventing the shape of a distribution that was never
         # measured. The file publishes no percentile and says so in its own caveats.
         "pointpredictive.agentcore.deployed-runtime-smoke/1",
+        # One invocation of the deployed runtime AFTER the 2026-08-25 transient-retry
+        # patch (PATCH-2026-08-25.md), recorded to show that widening is_retryable did not
+        # regress the deployed path: 8/8 specialists, 21 keys in contract order,
+        # mock_mode false. Not a pipeline-bench run for the same reasons as the smoke
+        # report above -- n=1, no distribution, publishes no percentile.
+        # Worth being explicit about what it does NOT witness: no 503 occurred during the
+        # run, so it is evidence of NO REGRESSION and never evidence that the retry
+        # fires. That is proven by fault injection in tests/test_retry_transient.py,
+        # which is the only place the retry behaviour is actually observed.
+        "pointpredictive.agentcore.retry-patch-smoke/1",
     }
     collected = set(_committed_reports())
     for path in sorted(RESULTS_DIR.glob("*.json")):

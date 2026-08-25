@@ -858,3 +858,90 @@ def test_the_doc_admits_every_unproven_thing_the_code_admits() -> None:
         assert role in unproven_section, role
     # The calibration failure no model fixed is the customer's own bar, so it ranks high.
     assert "APP-1014" in unproven_section and "APP-1004" in unproven_section
+
+
+# ---------------------------------------------------------------------------
+# Every agent must get the PATCHED retry strategy.
+#
+# build_retry_strategy() is called from eight places (fanout x2, synthesize, francis
+# main, francis tools, and three evals). The transient-fault fix lives inside that one
+# function, so a new call site that constructs ModelRetryStrategy directly would build
+# an agent that silently does not retry a 503 -- the exact failure this closes, back
+# again on one code path only. That is unreviewable at the diff level, so it is asserted
+# at the source level instead.
+# ---------------------------------------------------------------------------
+
+_RETRY_OWNER = REPO_ROOT / "agents" / "models.py"
+
+
+def _first_party_python_files() -> list[Path]:
+    """Repo-owned sources only: no vendored copies, no venvs, no build output."""
+    roots = ("agents", "app", "evals", "signal_layer", "prompts", "tools", "ui", "observability")
+    skip = ("/staging/", "/.cache/", "/node_modules/", "/site-packages/", "/build/")
+    out: list[Path] = []
+    for root in roots:
+        for path in (REPO_ROOT / root).rglob("*.py"):
+            text = str(path)
+            # app/<runtime>/agents/... are vendor.sh copies of agents/ itself.
+            if any(marker in text for marker in skip):
+                continue
+            if "/app/" in text and "/agents/" in text:
+                continue
+            out.append(path)
+    return out
+
+
+def test_no_module_constructs_a_bare_ModelRetryStrategy() -> None:
+    """AST, not substring: prose in a docstring is not a call site.
+
+    The first version of this check was a grep and it fired on ``evals/tail_analysis``'s
+    module docstring, which merely NAMES the class while describing the ladder. Parsing
+    means the guard flags construction and only construction.
+    """
+    import ast
+
+    offenders = []
+    for path in _first_party_python_files():
+        if path.resolve() == _RETRY_OWNER.resolve():
+            continue  # the one place allowed to construct it
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:  # pragma: no cover - a broken file is another test's problem
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = (
+                func.id
+                if isinstance(func, ast.Name)
+                else func.attr
+                if isinstance(func, ast.Attribute)
+                else None
+            )
+            if name == "ModelRetryStrategy":
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
+    assert not offenders, (
+        "construct the strategy via agents.models.build_retry_strategy() so the "
+        f"transient-fault retries apply; bare construction at: {offenders}"
+    )
+
+
+def test_every_retry_strategy_call_site_gets_the_transient_extension() -> None:
+    """Constructed for real, then asked the question that matters.
+
+    Not a spelling check on the class name -- each call site's object is interrogated
+    with a synthetic 503, which is what the deployed runtime will actually see.
+    """
+    from botocore.exceptions import ClientError
+
+    five_oh_three = ClientError(
+        {"Error": {"Code": "ServiceUnavailableException", "Message": "synthetic"}},
+        "ConverseStream",
+    )
+    strategy = m.build_retry_strategy()
+    assert strategy.is_retryable(five_oh_three) is True
+
+    # Independent instances: the strategy carries per-invocation state (_current_attempt),
+    # so the fan-out must not be handed one shared object.
+    assert m.build_retry_strategy() is not strategy

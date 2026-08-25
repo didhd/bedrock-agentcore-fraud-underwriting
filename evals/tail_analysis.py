@@ -20,12 +20,17 @@ It answers four questions and refuses to answer a fifth it cannot:
      cause. This module fits that line and reports r^2 per domain, with and without the
      runs it identifies as stalls, because one stall destroys a correlation and hides
      the very effect being tested.
-  3. IS IT RETRIES? ``agents.models.build_retry_strategy`` configures
-     ``ModelRetryStrategy(max_attempts=4, initial_delay=1, max_delay=8)``. Read against
-     ``strands.event_loop._retry`` (1.26.0) that is a ladder of [1,2,4]s -- 7s worst case,
-     not 15s -- and it fires on ``ModelThrottledException`` and nothing else. A retry sleeps
-     inside the call, so it shows up as wall clock EXCEEDING the model's own ``latencyMs``.
-     That gap is computable per call, so the retry theory is falsifiable rather than assumed.
+  3. IS IT RETRIES? ``agents.models.build_retry_strategy`` configures max_attempts=4,
+     initial_delay=1, max_delay=8. Read against ``strands.event_loop._retry`` that is a
+     ladder of [1,2,4]s -- 7s worst case, not 15s. A retry sleeps inside the call, so it
+     shows up as wall clock EXCEEDING the model's own ``latencyMs``. That gap is
+     computable per call, so the retry theory is falsifiable rather than assumed.
+     NOTE, changed 2026-08-25: at the time this analysis ran, the strategy fired on
+     ``ModelThrottledException`` and nothing else, and the recorded verdict below is
+     therefore still correct for the run it describes. It now also retries Bedrock's
+     transient server faults (``agents.models.RETRYABLE_TRANSIENT_ERROR_CODES``), so a
+     RE-RUN would carry a wider retry surface than the stored numbers. The ladder is
+     unchanged, so the 7s bound still holds.
   4. WHAT IS THE FLOOR? ``asyncio.gather`` cannot return before its slowest member, so
      the distribution of ``slowest_specialist_wall_ms`` IS the fan-out floor and
      ``fanout_wall_ms - slowest_specialist_wall_ms`` is everything orchestration adds.

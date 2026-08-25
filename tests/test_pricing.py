@@ -785,6 +785,156 @@ def test_retry_strategy_backoff_stays_inside_a_sub_minute_budget() -> None:
     assert sum(delays) < 20  # vs [4,8,16,32,64,128] on the SDK default
 
 
+# ---------------------------------------------------------------------------
+# Transient-fault retries. See agents.models.RETRYABLE_TRANSIENT_ERROR_CODES.
+#
+# The customer hit ThrottlingException, tightened max_tokens, and the SAME workload
+# then failed with ServiceUnavailableException -- at which point the client's retry
+# budget silently collapsed, because stock strands promotes only a 429 to
+# ModelThrottledException and its is_retryable tests for nothing else. These tests
+# pin both halves: that we now retry the transient faults, and that the SDK on its
+# own still does not.
+# ---------------------------------------------------------------------------
+
+
+def _client_error(code: str, op: str = "ConverseStream"):
+    from botocore.exceptions import ClientError
+
+    return ClientError({"Error": {"Code": code, "Message": "synthetic"}}, op)
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        # Both spellings of each: Bedrock sends upper-camel at request time and
+        # lower-camel from inside an open event stream.
+        "ServiceUnavailableException",
+        "serviceUnavailableException",
+        "InternalServerException",
+        "internalServerException",
+        "ModelNotReadyException",
+        "modelNotReadyException",
+    ],
+)
+def test_transient_bedrock_faults_are_retried(code: str) -> None:
+    assert m.build_retry_strategy().is_retryable(_client_error(code)) is True
+    assert m.transient_error_code(_client_error(code)) == code
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        # 424s are model-level: a retry reproduces them. 408 is excluded on the SLA.
+        "ModelErrorException",
+        "ModelStreamErrorException",
+        "ModelTimeoutException",
+        # These must never be retried, and are handled earlier in bedrock.py anyway.
+        "ValidationException",
+        "AccessDeniedException",
+        "ResourceNotFoundException",
+        "ServiceQuotaExceededException",
+    ],
+)
+def test_non_transient_errors_are_not_retried(code: str) -> None:
+    assert m.build_retry_strategy().is_retryable(_client_error(code)) is False
+    assert m.transient_error_code(_client_error(code)) is None
+
+
+def test_throttle_behaviour_is_unchanged_by_the_transient_extension() -> None:
+    """The 429 path must stay byte-for-byte what was measured, not widen.
+
+    A throttle means the token reservation was refused; a retry re-enters the same
+    auction. The extension is additive on OTHER codes only.
+    """
+    from strands.types.exceptions import ModelThrottledException
+
+    strategy = m.build_retry_strategy()
+    assert strategy.is_retryable(ModelThrottledException("synthetic")) is True
+    # A ThrottlingException that was NOT promoted is not a transient fault either --
+    # it must not sneak into the widened set through the code table.
+    assert m.transient_error_code(_client_error("ThrottlingException")) is None
+
+
+def test_mid_stream_failure_is_retried_through_the_clienterror_base_class() -> None:
+    """EventStreamError needs no branch of its own -- it subclasses ClientError.
+
+    This is the failure botocore's own retry layer cannot see: the stream opened, so
+    the HTTP call already succeeded. If a future botocore stops inheriting from
+    ClientError, this test is the thing that says so.
+    """
+    from botocore.exceptions import ClientError, EventStreamError
+
+    assert issubclass(EventStreamError, ClientError)
+    mid_stream = EventStreamError(
+        {"Error": {"Code": "internalServerException", "Message": "synthetic"}},
+        "ConverseStream",
+    )
+    assert m.build_retry_strategy().is_retryable(mid_stream) is True
+
+
+def test_classification_never_raises_on_a_malformed_error_response() -> None:
+    """is_retryable runs inside a strands hook, so it must not raise.
+
+    A KeyError here would replace the real Bedrock failure at the top of the
+    traceback, turning a capacity incident into a phantom bug in this file.
+    """
+    from botocore.exceptions import ClientError
+
+    strategy = m.build_retry_strategy()
+    for broken in (
+        ClientError({}, "ConverseStream"),
+        ClientError({"Error": {}}, "ConverseStream"),
+        ClientError({"Error": {"Code": None}}, "ConverseStream"),
+        ClientError({"Error": {"Code": 503}}, "ConverseStream"),  # int, not str
+    ):
+        assert strategy.is_retryable(broken) is False
+    assert strategy.is_retryable(ValueError("unrelated")) is False
+
+
+def test_stock_strands_still_does_not_retry_a_503() -> None:
+    """CANARY -- this test failing is GOOD NEWS, not a regression.
+
+    It pins the SDK gap the subclass exists to close: strands 1.50.2 promotes only
+    ThrottlingException/throttlingException to ModelThrottledException
+    (models/bedrock.py:1044) and ModelRetryStrategy.is_retryable tests for nothing
+    else (event_loop/_retry.py:61). If an upgrade closes that gap, this assertion
+    breaks -- and the correct response is to DELETE the subclass, not to relax the
+    test. Without this, the subclass would quietly outlive its reason to exist.
+    """
+    from strands.agent import ModelRetryStrategy
+
+    stock = ModelRetryStrategy(max_attempts=m.RETRY_MAX_ATTEMPTS)
+    assert stock.is_retryable(_client_error("ServiceUnavailableException")) is False
+    assert stock.is_retryable(_client_error("InternalServerException")) is False
+
+    report = m.retry_policy_report()
+    assert "ServiceUnavailableException" in report["gap_closed"]
+    # The ladder must not have moved while we were widening the error set.
+    assert report["strands"]["backoff_ladder_s"] == [1, 2, 4]
+    assert report["strands"]["worst_case_added_wall_clock_s"] == 7
+
+
+def test_subclassing_is_retryable_is_the_documented_extension_point() -> None:
+    """The patch must use the SDK's supported hook, not reimplement the policy.
+
+    ``_handle_after_model_call`` is deliberately NOT overridden: it owns the ladder,
+    the max_attempts test and the AfterInvocationEvent reset, all of which were
+    measured. Overriding it is how a retry patch silently changes the SLA.
+    """
+    from strands.agent import ModelRetryStrategy
+
+    strategy = m.build_retry_strategy()
+    assert isinstance(strategy, ModelRetryStrategy)
+    # Functions defined in the subclass body that shadow a base method. ABC machinery
+    # injects _abc_impl / _is_protocol, which are not overrides -- hence `callable`.
+    overridden = {
+        name
+        for name, value in vars(type(strategy)).items()
+        if callable(value) and hasattr(ModelRetryStrategy, name)
+    }
+    assert overridden == {"is_retryable"}, f"also overrode {overridden - {'is_retryable'}}"
+
+
 def test_shared_client_is_one_object_per_region_with_a_raised_pool() -> None:
     m.reset_shared_clients()
     try:

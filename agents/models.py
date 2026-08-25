@@ -907,6 +907,55 @@ RETRY_MAX_ATTEMPTS: Final[int] = 4
 RETRY_INITIAL_DELAY_S: Final[int] = 1
 RETRY_MAX_DELAY_S: Final[int] = 8
 
+#: Bedrock error codes that ``build_retry_strategy`` retries IN ADDITION to a throttle.
+#:
+#: WHY THIS EXISTS. READ BEFORE CHANGING. Verified against the pinned wheels on
+#: 2026-08-25 (strands-agents 1.50.2, botocore 1.43.80), source quoted rather than
+#: recalled:
+#:
+#:   * ``strands/event_loop/_retry.py:61`` -- ``ModelRetryStrategy.is_retryable`` is
+#:     one line: ``return isinstance(exception, ModelThrottledException)``.
+#:   * ``strands/models/bedrock.py:1044`` -- the ``except ClientError`` block promotes
+#:     to ``ModelThrottledException`` for exactly two codes, ``ThrottlingException``
+#:     and ``throttlingException``. The remaining branches are context-overflow and
+#:     two ``add_exception_note`` cases, then ``raise e``. There is NO 5xx branch.
+#:
+#: So a Bedrock ``ServiceUnavailableException`` (503) reaches the retry hook as a raw
+#: ``botocore.exceptions.ClientError``, ``is_retryable`` returns False, and strands
+#: contributes ZERO retries. Only botocore's own 3-attempt budget applies. A 429 on
+#: the same code path gets strands' full [1, 2, 4]s ladder on top. Same outage, two
+#: very different retry budgets, decided by which error code the Region returns.
+#:
+#: THIS IS THE OPPOSITE ANSWER FROM A 429, AND THAT IS THE POINT. A throttle means the
+#: token reservation was refused, so a retry re-enters the same auction and competes
+#: with the requests still holding reservations -- widening the budget makes it worse.
+#: A 503 is Regional capacity shedding and touches no quota accounting, so a retry is
+#: simply a second chance at a queue that drains in seconds. Retry policy has to be
+#: keyed on the error code; one global answer is wrong for one of the two.
+#:
+#: MEMBERSHIP IS KEYED ON ``httpStatusCode`` IN THE SERVICE MODEL, not on the spelling
+#: of the code (botocore ``data/bedrock-runtime/2023-09-30/service-2.json.gz``):
+#:   in  -- ServiceUnavailableException (503) and InternalServerException (500), the
+#:          two server-fault codes, plus ModelNotReadyException (429) which the model
+#:          itself flags ``retryable``.
+#:   out -- ModelErrorException / ModelStreamErrorException (424) and
+#:          ModelTimeoutException (408). The 424s are model-level failures that a
+#:          retry reproduces. 408 is excluded on the SLA, not on safety: the request
+#:          already spent its wall clock once.
+#: ValidationException, AccessDeniedException and ContextWindowOverflow are absent for
+#: the obvious reason and are also handled earlier in ``bedrock.py``.
+#:
+#: Compared case-insensitively: Bedrock spells stream-time codes lower-camel
+#: (``internalServerException``) and request-time codes upper-camel, which is exactly
+#: why ``bedrock.py`` above has to test for ``throttlingException`` twice.
+RETRYABLE_TRANSIENT_ERROR_CODES: Final[frozenset[str]] = frozenset(
+    {
+        "serviceunavailableexception",
+        "internalserverexception",
+        "modelnotreadyexception",
+    }
+)
+
 # ---------------------------------------------------------------------------
 # Output caps
 #
@@ -1176,15 +1225,174 @@ def build_bedrock_model(
     return model
 
 
-def build_retry_strategy() -> Any:
-    """Throttle-retry strategy tuned for a sub-minute SLA."""
-    from strands.agent import ModelRetryStrategy
+def transient_error_code(exception: BaseException) -> str | None:
+    """The Bedrock error code of ``exception`` if it is a retryable transient fault.
 
-    return ModelRetryStrategy(
+    Split out of the strategy so a test can assert the classification without
+    constructing an Agent or driving strands' hook machinery, and so the report in
+    ``retry_policy_report`` reads the same predicate the strategy uses.
+
+    Returns the code AS SPELLED BY BEDROCK (useful in a log line), or None.
+
+    ``botocore.exceptions.EventStreamError`` needs no branch of its own: it subclasses
+    ``ClientError`` (verified -- ``class EventStreamError(ClientError): pass``) and
+    carries the same ``response['Error']['Code']``. That one fact covers both failure
+    shapes, because ``bedrock.py`` raises at two different moments -- ``ClientError``
+    when ``converse_stream`` is refused outright, ``EventStreamError`` when the stream
+    opened and then broke mid-flight, which botocore's own retry layer cannot see at
+    all. Matching the base class catches both.
+
+    ``.get()`` chains rather than ``response["Error"]["Code"]``: this runs INSIDE a
+    strands hook, and a KeyError here would replace the real Bedrock failure with an
+    unrelated one at the top of the traceback. A ``ClientError`` with an empty
+    ``response`` is constructible and returns None here instead of raising.
+    """
+    from botocore.exceptions import ClientError  # noqa: PLC0415
+
+    if not isinstance(exception, ClientError):
+        return None
+    code = (exception.response or {}).get("Error", {}).get("Code")
+    if not isinstance(code, str):
+        return None
+    return code if code.lower() in RETRYABLE_TRANSIENT_ERROR_CODES else None
+
+
+def build_retry_strategy() -> Any:
+    """Retry strategy for a sub-minute SLA: throttles AND transient Bedrock faults.
+
+    Overriding ``is_retryable`` is the SDK's own supported extension point -- the
+    ``ModelRetryStrategy`` docstring says "Subclass and override ``is_retryable`` to
+    expand or narrow the set of retryable exceptions without reimplementing the rest
+    of the retry policy". Nothing else is touched, so the [1, 2, 4]s ladder, the reset
+    on ``AfterInvocationEvent`` and the backwards-compatible throttle event all keep
+    working as measured.
+
+    See :data:`RETRYABLE_TRANSIENT_ERROR_CODES` for why a 503 needs this and a 429
+    must NOT get a wider budget.
+
+    THE BUDGET IS SHARED WITH THROTTLES ON PURPOSE, and that is a decision, not an
+    omission. ``ModelRetryStrategy`` keeps a single ``_current_attempt`` used for both
+    the delay and the ``max_attempts`` test, so per-code budgets would mean overriding
+    ``_handle_after_model_call`` -- reimplementing the policy the docstring above tells
+    us not to reimplement -- and would raise the worst case from 7s to 14s. Against a
+    <60s adjudication that trade is the wrong way round: a run that spends 14s in
+    backoff and then succeeds has already eaten a quarter of the budget for the other
+    seven specialists. Shared and capped at 7s is the SLA-driven answer. If 7s turns
+    out to be too little for real Regional shedding, THAT measurement is the thing to
+    bring back here -- not a bigger number chosen in advance.
+
+    One caveat worth knowing rather than discovering: retrying an ``EventStreamError``
+    re-runs a call whose partial deltas were already handed to the callback. Harmless
+    here -- ``agents.fanout`` keeps only the final text and ``ui/server.py`` emits one
+    frame per agent, not per token -- but a token-level consumer would see the prefix
+    twice.
+    """
+    from strands.agent import ModelRetryStrategy  # noqa: PLC0415
+
+    class _ThrottleAndTransientRetryStrategy(ModelRetryStrategy):
+        """``ModelRetryStrategy`` plus Bedrock's transient server faults."""
+
+        def is_retryable(self, exception: Exception) -> bool:
+            # super() first: ModelThrottledException is already the promoted form of a
+            # 429, so this keeps the measured throttle behaviour byte for byte.
+            if super().is_retryable(exception):
+                return True
+            return transient_error_code(exception) is not None
+
+    return _ThrottleAndTransientRetryStrategy(
         max_attempts=RETRY_MAX_ATTEMPTS,
         initial_delay=RETRY_INITIAL_DELAY_S,
         max_delay=RETRY_MAX_DELAY_S,
     )
+
+
+def retry_policy_report() -> dict[str, Any]:
+    """What the retry layers ACTUALLY do, read from the installed SDKs.
+
+    Exists for the same reason ``cache_prefix_report`` does: the interesting question
+    ("would a 503 be retried?") was answerable only by reading two wheels, and the
+    answer changes silently when either one is upgraded. Every field below is computed
+    from the live objects -- the ladder from ``_calculate_delay``, the verdicts from the
+    strategy's own ``is_retryable``, the botocore figures from its own constants -- so a
+    dependency bump moves this output instead of making it stale.
+
+    ``botocore.stock_would_retry_alone`` is the number that made the 503 look like a
+    different problem from the 429: identical outage, and the client waits orders of
+    magnitude less because strands declined to participate.
+    """
+    from botocore.exceptions import ClientError  # noqa: PLC0415
+    from botocore.retries.standard import DEFAULT_MAX_ATTEMPTS  # noqa: PLC0415
+    from strands.agent import ModelRetryStrategy  # noqa: PLC0415
+    from strands.types.exceptions import ModelThrottledException  # noqa: PLC0415
+
+    ours = build_retry_strategy()
+    stock = ModelRetryStrategy(
+        max_attempts=RETRY_MAX_ATTEMPTS,
+        initial_delay=RETRY_INITIAL_DELAY_S,
+        max_delay=RETRY_MAX_DELAY_S,
+    )
+
+    def _client_error(code: str) -> ClientError:
+        return ClientError({"Error": {"Code": code, "Message": "synthetic"}}, "ConverseStream")
+
+    # The ladder is what `_handle_after_model_call` sleeps BEFORE re-raising: the delay
+    # is read at the current attempt and the loop stops once the counter reaches
+    # max_attempts, so the last computed delay is never slept.
+    ladder = [ours._calculate_delay(i) for i in range(max(0, RETRY_MAX_ATTEMPTS - 1))]
+
+    # Bedrock's own spellings, not the normalised set: request-time codes arrive
+    # upper-camel and stream-time codes lower-camel, so both appear here deliberately
+    # and a regression in the case handling shows up as a flipped verdict.
+    probes = [
+        "ThrottlingException",
+        "ServiceUnavailableException",
+        "serviceUnavailableException",
+        "InternalServerException",
+        "internalServerException",
+        "ModelNotReadyException",
+        "ValidationException",
+        "AccessDeniedException",
+        "ModelTimeoutException",
+        "ModelStreamErrorException",
+    ]
+
+    verdicts: dict[str, dict[str, bool]] = {}
+    for code in probes:
+        exc: Exception = (
+            ModelThrottledException("synthetic")
+            if code == "ThrottlingException"
+            else _client_error(code)
+        )
+        verdicts[code] = {
+            "retried_by_this_repo": ours.is_retryable(exc),
+            "retried_by_stock_strands": stock.is_retryable(exc),
+        }
+
+    return {
+        "strands": {
+            "strategy": type(ours).__name__,
+            "max_attempts": RETRY_MAX_ATTEMPTS,
+            "backoff_ladder_s": ladder,
+            "worst_case_added_wall_clock_s": sum(ladder),
+            "budget_is_shared_across_error_classes": True,
+        },
+        "botocore": {
+            "mode": "adaptive",
+            "max_attempts_default": DEFAULT_MAX_ATTEMPTS,
+            "retries_per_strands_attempt": DEFAULT_MAX_ATTEMPTS - 1,
+            "note": (
+                "Nested, not additive: each strands attempt is a fresh converse_stream "
+                "call carrying its own botocore budget. botocore cannot see a failure "
+                "that arrives after the event stream opened (EventStreamError)."
+            ),
+        },
+        "verdicts": verdicts,
+        "gap_closed": sorted(
+            code
+            for code, v in verdicts.items()
+            if v["retried_by_this_repo"] and not v["retried_by_stock_strands"]
+        ),
+    }
 
 
 def cached_system_prompt(prompt: str) -> list[dict[str, Any]]:

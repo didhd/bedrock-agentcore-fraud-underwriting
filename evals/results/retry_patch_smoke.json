@@ -1,0 +1,53 @@
+{
+ "schema": "pointpredictive.agentcore.retry-patch-smoke/1",
+ "what": "deployed ppFraud_underwriter after the transient-retry patch",
+ "run": {
+  "at": "2026-08-25",
+  "region": "us-west-2",
+  "runtime": "ppFraud_underwriter",
+  "version": 13,
+  "n": 1
+ },
+ "caveats": [
+  "n=1. An existence proof that the patch did not regress the path. NOT a latency distribution; no percentile may be quoted from it.",
+  "No 503 occurred during this run, so the retry itself was exercised offline (tests/test_retry_transient.py), not here."
+ ],
+ "mock_mode": false,
+ "specialists_succeeded": 8,
+ "adjudication_keys": 21,
+ "contract_order_exact": true,
+ "error_frames": 0,
+ "paths_exercised": {
+  "direct_runtime": {
+   "how": "boto3 bedrock-agentcore.invoke_agent_runtime against the runtime ARN",
+   "http_status": 200,
+   "wall_s": 56.152,
+   "bytes": 41989,
+   "sse_vocabulary": "start / agent_start / agent_done / synthesis_start / done",
+   "specialists_succeeded": 8,
+   "adjudication_keys": 21,
+   "contract_order_exact": true,
+   "error_frames": 0
+  },
+  "customer_facing_cloudfront": {
+   "how": "GET /api/stream/APP-1004 on the PpFraudSites demo distribution -> StreamProxy Lambda -> invoke_agent_runtime on the same underwriter runtime",
+   "why_it_matters": "This is the path a customer uses. The Lambda holds only runtime ARNs (nodejs, 229KB), so patching the runtime reaches this path with no site redeploy -- which is why the site stack was not touched.",
+   "http_status": 200,
+   "wall_s": 57.9,
+   "bytes": 54612,
+   "frames": 20,
+   "sse_vocabulary": "run_started / agent_started / agent_completed / synthesis_started / synthesis_completed / run_completed (translated by the proxy)",
+   "specialists_succeeded": 8,
+   "adjudication_keys": 21,
+   "contract_order_exact": true,
+   "error_frames": 0,
+   "end_to_end_ms": 52135.8,
+   "fanout_wall_ms": 44119.5,
+   "synthesis_ms": 7289.2,
+   "slowest_agent": "rings",
+   "slowest_agent_ms": 44070.1,
+   "cost_per_application_usd": 0.173002
+  }
+ },
+ "agreement": "Both paths returned HIGH RISK / DECLINE on APP-1004 with 21 keys in exact contract order, so the proxy's SSE translation preserves the adjudication."
+}
