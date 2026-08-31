@@ -1,5 +1,11 @@
 # Multi-Agent Auto-Loan Fraud Underwriting on Amazon Bedrock AgentCore
 
+https://github.com/user-attachments/assets/8a6283ea-9e68-406d-a7d7-739f165c1478
+
+A real run against live Bedrock — eight specialists in parallel, then the master
+adjudication. The latencies, token counts and costs on screen are the ones that run
+produced.
+
 A 1:1 replacement, on **Amazon Bedrock AgentCore**, of an agentic auto-loan fraud
 underwriting platform currently running on Snowflake Intelligence (Cortex Agents):
 **eight specialist fraud agents running in parallel, synthesized by a master
