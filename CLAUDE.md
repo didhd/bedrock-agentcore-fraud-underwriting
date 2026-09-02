@@ -498,7 +498,9 @@ Landed and verified by execution:
       measurement and the open questions with the customer.
 
 **Cleanup of superseded code**
-- [ ] Remove `SIM_LATENCY_SCALE` from `app.py` (3 occurrences).
+- [x] ~~Remove `SIM_LATENCY_SCALE` from `app.py`~~: done. The model layer no
+      longer implements nominal latency simulation, so the CLI's environment
+      variable and timing helper had no consumer.
 - [x] ~~Fix the stale `agentcore configure/launch` references~~ — done. Two files
       attributed the DEPRECATED pip toolkit's exit-0 no-op to the npm CLI, which
       actually prints `error: unknown command` and **exits 1**:
