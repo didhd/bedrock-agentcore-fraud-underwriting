@@ -488,7 +488,7 @@ Landed and verified by execution:
 - **Runtimes are PUBLIC and the Lambdas hold the VPC path**, and that is measured rather than
   chosen: all ten deployed fine as `networkMode: VPC` and then returned
   `APITimeoutError` at request time, because a private-isolated subnet cannot reach the
-  synthesizer's model through the `bedrock-mantle` endpoint. See `ARCHITECTURE.md`.
+  synthesizer's model through the `bedrock-mantle` endpoint. See `architecture.md`.
 - **1473 tests pass offline.**
 
 ## TODO
