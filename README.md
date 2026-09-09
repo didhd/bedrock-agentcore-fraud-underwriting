@@ -143,7 +143,7 @@ The cost reductions that survive arithmetic:
 | Lever | Effect | Caveat |
 |---|---|---|
 | `global.*` instead of `us.*` inference profiles | **−9.09%** exactly | Identical API and model behavior |
-| Claude Sonnet 5 introductory rate ($2/$10 vs $3/$15) | −20.13% on the modeled profile | **Reverts to $3/$15 on 2026-09-01** |
+| Claude Sonnet 5 introductory rate ($2/$10 vs $3/$15) | −20.13% on the modeled profile before expiry | **Expired 2026-09-01; $3/$15 now applies** |
 | Batch inference | −50% | Opus 5 / Sonnet 4.6 / Haiku 4.5 only; mutually exclusive with prompt caching |
 | Precomputing signals | Removes 8 Cortex Analyst messages + 8 warehouse executions per application | Requires the signal layer |
 
