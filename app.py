@@ -28,19 +28,10 @@ Flags:
 
 Env:
   MOCK_MODE=1         Offline deterministic mode (no Bedrock).
-  SIM_LATENCY_SCALE   Offline only: scale of nominal latency to actually sleep,
-                      so the parallel speedup is observable (CLI sets 0.05).
   EMIT_CLOUDWATCH_METRICS=1  Publish per-agent spend metrics to CloudWatch.
 """
 
-import os
 import sys
-
-
-def _enable_timing_sim():
-    """In offline mode, sleep a small scaled latency so timing is observable."""
-    if os.environ.get("MOCK_MODE") == "1" and "SIM_LATENCY_SCALE" not in os.environ:
-        os.environ["SIM_LATENCY_SCALE"] = "0.05"
 
 
 def main(argv: list[str]) -> int:
@@ -89,7 +80,6 @@ def main(argv: list[str]) -> int:
         return 0
 
     if argv[0] == "--demo":
-        _enable_timing_sim()
         for app_id in available_application_ids():
             print(underwriting_pipeline(app_id))
             print()
@@ -99,12 +89,10 @@ def main(argv: list[str]) -> int:
         if len(argv) < 2:
             print("Usage: app.py --review APP-XXXX")
             return 1
-        _enable_timing_sim()
         print(underwriting_pipeline(argv[1]))
         return 0
 
     if argv[0] == "--batch":
-        _enable_timing_sim()
         target = int(argv[1]) if len(argv) > 1 else 12
         base = available_application_ids()
         app_ids = [base[i % len(base)] for i in range(target)]
@@ -115,7 +103,6 @@ def main(argv: list[str]) -> int:
         if len(argv) < 2:
             print("Usage: app.py --signal-demo APP-XXXX")
             return 1
-        _enable_timing_sim()
         print(signal_layer_demo(argv[1]))
         return 0
 
