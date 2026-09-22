@@ -486,6 +486,54 @@ def test_every_internal_docs_link_resolves() -> None:
     assert not broken, "broken internal links:\n" + "\n".join(sorted(set(broken)))
 
 
+def test_every_internal_docs_fragment_resolves() -> None:
+    """An internal fragment must name a heading or explicit HTML anchor.
+
+    The site build accepts missing fragments, so these otherwise become links that
+    navigate to the page but never reach the promised section.
+    """
+    pages = _require_pages()
+    slugs = {"/docs": SITE_CONTENT / "index.mdx"} | {
+        "/docs/" + str(page.relative_to(SITE_CONTENT)).removesuffix(".mdx").removesuffix("/index"): page
+        for page in pages
+    }
+
+    def page_anchors(page: Path) -> set[str]:
+        text = page.read_text(encoding="utf-8")
+        anchors = set(re.findall(r'\bid=["\']([^"\']+)', text))
+        for heading in re.findall(r"^#{1,6}\s+(.+?)\s*$", text, re.MULTILINE):
+            custom = re.search(r"\s+\[#([^]]+)\]\s*$", heading)
+            if custom:
+                anchors.add(custom.group(1))
+                continue
+            plain = re.sub(r"[`*_~]", "", heading).lower()
+            plain = re.sub(r"<[^>]+>", "", plain)
+            plain = re.sub(r"[^\w\s-]", "", plain)
+            anchors.add(re.sub(r"\s", "-", plain).strip("-"))
+        return anchors
+
+    anchors_by_page = {page: page_anchors(page) for page in pages}
+    link = re.compile(r'href=["\']([^"\']*#[^"\']+)["\']|\]\(([^)\s]*#[^)\s]+)\)')
+    broken: list[str] = []
+    for page in pages:
+        text = page.read_text(encoding="utf-8")
+        for attr_href, md_href in link.findall(text):
+            target = attr_href or md_href
+            path, fragment = target.split("#", 1)
+            if not path:
+                destination = page
+            elif path.startswith("/docs"):
+                destination = slugs.get(path.rstrip("/"))
+            else:
+                continue
+            if destination is not None and fragment not in anchors_by_page[destination]:
+                broken.append(
+                    f"{page.relative_to(REPO_ROOT)} links to {target}, which has no matching anchor"
+                )
+
+    assert not broken, "broken internal fragments:\n" + "\n".join(sorted(set(broken)))
+
+
 def test_every_page_declares_frontmatter_title_and_description() -> None:
     """Fumadocs derives navigation and search from frontmatter.
 
