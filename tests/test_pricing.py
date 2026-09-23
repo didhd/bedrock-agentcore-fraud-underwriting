@@ -925,12 +925,15 @@ def test_subclassing_is_retryable_is_the_documented_extension_point() -> None:
 
     strategy = m.build_retry_strategy()
     assert isinstance(strategy, ModelRetryStrategy)
-    # Functions defined in the subclass body that shadow a base method. ABC machinery
-    # injects _abc_impl / _is_protocol, which are not overrides -- hence `callable`.
+    # Functions defined in the subclass body that shadow a base method. Protocol
+    # machinery injects __subclasshook__, while ABC machinery adds non-callable state;
+    # neither is an intentional retry-policy override.
     overridden = {
         name
         for name, value in vars(type(strategy)).items()
-        if callable(value) and hasattr(ModelRetryStrategy, name)
+        if callable(value)
+        and not (name.startswith("__") and name.endswith("__"))
+        and hasattr(ModelRetryStrategy, name)
     }
     assert overridden == {"is_retryable"}, f"also overrode {overridden - {'is_retryable'}}"
 
