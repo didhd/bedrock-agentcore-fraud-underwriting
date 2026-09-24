@@ -448,9 +448,6 @@ async def chat_stream(
                 )
 
         return _read(client.invoke_agent_runtime(**kwargs))
-        body = response["response"]
-        raw = body.read() if hasattr(body, "read") else b"".join(body)
-        return str(response.get("contentType") or ""), raw
 
     try:
         content_type, raw = await asyncio.to_thread(invoke)
