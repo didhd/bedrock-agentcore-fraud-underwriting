@@ -26,7 +26,7 @@ report what you verified rather than what you ran.
 
 1. `CLAUDE.md` — the engineering contract. Several obvious improvements in this repo were
    measured and rejected; that file says which and why. Do not undo one.
-2. `ARCHITECTURE.md` — what talks to what, and which boxes are deployed vs designed.
+2. `architecture.md` — what talks to what, and which boxes are deployed vs designed.
 3. `README.md` § "Deploy: the ordered runbook" — the commands, in order.
 4. `docs/rds-connection.md` — the two database transports and what is *not* verified.
 

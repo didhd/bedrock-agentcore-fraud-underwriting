@@ -458,7 +458,7 @@ documents several measured traps that look like obvious improvements.
 
 | | |
 |---|---|
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | every box, what is deployed vs designed, and the network decision |
+| [`architecture.md`](architecture.md) | every box, what is deployed vs designed, and the network decision |
 | [`CLAUDE.md`](CLAUDE.md) | the engineering contract; measured traps that look like improvements |
 | [`docs/kiro-brief.md`](docs/kiro-brief.md) | paste-ready instructions for a coding agent doing the deploy |
 | [`docs/rds-connection.md`](docs/rds-connection.md) | the two database transports, and what is not verified |
